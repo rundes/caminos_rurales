@@ -17,6 +17,16 @@ describe('partidos', () => {
     }
   })
 
+  test('los slugs son ASCII minúscula con guiones y están ordenados por nombre', () => {
+    for (const p of PARTIDOS) {
+      expect(p.slug).toMatch(/^[a-z0-9]+(-[a-z0-9]+)*$/)
+    }
+    const nombres = PARTIDOS.map((p) => p.nombre)
+    const ordenados = [...nombres].sort((a, b) => a.localeCompare(b, 'es'))
+    expect(nombres).toEqual(ordenados)
+    expect(buscarPartido('bahia-blanca')?.nombre).toBe('Bahía Blanca')
+  })
+
   test('buscarPartido devuelve el partido por slug', () => {
     const p = buscarPartido('carlos-tejedor')
     expect(p?.nombre).toBe('Carlos Tejedor')

@@ -22,7 +22,16 @@ export const ORIGENES_DATOS = ['app_sensor', 'camara_dashcam', 'formulario'] as 
 export const esquemaRelevamiento = z.object({
   camino_id: z.uuid({ message: 'Elegí un camino' }),
   origen_datos: z.enum(ORIGENES_DATOS, { message: 'Origen de datos inválido' }),
-  km: z.coerce.number().min(0, { message: 'Los km no pueden ser negativos' }).max(1000, { message: 'Km fuera de rango' }),
+  km: z
+    .string({ message: 'Ingresá los km recorridos' })
+    .trim()
+    .min(1, { message: 'Ingresá los km recorridos' })
+    .pipe(
+      z.coerce
+        .number({ message: 'Los km deben ser un número' })
+        .min(0, { message: 'Los km no pueden ser negativos' })
+        .max(1000, { message: 'Km fuera de rango' }),
+    ),
 })
 
 export const esquemaProcesarIa = z.object({
@@ -31,7 +40,5 @@ export const esquemaProcesarIa = z.object({
 
 export function primerError(error: z.ZodError): string {
   const issue = error.issues[0]
-  if (!issue) return 'Datos inválidos'
-  const campo = issue.path.join('.')
-  return campo ? `${campo}: ${issue.message}` : issue.message
+  return issue?.message ?? 'Datos inválidos'
 }

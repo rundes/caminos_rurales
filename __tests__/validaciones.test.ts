@@ -55,6 +55,15 @@ describe('esquemaRelevamiento', () => {
     expect(r.success).toBe(true)
     if (r.success) expect(r.data.km).toBe(12.5)
   })
+  test('rechaza km vacío en vez de coercionar a 0', () => {
+    const r = esquemaRelevamiento.safeParse({
+      camino_id: '0d5a3c9a-2f3e-4d1b-9c8a-1b2c3d4e5f60',
+      origen_datos: 'formulario',
+      km: '',
+    })
+    expect(r.success).toBe(false)
+    if (!r.success) expect(primerError(r.error)).toMatch(/km/i)
+  })
   test('rechaza km negativos', () => {
     const r = esquemaRelevamiento.safeParse({
       camino_id: '0d5a3c9a-2f3e-4d1b-9c8a-1b2c3d4e5f60',
@@ -66,9 +75,9 @@ describe('esquemaRelevamiento', () => {
 })
 
 describe('primerError', () => {
-  test('devuelve el primer mensaje legible', () => {
+  test('devuelve solo el mensaje en español, sin nombre de campo', () => {
     const r = esquemaLogin.safeParse({ email: 'no', password: '' })
     expect(r.success).toBe(false)
-    if (!r.success) expect(primerError(r.error)).toMatch(/email/i)
+    if (!r.success) expect(primerError(r.error)).toBe('Email inválido')
   })
 })
