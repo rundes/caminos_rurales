@@ -76,6 +76,7 @@ export function LoginForm() {
       <Boton
         type="button"
         variante="secundario"
+        disabled={pendiente}
         onClick={() => setModo(esRegistro ? 'login' : 'registro')}
       >
         {esRegistro ? 'Ya tengo cuenta' : 'Crear cuenta'}

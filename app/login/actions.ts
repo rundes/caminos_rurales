@@ -1,6 +1,7 @@
 'use server'
 
 import { redirect } from 'next/navigation'
+import { revalidatePath } from 'next/cache'
 import { crearClienteServidor } from '@/lib/supabase/server'
 import type { ResultadoAccion } from '@/lib/tipos'
 import { esquemaLogin, esquemaRegistro, primerError } from '@/lib/validaciones'
@@ -11,10 +12,18 @@ const MENSAJES: Record<string, string> = {
   'Invalid login credentials': 'Email o contraseña incorrectos',
   'User already registered': 'Ese email ya está registrado',
   'Email not confirmed': 'Confirmá tu email antes de ingresar',
+  'Password should be at least 6 characters': 'La contraseña debe tener al menos 8 caracteres',
+  'Email rate limit exceeded': 'Demasiados intentos. Esperá unos minutos.',
 }
 
+const MENSAJE_GENERICO = 'No se pudo completar la operación. Intentá de nuevo.'
+
 function traducir(mensaje: string): string {
-  return MENSAJES[mensaje] ?? `Error de autenticación: ${mensaje}`
+  const traducido = MENSAJES[mensaje]
+  if (traducido) return traducido
+
+  console.error('[auth]', mensaje)
+  return MENSAJE_GENERICO
 }
 
 export async function signIn(_prev: EstadoAuth, formData: FormData): Promise<EstadoAuth> {
@@ -58,5 +67,6 @@ export async function signUpAction(_prev: EstadoAuth, formData: FormData): Promi
 export async function signOut(): Promise<void> {
   const supabase = await crearClienteServidor()
   await supabase.auth.signOut()
+  revalidatePath('/', 'layout')
   redirect('/login')
 }

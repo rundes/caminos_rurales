@@ -12,7 +12,12 @@ export function Boton({ variante = 'primario', cargando = false, children, class
       ? 'bg-green-700 text-white active:bg-green-800'
       : 'bg-white text-green-800 border-2 border-green-700 active:bg-green-50'
   return (
-    <button {...rest} disabled={rest.disabled || cargando} className={`${base} ${estilos} ${className}`}>
+    <button
+      {...rest}
+      disabled={rest.disabled || cargando}
+      aria-busy={cargando}
+      className={`${base} ${estilos} ${className}`}
+    >
       {cargando ? 'Procesando…' : children}
     </button>
   )
