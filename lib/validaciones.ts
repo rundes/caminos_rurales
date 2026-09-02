@@ -26,8 +26,9 @@ export const esquemaRelevamiento = z.object({
     .string({ message: 'Ingresá los km recorridos' })
     .trim()
     .min(1, { message: 'Ingresá los km recorridos' })
+    .transform(Number)
     .pipe(
-      z.coerce
+      z
         .number({ message: 'Los km deben ser un número' })
         .min(0, { message: 'Los km no pueden ser negativos' })
         .max(1000, { message: 'Km fuera de rango' }),
