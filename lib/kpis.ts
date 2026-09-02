@@ -2,15 +2,16 @@ import type { Json } from './supabase/database.types'
 
 type FilaConMetadata = { metadata: Json | null }
 
+function extraerKm(meta: Json | null): number {
+  if (!meta || typeof meta !== 'object' || Array.isArray(meta) || !('km' in meta)) return 0
+  const valor = meta.km
+  if (typeof valor !== 'number' && typeof valor !== 'string') return 0
+  const km = Number(valor)
+  return Number.isFinite(km) && km >= 0 ? km : 0
+}
+
 export function sumarKm(filas: readonly FilaConMetadata[]): number {
-  let total = 0
-  for (const fila of filas) {
-    const meta = fila.metadata
-    if (meta && typeof meta === 'object' && !Array.isArray(meta) && 'km' in meta) {
-      const km = Number(meta.km)
-      if (Number.isFinite(km)) total += km
-    }
-  }
+  const total = filas.reduce((acumulado, fila) => acumulado + extraerKm(fila.metadata), 0)
   return Number(total.toFixed(1))
 }
 

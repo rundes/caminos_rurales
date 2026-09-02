@@ -1,6 +1,9 @@
 import { KpiCard } from '@/components/KpiCard'
+import { formatearFecha } from '@/lib/fechas'
 import { formatearNumero, sumarKm } from '@/lib/kpis'
 import { crearClienteServidor } from '@/lib/supabase/server'
+
+const CANTIDAD_ULTIMOS = 5
 
 export default async function DashboardPage() {
   const supabase = await crearClienteServidor()
@@ -10,9 +13,9 @@ export default async function DashboardPage() {
     supabase.from('fallas_deteccion').select('id', { count: 'exact', head: true }),
     supabase
       .from('relevamientos')
-      .select('id, fecha, origen_datos, procesado_ia, caminos(nombre_codigo)')
+      .select('id, fecha, procesado_ia, caminos(nombre_codigo)')
       .order('fecha', { ascending: false })
-      .limit(5),
+      .limit(CANTIDAD_ULTIMOS),
   ])
 
   const error = relevamientos.error ?? fallas.error ?? ultimos.error
@@ -27,7 +30,7 @@ export default async function DashboardPage() {
       <h1 className="text-2xl font-bold">Resumen</h1>
       <div className="grid grid-cols-2 gap-4">
         <KpiCard etiqueta="Km relevados" valor={formatearNumero(km)} />
-        <KpiCard etiqueta="Fallas activas" valor={fallas.count ?? 0} />
+        <KpiCard etiqueta="Fallas detectadas" valor={fallas.count ?? 0} />
       </div>
       <section>
         <h2 className="mb-2 text-lg font-semibold">Últimos reportes</h2>
@@ -37,7 +40,7 @@ export default async function DashboardPage() {
               <li key={r.id} className="flex justify-between px-4 py-3">
                 <span>{r.caminos?.nombre_codigo ?? 'Sin camino'}</span>
                 <span className="text-sm text-gray-500">
-                  {new Date(r.fecha).toLocaleDateString('es-AR')} · {r.procesado_ia ? 'procesado' : 'pendiente'}
+                  {formatearFecha(r.fecha)} · {r.procesado_ia ? 'procesado' : 'pendiente'}
                 </span>
               </li>
             ))}

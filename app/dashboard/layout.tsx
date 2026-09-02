@@ -18,23 +18,28 @@ export default async function DashboardLayout({ children }: { children: React.Re
   } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  const { data: perfil } = await supabase
+  const { data: perfil, error } = await supabase
     .from('perfiles')
     .select('nombre, rol, municipio_id')
     .eq('id', user.id)
-    .single()
+    .maybeSingle()
 
   const partido = perfil ? buscarPartido(perfil.municipio_id)?.nombre ?? perfil.municipio_id : ''
 
   return (
+    // pb-24 deja espacio libre debajo del contenido para que la nav inferior fija no lo tape
     <div className="min-h-dvh bg-gray-50 pb-24">
       <header className="flex items-center justify-between bg-green-800 px-4 py-3 text-white">
-        <div>
-          <p className="font-semibold">{perfil?.nombre ?? user.email}</p>
-          <p className="text-xs opacity-80">
-            {partido} · {perfil?.rol ?? 'productor'}
-          </p>
-        </div>
+        {error ? (
+          <p className="text-sm">No se pudo cargar tu perfil: {error.message}</p>
+        ) : (
+          <div>
+            <p className="font-semibold">{perfil?.nombre ?? user.email}</p>
+            <p className="text-xs opacity-80">
+              {partido} · {perfil?.rol ?? 'productor'}
+            </p>
+          </div>
+        )}
         <form action={signOut}>
           <button type="submit" className="rounded-lg bg-green-700 px-3 py-2 text-sm">
             Salir
@@ -42,7 +47,10 @@ export default async function DashboardLayout({ children }: { children: React.Re
         </form>
       </header>
       <main className="mx-auto max-w-3xl px-4 py-6">{children}</main>
-      <nav className="fixed inset-x-0 bottom-0 grid grid-cols-4 border-t bg-white">
+      <nav
+        aria-label="Navegación principal"
+        className="fixed inset-x-0 bottom-0 z-10 grid grid-cols-4 border-t bg-white"
+      >
         {ENLACES.map((e) => (
           <Link key={e.href} href={e.href} className="py-4 text-center text-sm font-medium text-green-800">
             {e.etiqueta}
