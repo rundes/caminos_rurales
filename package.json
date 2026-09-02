@@ -10,7 +10,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "tipos": "supabase gen types typescript --project-id gtuulbdxgtcqybbtocpz --schema public > lib/supabase/database.types.ts"
+    "tipos": "npx --yes supabase gen types typescript --project-id gtuulbdxgtcqybbtocpz --schema public > lib/supabase/database.types.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.5",

@@ -41,7 +41,10 @@ export async function actualizarSesion(request: NextRequest) {
   if (ruta === '/login' && usuario) {
     const url = request.nextUrl.clone()
     url.pathname = '/dashboard'
-    return NextResponse.redirect(url)
+    const redireccion = NextResponse.redirect(url)
+    // Conservar cookies refrescadas por getClaims en esta misma request.
+    respuesta.cookies.getAll().forEach((c) => redireccion.cookies.set(c))
+    return redireccion
   }
 
   return respuesta
