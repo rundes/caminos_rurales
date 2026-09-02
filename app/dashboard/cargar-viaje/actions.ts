@@ -1,13 +1,19 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
+import { z } from 'zod'
 import { crearClienteServidor } from '@/lib/supabase/server'
 import type { ResultadoAccion } from '@/lib/tipos'
 import { esquemaRelevamiento, primerError } from '@/lib/validaciones'
 
 export type DatosRelevamiento = { camino_id: string; origen_datos: string; km: string }
 
-export async function crearRelevamiento(datos: DatosRelevamiento): Promise<ResultadoAccion<{ id: string }>> {
+const SESION_VENCIDA = 'Sesión vencida. Volvé a ingresar.'
+const esquemaIdRelevamiento = z.uuid()
+
+export async function crearRelevamiento(
+  datos: DatosRelevamiento,
+): Promise<ResultadoAccion<{ id: string; km: number }>> {
   const parseo = esquemaRelevamiento.safeParse(datos)
   if (!parseo.success) return { ok: false, error: primerError(parseo.error) }
 
@@ -15,7 +21,7 @@ export async function crearRelevamiento(datos: DatosRelevamiento): Promise<Resul
   const {
     data: { user },
   } = await supabase.auth.getUser()
-  if (!user) return { ok: false, error: 'Sesión vencida. Volvé a ingresar.' }
+  if (!user) return { ok: false, error: SESION_VENCIDA }
 
   const { data, error } = await supabase
     .from('relevamientos')
@@ -28,8 +34,11 @@ export async function crearRelevamiento(datos: DatosRelevamiento): Promise<Resul
     .select('id')
     .single()
 
-  if (error || !data) return { ok: false, error: `No se pudo crear el relevamiento: ${error?.message ?? 'sin datos'}` }
-  return { ok: true, data: { id: data.id } }
+  if (error || !data) {
+    console.error('[cargar-viaje]', error?.message ?? 'insert sin datos')
+    return { ok: false, error: 'No se pudo crear el relevamiento. Intentá de nuevo.' }
+  }
+  return { ok: true, data: { id: data.id, km: parseo.data.km } }
 }
 
 export async function registrarArchivos(
@@ -37,13 +46,25 @@ export async function registrarArchivos(
   km: number,
   rutas: string[],
 ): Promise<ResultadoAccion> {
+  const parseo = esquemaIdRelevamiento.safeParse(relevamientoId)
+  if (!parseo.success) return { ok: false, error: 'Relevamiento inválido' }
+
   const supabase = await crearClienteServidor()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) return { ok: false, error: SESION_VENCIDA }
+
   const { error } = await supabase
     .from('relevamientos')
     .update({ metadata: { km, archivos: rutas } })
-    .eq('id', relevamientoId)
+    .eq('id', parseo.data)
+    .eq('usuario_id', user.id)
 
-  if (error) return { ok: false, error: `No se pudieron registrar los archivos: ${error.message}` }
+  if (error) {
+    console.error('[cargar-viaje]', error.message)
+    return { ok: false, error: 'No se pudieron registrar los archivos. Intentá de nuevo.' }
+  }
   revalidatePath('/dashboard')
   return { ok: true, data: undefined }
 }

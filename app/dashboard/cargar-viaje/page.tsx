@@ -11,11 +11,12 @@ export default async function CargarViajePage() {
   if (!user) redirect('/login')
 
   const { data: caminos, error } = await supabase.from('caminos').select('id, nombre_codigo').order('nombre_codigo')
+  if (error) console.error('[cargar-viaje]', error.message)
 
   return (
     <div className="flex flex-col gap-6">
       <h1 className="text-2xl font-bold">Cargar viaje</h1>
-      {error && <p className="rounded-xl bg-red-50 p-4 text-red-800">Error: {error.message}</p>}
+      {error && <p className="rounded-xl bg-red-50 p-4 text-red-800">No se pudieron cargar los caminos.</p>}
       {caminos && caminos.length === 0 && (
         <p className="rounded-xl bg-yellow-50 p-4 text-yellow-800">
           No hay caminos en tu partido. <Link href="/dashboard/caminos" className="underline">Cargá uno primero.</Link>
