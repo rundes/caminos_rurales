@@ -26,12 +26,14 @@ export default async function DashboardLayout({ children }: { children: React.Re
 
   const partido = perfil ? buscarPartido(perfil.municipio_id)?.nombre ?? perfil.municipio_id : ''
 
+  if (error) console.error('[dashboard]', error.message)
+
   return (
     // pb-24 deja espacio libre debajo del contenido para que la nav inferior fija no lo tape
     <div className="min-h-dvh bg-gray-50 pb-24">
       <header className="flex items-center justify-between bg-green-800 px-4 py-3 text-white">
         {error ? (
-          <p className="text-sm">No se pudo cargar tu perfil: {error.message}</p>
+          <p className="text-sm">No se pudo cargar tu perfil.</p>
         ) : (
           <div>
             <p className="font-semibold">{perfil?.nombre ?? user.email}</p>

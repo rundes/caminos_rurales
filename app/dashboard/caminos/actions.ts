@@ -19,20 +19,25 @@ export async function crearCamino(_prev: EstadoAccionCamino, formData: FormData)
 
   const { data: perfil, error: errorPerfil } = await supabase
     .from('perfiles')
-    .select('municipio_id, rol')
+    .select('municipio_id')
     .eq('id', user.id)
-    .single()
-  if (errorPerfil || !perfil) return { ok: false, error: 'No se encontró tu perfil' }
+    .maybeSingle()
+  if (errorPerfil) {
+    console.error('[caminos]', errorPerfil.message)
+    return { ok: false, error: 'No se pudo cargar tu perfil' }
+  }
+  if (!perfil) return { ok: false, error: 'No se encontró tu perfil' }
 
   const { error } = await supabase
     .from('caminos')
     .insert({ nombre_codigo: parseo.data.nombre_codigo, municipio: perfil.municipio_id })
 
   if (error) {
-    if (error.message.includes('row-level security')) {
+    if (error.code === '42501' || error.message.includes('row-level security')) {
       return { ok: false, error: 'No tenés permiso para crear caminos. Pedí el rol municipio o auditor.' }
     }
-    return { ok: false, error: `No se pudo crear el camino: ${error.message}` }
+    console.error('[caminos]', error.message)
+    return { ok: false, error: 'No se pudo crear el camino. Intentá de nuevo.' }
   }
 
   revalidatePath('/dashboard/caminos')

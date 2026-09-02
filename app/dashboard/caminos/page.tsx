@@ -10,11 +10,13 @@ export default async function CaminosPage({ searchParams }: Props) {
 
   let consulta = supabase
     .from('caminos')
-    .select('id, nombre_codigo, estado_general, ultima_actualizacion')
+    .select('id, nombre_codigo, estado_general')
     .order('nombre_codigo')
   if (q.trim()) consulta = consulta.ilike('nombre_codigo', `%${q.trim()}%`)
 
   const { data: caminos, error } = await consulta
+
+  if (error) console.error('[caminos]', error.message)
 
   return (
     <div className="flex flex-col gap-6">
@@ -22,9 +24,11 @@ export default async function CaminosPage({ searchParams }: Props) {
 
       <form method="get" className="flex gap-2">
         <input
+          type="search"
           name="q"
           defaultValue={q}
           placeholder="Buscar por nombre o código"
+          aria-label="Buscar caminos"
           className="w-full rounded-xl border border-gray-300 px-4 py-3 text-lg"
         />
         <button type="submit" className="rounded-xl bg-green-700 px-4 text-white">
@@ -32,7 +36,9 @@ export default async function CaminosPage({ searchParams }: Props) {
         </button>
       </form>
 
-      {error && <p className="rounded-xl bg-red-50 p-4 text-red-800">Error: {error.message}</p>}
+      {error && (
+        <p className="rounded-xl bg-red-50 p-4 text-red-800">No se pudieron cargar los caminos.</p>
+      )}
 
       {caminos && caminos.length === 0 && <p className="text-gray-500">No hay caminos cargados.</p>}
 
@@ -42,7 +48,7 @@ export default async function CaminosPage({ searchParams }: Props) {
             <li key={c.id} className="flex items-center justify-between px-4 py-3">
               <span className="font-medium">{c.nombre_codigo}</span>
               <span className="text-sm text-gray-600">
-                {ETIQUETA_ESTADO[c.estado_general ?? 'regular']}
+                {c.estado_general ? ETIQUETA_ESTADO[c.estado_general] : 'Sin datos'}
               </span>
             </li>
           ))}
