@@ -91,3 +91,108 @@ export function kmDeTrack(puntos: readonly { lat: number; lng: number }[]): numb
   }
   return km
 }
+
+const MS_POR_HORA = 3600 * 1000
+
+/**
+ * Velocidad media de un recorrido en km/h. Si la duración es nula o negativa
+ * devuelve `Infinity` cuando hubo desplazamiento (imposible) y 0 si no lo hubo.
+ */
+export function velocidadMediaKmh(km: number, inicio: Date, fin: Date): number {
+  const horas = (fin.getTime() - inicio.getTime()) / MS_POR_HORA
+  if (!(horas > 0)) return km > 0 ? Infinity : 0
+  return km / horas
+}
+
+/** Duración mínima de un segmento para que su velocidad sea significativa. */
+const DT_MINIMO_MS = 1000
+
+/**
+ * Velocidad máxima entre puntos consecutivos, en km/h. Ignora los segmentos
+ * de menos de 1 s: con esa resolución el ruido del GPS domina la medición.
+ */
+export function velocidadMaximaKmh(
+  puntos: readonly { lat: number; lng: number; t: number }[],
+): number {
+  let maxima = 0
+  for (let i = 1; i < puntos.length; i += 1) {
+    const dt = puntos[i].t - puntos[i - 1].t
+    if (dt < DT_MINIMO_MS) continue
+    const velocidad = distanciaKm(puntos[i - 1], puntos[i]) / (dt / MS_POR_HORA)
+    if (velocidad > maxima) maxima = velocidad
+  }
+  return maxima
+}
+
+export type LimitesPlausibilidad = {
+  /** km/h de velocidad media tolerados en un recorrido. */
+  velocidadMediaMax: number
+  /** km/h de velocidad puntual entre dos muestras consecutivas. */
+  velocidadMaximaMax: number
+  /** Metros de precisión media aceptables (por encima, el GPS no es confiable). */
+  precisionMediaMax: number
+  /** Techo de kilómetros de un único recorrido. */
+  kmMaxPorRecorrido: number
+}
+
+export const LIMITES_PLAUSIBILIDAD: LimitesPlausibilidad = {
+  velocidadMediaMax: 120,
+  velocidadMaximaMax: 160,
+  precisionMediaMax: 60,
+  kmMaxPorRecorrido: 400,
+}
+
+export type EntradaPlausibilidad = {
+  km: number
+  inicio: Date
+  fin: Date
+  puntos?: readonly { lat: number; lng: number; t: number; precision?: number }[]
+  /** Precisión media en metros; si falta se calcula desde `puntos`. */
+  precisionMedia?: number
+}
+
+function precisionMediaDe(entrada: EntradaPlausibilidad): number | undefined {
+  if (entrada.precisionMedia !== undefined) return entrada.precisionMedia
+  const precisiones = (entrada.puntos ?? [])
+    .map((p) => p.precision)
+    .filter((p): p is number => typeof p === 'number' && Number.isFinite(p))
+  if (precisiones.length === 0) return undefined
+  return precisiones.reduce((suma, p) => suma + p, 0) / precisiones.length
+}
+
+/**
+ * Antitrampa: descarta recorridos físicamente imposibles (velocidades de auto
+ * de carrera o de avión, distancias desmedidas) o con un GPS tan impreciso que
+ * la cobertura calculada no sería confiable. Devuelve todos los motivos.
+ */
+export function evaluarPlausibilidad(
+  entrada: EntradaPlausibilidad,
+  limites: LimitesPlausibilidad = LIMITES_PLAUSIBILIDAD,
+): { ok: boolean; motivos: string[] } {
+  const motivos: string[] = []
+
+  if (!Number.isFinite(entrada.km) || entrada.km < 0) {
+    motivos.push('km inválidos')
+  } else if (entrada.km > limites.kmMaxPorRecorrido) {
+    motivos.push(`km fuera de rango: ${entrada.km.toFixed(1)} > ${limites.kmMaxPorRecorrido}`)
+  }
+
+  const media = velocidadMediaKmh(entrada.km, entrada.inicio, entrada.fin)
+  if (!Number.isFinite(media) || media > limites.velocidadMediaMax) {
+    motivos.push(`velocidad media fuera de rango: ${media.toFixed(1)} > ${limites.velocidadMediaMax} km/h`)
+  }
+
+  if (entrada.puntos && entrada.puntos.length > 1) {
+    const maxima = velocidadMaximaKmh(entrada.puntos)
+    if (maxima > limites.velocidadMaximaMax) {
+      motivos.push(`velocidad máxima fuera de rango: ${maxima.toFixed(1)} > ${limites.velocidadMaximaMax} km/h`)
+    }
+  }
+
+  const precision = precisionMediaDe(entrada)
+  if (precision !== undefined && precision > limites.precisionMediaMax) {
+    motivos.push(`precisión media insuficiente: ${precision.toFixed(1)} m > ${limites.precisionMediaMax} m`)
+  }
+
+  return { ok: motivos.length === 0, motivos }
+}

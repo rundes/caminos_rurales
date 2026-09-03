@@ -1,5 +1,13 @@
 import { describe, expect, test } from 'vitest'
-import { filtrarPunto, kmDeTrack, simplificar, type PuntoGps } from '@/lib/track'
+import {
+  evaluarPlausibilidad,
+  filtrarPunto,
+  kmDeTrack,
+  simplificar,
+  velocidadMaximaKmh,
+  velocidadMediaKmh,
+  type PuntoGps,
+} from '@/lib/track'
 
 const KM_POR_GRADO = (Math.PI / 180) * 6371
 const LAT_BASE = -36.88
@@ -101,5 +109,111 @@ describe('kmDeTrack', () => {
     const b = punto(LAT_BASE + offsetLatKm(1), -60)
     const c = punto(LAT_BASE + offsetLatKm(2), -60)
     expect(kmDeTrack([a, b, c])).toBeCloseTo(2, 2)
+  })
+})
+
+const INICIO = new Date('2026-09-03T10:00:00.000Z')
+const UNA_HORA_DESPUES = new Date('2026-09-03T11:00:00.000Z')
+
+describe('velocidadMediaKmh', () => {
+  test('50 km en una hora son 50 km/h', () => {
+    expect(velocidadMediaKmh(50, INICIO, UNA_HORA_DESPUES)).toBeCloseTo(50, 6)
+  })
+
+  test('30 km en media hora son 60 km/h', () => {
+    const media = new Date(INICIO.getTime() + 30 * 60 * 1000)
+    expect(velocidadMediaKmh(30, INICIO, media)).toBeCloseTo(60, 6)
+  })
+
+  test('duración nula con desplazamiento es infinita, sin desplazamiento es 0', () => {
+    expect(velocidadMediaKmh(5, INICIO, INICIO)).toBe(Infinity)
+    expect(velocidadMediaKmh(0, INICIO, INICIO)).toBe(0)
+  })
+})
+
+describe('velocidadMaximaKmh', () => {
+  test('devuelve la velocidad del segmento más rápido', () => {
+    const puntos = [
+      punto(LAT_BASE, -60, 0),
+      punto(LAT_BASE + offsetLatKm(0.01), -60, 10_000), // 10 m en 10 s = 3,6 km/h
+      punto(LAT_BASE + offsetLatKm(1.01), -60, 20_000), // 1 km en 10 s = 360 km/h
+    ]
+    expect(velocidadMaximaKmh(puntos)).toBeCloseTo(360, 0)
+  })
+
+  test('ignora los segmentos de menos de 1 s', () => {
+    const puntos = [
+      punto(LAT_BASE, -60, 0),
+      punto(LAT_BASE + offsetLatKm(1), -60, 500), // salto de 1 km en 0,5 s: se descarta
+    ]
+    expect(velocidadMaximaKmh(puntos)).toBe(0)
+  })
+
+  test('un track de menos de dos puntos no tiene velocidad', () => {
+    expect(velocidadMaximaKmh([])).toBe(0)
+    expect(velocidadMaximaKmh([punto(LAT_BASE, -60, 0)])).toBe(0)
+  })
+})
+
+describe('evaluarPlausibilidad', () => {
+  test('acepta un recorrido normal de 40 km en una hora', () => {
+    const resultado = evaluarPlausibilidad({ km: 40, inicio: INICIO, fin: UNA_HORA_DESPUES })
+    expect(resultado).toEqual({ ok: true, motivos: [] })
+  })
+
+  test('rechaza una velocidad media por encima del límite', () => {
+    const resultado = evaluarPlausibilidad({ km: 150, inicio: INICIO, fin: UNA_HORA_DESPUES })
+    expect(resultado.ok).toBe(false)
+    expect(resultado.motivos).toEqual([expect.stringMatching(/velocidad media/i)])
+  })
+
+  test('rechaza un salto entre muestras por encima del límite', () => {
+    const puntos = [
+      punto(LAT_BASE, -60, 0),
+      punto(LAT_BASE + offsetLatKm(1), -60, 10_000), // 1 km en 10 s = 360 km/h
+    ]
+    const resultado = evaluarPlausibilidad({ km: 1, inicio: INICIO, fin: UNA_HORA_DESPUES, puntos })
+    expect(resultado.ok).toBe(false)
+    expect(resultado.motivos).toEqual([expect.stringMatching(/velocidad máxima/i)])
+  })
+
+  test('rechaza una precisión media insuficiente', () => {
+    const resultado = evaluarPlausibilidad({
+      km: 10,
+      inicio: INICIO,
+      fin: UNA_HORA_DESPUES,
+      precisionMedia: 90,
+    })
+    expect(resultado.ok).toBe(false)
+    expect(resultado.motivos).toEqual([expect.stringMatching(/precisión media/i)])
+  })
+
+  test('calcula la precisión media desde los puntos cuando no se pasa', () => {
+    const puntos = [punto(LAT_BASE, -60, 0, 20), punto(LAT_BASE + offsetLatKm(0.05), -60, 60_000, 120)]
+    const resultado = evaluarPlausibilidad({ km: 0.05, inicio: INICIO, fin: UNA_HORA_DESPUES, puntos })
+    expect(resultado.ok).toBe(false) // media 70 m > 60 m
+    expect(resultado.motivos).toEqual([expect.stringMatching(/precisión media/i)])
+  })
+
+  test('rechaza un recorrido que supera el techo de km', () => {
+    const dias = new Date(INICIO.getTime() + 24 * 60 * 60 * 1000)
+    const resultado = evaluarPlausibilidad({ km: 500, inicio: INICIO, fin: dias })
+    expect(resultado.ok).toBe(false)
+    expect(resultado.motivos).toEqual([expect.stringMatching(/km fuera de rango/i)])
+  })
+
+  test('acumula todos los motivos y respeta límites custom', () => {
+    const resultado = evaluarPlausibilidad(
+      { km: 500, inicio: INICIO, fin: UNA_HORA_DESPUES, precisionMedia: 90 },
+      { velocidadMediaMax: 120, velocidadMaximaMax: 160, precisionMediaMax: 60, kmMaxPorRecorrido: 400 },
+    )
+    expect(resultado.ok).toBe(false)
+    expect(resultado.motivos).toHaveLength(3)
+
+    const laxo = evaluarPlausibilidad(
+      { km: 500, inicio: INICIO, fin: UNA_HORA_DESPUES, precisionMedia: 90 },
+      { velocidadMediaMax: 600, velocidadMaximaMax: 900, precisionMediaMax: 200, kmMaxPorRecorrido: 900 },
+    )
+    expect(laxo).toEqual({ ok: true, motivos: [] })
   })
 })

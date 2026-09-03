@@ -167,6 +167,45 @@ describe('esquemaRecorrido', () => {
     expect(esquemaRecorrido.safeParse(recorrido({ puntosGps: -1 })).success).toBe(false)
   })
 
+  test('acepta el recorrido sin el campo opcional puntos', () => {
+    const r = esquemaRecorrido.safeParse(recorrido())
+    expect(r.success).toBe(true)
+    if (r.success) expect(r.data.puntos).toBeUndefined()
+  })
+
+  test('acepta puntos gps crudos', () => {
+    const puntos = [
+      { lat: -37.1, lng: -57.9, t: 1756900000000, precision: 8 },
+      { lat: -37.11, lng: -57.91, t: 1756900010000, precision: 12.5 },
+    ]
+    const r = esquemaRecorrido.safeParse(recorrido({ puntos }))
+    expect(r.success).toBe(true)
+    if (r.success) expect(r.data.puntos).toEqual(puntos)
+  })
+
+  test('rechaza puntos gps mal formados', () => {
+    expect(
+      esquemaRecorrido.safeParse(recorrido({ puntos: [{ lat: 91, lng: 0, t: 1, precision: 5 }] }))
+        .success,
+    ).toBe(false)
+    expect(
+      esquemaRecorrido.safeParse(recorrido({ puntos: [{ lat: 0, lng: 0, t: 1.5, precision: 5 }] }))
+        .success,
+    ).toBe(false)
+    expect(
+      esquemaRecorrido.safeParse(recorrido({ puntos: [{ lat: 0, lng: 0, t: 1, precision: -1 }] }))
+        .success,
+    ).toBe(false)
+    expect(esquemaRecorrido.safeParse(recorrido({ puntos: [{ lat: 0, lng: 0 }] })).success).toBe(
+      false,
+    )
+  })
+
+  test('rechaza mas de 20000 puntos gps crudos', () => {
+    const puntos = Array.from({ length: 20001 }, () => ({ lat: 0, lng: 0, t: 1, precision: 5 }))
+    expect(esquemaRecorrido.safeParse(recorrido({ puntos })).success).toBe(false)
+  })
+
   test('rechaza mas de 200 observaciones', () => {
     const observaciones = Array.from({ length: 201 }, () => observacion())
     expect(esquemaRecorrido.safeParse(recorrido({ observaciones })).success).toBe(false)

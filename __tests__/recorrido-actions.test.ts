@@ -2,9 +2,17 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 
 type Fila = Record<string, unknown>
-type Resultado = { data: Fila[] | Fila | null; error: { message: string } | null }
+type ErrorSupabase = { message: string; code?: string }
+type Resultado = { data: Fila[] | Fila | null; error: ErrorSupabase | null }
 type Operacion = { metodo: string; args: unknown[] }
 type Escritura = { cliente: 'usuario' | 'admin'; tabla: string; filas: unknown; opciones?: unknown }
+type Mutacion = {
+  cliente: 'usuario' | 'admin'
+  tabla: string
+  tipo: 'delete' | 'update'
+  valores?: unknown
+  filtros: unknown[][]
+}
 
 interface Consulta extends PromiseLike<Resultado> {
   select(...args: unknown[]): Consulta
@@ -12,9 +20,11 @@ interface Consulta extends PromiseLike<Resultado> {
   in(...args: unknown[]): Consulta
   gte(...args: unknown[]): Consulta
   limit(...args: unknown[]): Consulta
+  delete(): Consulta
+  update(valores: unknown): Consulta
   maybeSingle(): Promise<Resultado>
-  insert(filas: unknown): Promise<{ error: null }>
-  upsert(filas: unknown, opciones?: unknown): Promise<{ error: null }>
+  insert(filas: unknown): Promise<{ error: ErrorSupabase | null }>
+  upsert(filas: unknown, opciones?: unknown): Promise<{ error: ErrorSupabase | null }>
 }
 
 /** Filas que devuelve cada consulta; se ajustan por test. */
@@ -27,14 +37,20 @@ const db = {
   coberturaDelRecorrido: [] as Fila[],
   coberturaDeEsosTramos: [] as Fila[],
   puntosDelRecorrido: [] as Fila[],
+  puntosDelDia: [] as Fila[],
   recorridosDelUsuario: [] as Fila[],
   logrosDelUsuario: [] as Fila[],
   coberturaMunicipio: [] as Fila[],
 }
 
 const escrituras: Escritura[] = []
+const mutaciones: Mutacion[] = []
 const tablasUsuario: string[] = []
 const tablasAdmin: string[] = []
+/** Error que devuelve el `insert` de una tabla, por test. */
+const erroresInsert: Record<string, ErrorSupabase | undefined> = {}
+/** Efecto colateral al insertar en una tabla (para simular carreras). */
+const alInsertar: Record<string, (() => void) | undefined> = {}
 
 function columnas(ops: Operacion[]): string {
   return String(ops.find((o) => o.metodo === 'select')?.args[0] ?? '')
@@ -62,9 +78,28 @@ function resolver(tabla: string, ops: Operacion[]): Resultado {
     return { data: db.coberturaPrevia, error: null }
   }
   if (tabla === 'cobertura_tramos') return { data: db.coberturaDelRecorrido, error: null }
+  if (tabla === 'puntos_eventos' && tieneMetodo(ops, 'gte')) {
+    return { data: db.puntosDelDia, error: null }
+  }
   if (tabla === 'puntos_eventos') return { data: db.puntosDelRecorrido, error: null }
   if (tabla === 'logros') return { data: db.logrosDelUsuario, error: null }
   throw new Error(`Consulta no prevista: ${tabla} ${cols}`)
+}
+
+/** `delete()`/`update()` se registran como mutaciones y no devuelven filas. */
+function resolverConsulta(cliente: 'usuario' | 'admin', tabla: string, ops: Operacion[]): Resultado {
+  const mutacion = ops.find((o) => o.metodo === 'delete' || o.metodo === 'update')
+  if (mutacion) {
+    mutaciones.push({
+      cliente,
+      tabla,
+      tipo: mutacion.metodo as 'delete' | 'update',
+      valores: mutacion.args[0],
+      filtros: ops.filter((o) => o.metodo === 'eq').map((o) => o.args),
+    })
+    return { data: null, error: null }
+  }
+  return resolver(tabla, ops)
 }
 
 function crearTabla(cliente: 'usuario' | 'admin', tabla: string): Consulta {
@@ -79,16 +114,20 @@ function crearTabla(cliente: 'usuario' | 'admin', tabla: string): Consulta {
     in: (...args) => registrar('in', args),
     gte: (...args) => registrar('gte', args),
     limit: (...args) => registrar('limit', args),
+    delete: () => registrar('delete', []),
+    update: (valores) => registrar('update', [valores]),
     maybeSingle: async () => resolver(tabla, ops),
     insert: async (filas) => {
       escrituras.push({ cliente, tabla, filas })
-      return { error: null }
+      alInsertar[tabla]?.()
+      return { error: erroresInsert[tabla] ?? null }
     },
     upsert: async (filas, opciones) => {
       escrituras.push({ cliente, tabla, filas, opciones })
-      return { error: null }
+      return { error: erroresInsert[tabla] ?? null }
     },
-    then: (cumplir, rechazar) => Promise.resolve(resolver(tabla, ops)).then(cumplir, rechazar),
+    then: (cumplir, rechazar) =>
+      Promise.resolve(resolverConsulta(cliente, tabla, ops)).then(cumplir, rechazar),
   }
   return consulta
 }
@@ -166,11 +205,18 @@ function escrituraDe(tabla: string): Escritura | undefined {
   return escrituras.find((e) => e.tabla === tabla)
 }
 
+function mutacionDe(tabla: string, tipo: 'delete' | 'update'): Mutacion | undefined {
+  return mutaciones.find((m) => m.tabla === tabla && m.tipo === tipo)
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   escrituras.length = 0
+  mutaciones.length = 0
   tablasUsuario.length = 0
   tablasAdmin.length = 0
+  delete erroresInsert.recorridos
+  delete alInsertar.recorridos
   getUser.mockResolvedValue({ data: { user: { id: 'u1' } } })
   db.perfil = { municipio_id: 'maipu' }
   db.recorridoExistente = null
@@ -180,6 +226,7 @@ beforeEach(() => {
   db.coberturaDelRecorrido = []
   db.coberturaDeEsosTramos = []
   db.puntosDelRecorrido = []
+  db.puntosDelDia = []
   db.recorridosDelUsuario = [{ km: 1.2 }]
   db.logrosDelUsuario = []
   db.coberturaMunicipio = [
@@ -327,8 +374,13 @@ describe('finalizarRecorrido', () => {
     expect(r.ok && r.data.puntos).toBe(30)
   })
 
-  test('es idempotente: si el recorrido ya existe recalcula el resumen sin escribir', async () => {
-    db.recorridoExistente = { id: ID_RECORRIDO, usuario_id: 'u1', km: 4.2 }
+  test('reentrega de un recorrido ya procesado: recalcula el resumen sin escribir', async () => {
+    db.recorridoExistente = {
+      id: ID_RECORRIDO,
+      usuario_id: 'u1',
+      km: 4.2,
+      procesado_at: '2026-09-03T11:05:00Z',
+    }
     db.coberturaDelRecorrido = [{ tramo_id: 'w1' }]
     db.coberturaDeEsosTramos = [
       { tramo_id: 'w1', recorrido_id: ID_RECORRIDO, created_at: '2026-09-03T11:00:00Z' },
@@ -349,10 +401,162 @@ describe('finalizarRecorrido', () => {
       },
     })
     expect(escrituras).toEqual([])
+    expect(mutaciones).toEqual([])
+  })
+
+  test('reentrega de un recorrido a medias (procesado_at null): reprocesa y lo sella', async () => {
+    db.recorridoExistente = { id: ID_RECORRIDO, usuario_id: 'u1', km: 4.2, procesado_at: null }
+
+    const r = await finalizarRecorrido(payload())
+
+    // usa los km ya guardados y no vuelve a insertar el recorrido
+    expect(r.ok && r.data.km).toBe(4.2)
+    expect(escrituraDe('recorridos')).toBeUndefined()
+    expect(escrituraDe('cobertura_tramos')).toMatchObject({
+      filas: [{ tramo_id: 'w1', recorrido_id: ID_RECORRIDO, usuario_id: 'u1' }],
+    })
+    expect(escrituraDe('puntos_eventos')).toBeDefined()
+    // idempotencia: borra los eventos previos de este recorrido antes de insertar
+    expect(mutacionDe('puntos_eventos', 'delete')).toMatchObject({
+      cliente: 'admin',
+      filtros: [['recorrido_id', ID_RECORRIDO]],
+    })
+    // sello final
+    expect(mutacionDe('recorridos', 'update')).toMatchObject({
+      cliente: 'admin',
+      valores: { procesado_at: expect.any(String) },
+      filtros: [['id', ID_RECORRIDO]],
+    })
+  })
+
+  test('carrera de insercion: un 23505 se trata como recorrido existente', async () => {
+    erroresInsert.recorridos = {
+      code: '23505',
+      message: 'duplicate key value violates unique constraint',
+    }
+    alInsertar.recorridos = () => {
+      db.recorridoExistente = { id: ID_RECORRIDO, usuario_id: 'u1', km: 4.2, procesado_at: null }
+    }
+
+    const r = await finalizarRecorrido(payload())
+
+    expect(r.ok).toBe(true)
+    expect(r.ok && r.data.km).toBe(4.2)
+    expect(mutacionDe('recorridos', 'update')).toBeDefined()
+  })
+
+  test('carrera de insercion con la fila ya procesada: devuelve el resumen guardado', async () => {
+    erroresInsert.recorridos = { code: '23505', message: 'duplicate key' }
+    alInsertar.recorridos = () => {
+      db.recorridoExistente = {
+        id: ID_RECORRIDO,
+        usuario_id: 'u1',
+        km: 4.2,
+        procesado_at: '2026-09-03T11:05:00Z',
+      }
+    }
+    db.puntosDelRecorrido = [{ puntos: 7 }]
+
+    const r = await finalizarRecorrido(payload())
+
+    expect(r.ok && r.data.puntos).toBe(7)
+    expect(escrituraDe('cobertura_tramos')).toBeUndefined()
+    expect(mutacionDe('recorridos', 'update')).toBeUndefined()
+  })
+
+  test('un error de insercion que no es 23505 devuelve el error generico', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    erroresInsert.recorridos = { code: '23503', message: 'foreign key violation' }
+    const r = await finalizarRecorrido(payload())
+    expect(r).toEqual({ ok: false, error: expect.stringMatching(/no se pudo guardar/i) })
+    spy.mockRestore()
+  })
+
+  test('tope diario: trunca los puntos que exceden el maximo de 24 h', async () => {
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    db.puntosDelDia = [{ puntos: 1990 }, { puntos: 5 }]
+
+    const r = await finalizarRecorrido(payload())
+
+    // el recorrido valia 20 puntos, pero solo quedan 5 disponibles en el dia
+    expect(r.ok && r.data.puntos).toBe(5)
+    expect(escrituraDe('puntos_eventos')).toMatchObject({
+      filas: [{ motivo: 'km_nuevos', puntos: 5 }],
+    })
+    expect(spy).toHaveBeenCalledWith(
+      '[recorrido] tope diario de puntos alcanzado',
+      expect.anything(),
+    )
+    spy.mockRestore()
+  })
+
+  test('tope diario agotado: no inserta eventos de puntos', async () => {
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    db.puntosDelDia = [{ puntos: 2000 }]
+
+    const r = await finalizarRecorrido(payload())
+
+    expect(r.ok && r.data.puntos).toBe(0)
+    expect(escrituraDe('puntos_eventos')).toBeUndefined()
+    spy.mockRestore()
+  })
+
+  test('rechaza un recorrido implausible sin escribir ni crear el cliente admin', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    // ~1113 km en una hora: velocidad media y km fuera de todo rango
+    const r = await finalizarRecorrido(
+      payload({
+        track: [
+          [0, 0],
+          [0, 10],
+        ],
+      }),
+    )
+
+    expect(r).toEqual({ ok: false, error: expect.stringMatching(/no pudo validarse/i) })
+    expect(spy).toHaveBeenCalledWith(
+      '[recorrido] implausible',
+      expect.arrayContaining([expect.any(String)]),
+    )
+    expect(crearClienteAdmin).not.toHaveBeenCalled()
+    expect(escrituras).toEqual([])
+    expect(mutaciones).toEqual([])
+    expect(tablasUsuario).toEqual([])
+    spy.mockRestore()
+  })
+
+  test('rechaza un recorrido con saltos imposibles entre puntos crudos', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const r = await finalizarRecorrido(
+      payload({
+        puntos: [
+          { lat: 0, lng: 0, t: 1756900000000, precision: 8 },
+          { lat: 0, lng: 0.02, t: 1756900010000, precision: 8 }, // ~2,2 km en 10 s
+        ],
+      }),
+    )
+
+    expect(r).toEqual({ ok: false, error: expect.stringMatching(/no pudo validarse/i) })
+    expect(crearClienteAdmin).not.toHaveBeenCalled()
+    spy.mockRestore()
+  })
+
+  test('acepta puntos crudos plausibles', async () => {
+    const r = await finalizarRecorrido(
+      payload({
+        puntos: [
+          { lat: 0, lng: 0, t: 1756900000000, precision: 8 },
+          { lat: 0, lng: 0.005, t: 1756900060000, precision: 12 },
+        ],
+      }),
+    )
+    expect(r.ok).toBe(true)
   })
 
   test('rechaza un recorrido con el mismo id de otra persona', async () => {
-    db.recorridoExistente = { id: ID_RECORRIDO, usuario_id: 'u2', km: 4.2 }
+    db.recorridoExistente = { id: ID_RECORRIDO, usuario_id: 'u2', km: 4.2, procesado_at: null }
     const r = await finalizarRecorrido(payload())
     expect(r).toEqual({ ok: false, error: expect.stringMatching(/otra persona/i) })
     expect(escrituras).toEqual([])

@@ -1,6 +1,7 @@
 -- Visiovial Rural - Esquema de base de datos (Supabase / PostgreSQL 17)
 -- Estado final: refleja 0001_schema.sql + 0002_storage_por_municipio.sql +
--- 0003a_tipos_falla.sql + 0003_recorridos.sql. Una instalación nueva puede
+-- 0003a_tipos_falla.sql + 0003_recorridos.sql + 0004_recorridos_procesado.sql.
+-- Una instalación nueva puede
 -- correr solo este archivo. La tabla `relevamientos` ya no existe: el flujo
 -- es recorrido GPS -> cobertura de tramos -> puntos e insignias.
 
@@ -61,6 +62,9 @@ create table public.recorridos (
   puntos_gps integer not null default 0,
   track jsonb not null default '[]'::jsonb,
   estado recorrido_estado not null default 'finalizado',
+  -- Sello del post-procesado (cobertura, puntos, observaciones, logros).
+  -- Null = insertado pero sin procesar: el reintento vuelve a procesarlo.
+  procesado_at timestamptz,
   created_at timestamptz not null default now()
 );
 
@@ -112,6 +116,7 @@ create index caminos_municipio_idx on public.caminos (municipio);
 create index tramos_municipio_idx on public.tramos (municipio);
 create index recorridos_usuario_idx on public.recorridos (usuario_id);
 create index recorridos_municipio_idx on public.recorridos (municipio);
+create index recorridos_sin_procesar_idx on public.recorridos (created_at) where procesado_at is null;
 create index cobertura_tramo_idx on public.cobertura_tramos (tramo_id);
 create index fallas_recorrido_idx on public.fallas_deteccion (recorrido_id);
 create index fallas_tipo_idx on public.fallas_deteccion (tipo_falla);

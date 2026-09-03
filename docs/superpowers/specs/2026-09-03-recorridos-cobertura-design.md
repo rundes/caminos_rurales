@@ -17,6 +17,7 @@ Relevar el 100 % de los caminos rurales del municipio. El relevador abre la app,
 | Denominador de cobertura | Tabla `tramos`: un registro por tramo OSM con geometría, km, `nombre_codigo` y localidad. Maipú: 165 tramos, 610 km. |
 | Regla de cobertura | Un tramo se considera cubierto por un recorrido si al menos el 60 % de sus muestras (cada 50 m a lo largo de la geometría) tienen un punto del track a menos de 40 m. |
 | Puntos | 10 por km nuevo (primera cobertura del tramo en el municipio), 2 por km repetido (máximo una vez por tramo cada 24 h por usuario), 5 por observación con evidencia. Registrados en `puntos_eventos`. |
+| Antitrampa | Antes de escribir nada, `finalizarRecorrido` evalúa la plausibilidad física del track (`evaluarPlausibilidad`): velocidad media ≤ 120 km/h, velocidad entre muestras consecutivas ≤ 160 km/h (segmentos de menos de 1 s ignorados), precisión media ≤ 60 m y ≤ 400 km por recorrido. Si falla, se rechaza con un mensaje genérico y no se guarda nada. Además, tope de 2000 puntos por usuario cada 24 h (`PUNTOS_MAX_DIA`): el excedente se trunca, los eventos se registran con el puntaje recortado. El cliente puede mandar `puntos` (GPS crudo con `precision` y `t`) además del `track` simplificado; es opcional. |
 | Insignias | `primer_recorrido`, `explorador_50km`, `cartografo_200km`, `localidad_completa:<localidad>`, `municipio_100`. Registradas en `logros`. |
 | Ranking | Suma de puntos por usuario dentro del municipio. Top 10 + posición propia. |
 | Observaciones | Reutiliza `fallas_deteccion` con columnas nuevas (`recorrido_id`, `descripcion`, `url_evidencia_video`) y tipos nuevos. En la UI se llaman "observaciones". |
@@ -29,7 +30,7 @@ Relevar el 100 % de los caminos rurales del municipio. El relevador abre la app,
 ```
 perfiles           + acepto_terminos_at timestamptz
 tramos             id text pk (osm way id), municipio text, nombre_codigo text, localidad text, km numeric, geometria jsonb (LineString [lng,lat][])
-recorridos         id uuid, usuario_id uuid, municipio text, inicio timestamptz, fin timestamptz, km numeric, puntos_gps int, track jsonb (simplificado), estado recorrido_estado ('finalizado','descartado'), created_at
+recorridos         id uuid, usuario_id uuid, municipio text, inicio timestamptz, fin timestamptz, km numeric, puntos_gps int, track jsonb (simplificado), estado recorrido_estado ('finalizado','descartado'), procesado_at timestamptz null (migración 0004), created_at
 cobertura_tramos   tramo_id text fk, recorrido_id uuid fk, usuario_id uuid, created_at; unique (tramo_id, recorrido_id)
 fallas_deteccion   + recorrido_id uuid fk (recorridos, cascade), + descripcion text, + url_evidencia_video text; relevamiento_id eliminado
 tipo_falla         + 'alcantarilla_rota', 'senalizacion', 'otro'
@@ -48,7 +49,7 @@ Vistas: `cobertura_municipio(municipio)` y `ranking_municipio(municipio)` como f
 
 **Recorrido.** Home muestra cobertura del municipio y botón "Iniciar recorrido". Al iniciar: wake lock, `watchPosition({ enableHighAccuracy: true })`, filtro (precisión ≤ 50 m, distancia ≥ 5 m al último punto), guardado en IndexedDB cada punto, mapa en vivo (IGN + capas + polilínea), km y tiempo. "Observación": pausa, formulario rápido, evidencia capturada con `<input capture>`, se guarda local con la posición actual. "Finalizar": resumen local, se encola la subida. Cola: sube evidencia (URL firmada), luego `finalizarRecorrido` con track simplificado (Douglas-Peucker 10 m) y observaciones; reintenta con backoff; muestra estado.
 
-**Servidor `finalizarRecorrido`.** Valida sesión y datos (zod), inserta recorrido, carga tramos del municipio, calcula cobertura, inserta `cobertura_tramos`, calcula km nuevos/repetidos, inserta `puntos_eventos`, inserta observaciones, evalúa insignias e inserta `logros` nuevos, devuelve resumen `{ km, tramosNuevos, tramosRepetidos, puntos, insignias }`. Idempotente por `recorrido.id` generado en el cliente (uuid): si ya existe, devuelve el resumen guardado.
+**Servidor `finalizarRecorrido`.** Valida datos (zod) y plausibilidad del track, valida sesión, inserta recorrido, carga tramos del municipio, calcula cobertura, inserta `cobertura_tramos`, calcula km nuevos/repetidos, inserta `puntos_eventos`, inserta observaciones, evalúa insignias e inserta `logros` nuevos, devuelve resumen `{ km, tramosNuevos, tramosRepetidos, puntos, insignias }`. Idempotente por `recorrido.id` generado en el cliente (uuid). El post-procesado se sella con `recorridos.procesado_at` como última escritura: si el recorrido ya existe y está sellado devuelve el resumen guardado sin escribir; si existe con `procesado_at` en null (fallo previo a mitad de camino, o carrera entre dos envíos que devuelve `23505` en el insert) se reprocesa, porque cada paso es idempotente (cobertura y logros con `ignoreDuplicates`, observaciones con upsert por `id`, `puntos_eventos` borrados por `recorrido_id` antes de reinsertar).
 
 **Dashboard.** Cobertura % del municipio y por localidad, km relevados totales, mapa (tramos cubiertos verde, pendientes gris, observaciones por severidad, capas base), ranking, mis insignias, últimas observaciones con evidencia.
 

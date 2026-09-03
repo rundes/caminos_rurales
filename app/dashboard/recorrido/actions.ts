@@ -6,7 +6,7 @@ import { obtenerProveedor } from '@/lib/almacenamiento'
 import type { DestinoSubida } from '@/lib/almacenamiento/tipos'
 import { TIPOS_PERMITIDOS, rutaEvidencia } from '@/lib/archivos'
 import { calcularCobertura } from '@/lib/cobertura'
-import { calcularPuntos, evaluarInsignias } from '@/lib/juego'
+import { calcularPuntos, evaluarInsignias, limitarPorTopeDiario, totalPuntos } from '@/lib/juego'
 import {
   aCoberturaPorLocalidad,
   clasificarTramos,
@@ -22,7 +22,7 @@ import {
 } from '@/lib/recorrido-servidor'
 import { crearClienteAdmin } from '@/lib/supabase/admin'
 import { crearClienteServidor } from '@/lib/supabase/server'
-import { kmDeTrack } from '@/lib/track'
+import { evaluarPlausibilidad, kmDeTrack } from '@/lib/track'
 import type { ResultadoAccion } from '@/lib/tipos'
 import { esquemaRecorrido, primerError, type RecorridoPayload } from '@/lib/validaciones'
 
@@ -46,6 +46,10 @@ const ERROR_PERFIL = 'No se pudo cargar tu perfil'
 const ERROR_SIN_MUNICIPIO = 'Tu perfil no tiene un partido asignado'
 const ERROR_GENERICO = 'No se pudo guardar el recorrido. Intentá de nuevo.'
 const ERROR_AJENO = 'Ese recorrido ya fue registrado por otra persona.'
+const ERROR_IMPLAUSIBLE = 'El recorrido no pudo validarse. Verificá el GPS y volvé a intentar.'
+
+/** Código Postgres de violación de unicidad (`unique_violation`). */
+const CODIGO_DUPLICADO = '23505'
 
 /** Los tramos de un municipio casi no cambian: se cachean por proceso. */
 const TTL_TRAMOS_MS = 10 * 60 * 1000
@@ -181,8 +185,24 @@ async function guardarObservaciones(
 ): Promise<void> {
   if (datos.observaciones.length === 0) return
   const filas = datos.observaciones.map((o) => filaObservacion(ctx.recorridoId, o))
-  const { error } = await supabase.from('fallas_deteccion').insert(filas)
+  // Upsert por `id` (lo genera el cliente): un reprocesamiento no duplica filas.
+  const { error } = await supabase
+    .from('fallas_deteccion')
+    .upsert(filas, { onConflict: 'id' })
   if (error) throw new Error(error.message)
+}
+
+/** Puntos que el usuario ya sumó en las últimas 24 h (para el tope diario). */
+async function puntosDelDia(admin: ClienteAdmin, usuarioId: string): Promise<number> {
+  const desde = new Date(Date.now() - VENTANA_REPETIDO_MS).toISOString()
+  const { data, error } = await admin
+    .from('puntos_eventos')
+    .select('puntos')
+    .eq('usuario_id', usuarioId)
+    .gte('created_at', desde)
+    .limit(MAX_FILAS_COBERTURA)
+  if (error) throw new Error(error.message)
+  return (data ?? []).reduce((suma, e) => suma + Number(e.puntos), 0)
 }
 
 async function guardarPuntos(
@@ -191,6 +211,13 @@ async function guardarPuntos(
   particion: ParticionConPuntos,
   observacionesConEvidencia: number,
 ): Promise<number> {
+  // Idempotencia: un reprocesamiento no debe duplicar los eventos del recorrido.
+  const { error: errorBorrado } = await admin
+    .from('puntos_eventos')
+    .delete()
+    .eq('recorrido_id', ctx.recorridoId)
+  if (errorBorrado) throw new Error(errorBorrado.message)
+
   const eventos = calcularPuntos({
     kmNuevos: particion.kmNuevos,
     // Solo cuentan para puntos los repetidos que el usuario no cubrió en las últimas 24 h (anti-farmeo).
@@ -199,8 +226,23 @@ async function guardarPuntos(
   })
   if (eventos.length === 0) return 0
 
+  // Antitrampa: tope diario de puntos por usuario. El excedente se trunca.
+  const previos = await puntosDelDia(admin, ctx.usuarioId)
+  const limitados = limitarPorTopeDiario(eventos, previos)
+  const total = totalPuntos(limitados)
+  if (total < totalPuntos(eventos)) {
+    console.warn('[recorrido] tope diario de puntos alcanzado', {
+      usuarioId: ctx.usuarioId,
+      recorridoId: ctx.recorridoId,
+      previos,
+      solicitados: totalPuntos(eventos),
+      otorgados: total,
+    })
+  }
+  if (limitados.length === 0) return 0
+
   const { error } = await admin.from('puntos_eventos').insert(
-    eventos.map((e) => ({
+    limitados.map((e) => ({
       usuario_id: ctx.usuarioId,
       municipio: ctx.municipio,
       recorrido_id: ctx.recorridoId,
@@ -209,7 +251,7 @@ async function guardarPuntos(
     })),
   )
   if (error) throw new Error(error.message)
-  return eventos.reduce((suma, e) => suma + e.puntos, 0)
+  return total
 }
 
 async function totalesUsuario(
@@ -343,6 +385,36 @@ async function resumenGuardado(
   }
 }
 
+/** Fila mínima de `recorridos` que necesita el flujo de finalización. */
+type RecorridoExistente = { usuario_id: string; km: number; procesado_at: string | null }
+
+async function buscarRecorrido(
+  supabase: ClienteServidor,
+  id: string,
+): Promise<RecorridoExistente | null> {
+  const { data, error } = await supabase
+    .from('recorridos')
+    .select('id, usuario_id, km, procesado_at')
+    .eq('id', id)
+    .maybeSingle()
+  if (error) throw new Error(error.message)
+  if (!data) return null
+  return {
+    usuario_id: data.usuario_id,
+    km: Number(data.km),
+    procesado_at: data.procesado_at ?? null,
+  }
+}
+
+/** Sella el recorrido como procesado. Es la última escritura del flujo. */
+async function marcarProcesado(admin: ClienteAdmin, recorridoId: string): Promise<void> {
+  const { error } = await admin
+    .from('recorridos')
+    .update({ procesado_at: new Date().toISOString() })
+    .eq('id', recorridoId)
+  if (error) throw new Error(error.message)
+}
+
 function revalidarDashboard(): void {
   revalidatePath('/dashboard')
   revalidatePath('/dashboard/mapa')
@@ -351,12 +423,16 @@ function revalidarDashboard(): void {
 
 /**
  * Cierra un recorrido: guarda el track, calcula cobertura, observaciones,
- * puntos e insignias. Idempotente por `id` (lo genera el cliente): si el
- * recorrido ya existe devuelve el resumen recalculado desde la base.
+ * puntos e insignias.
  *
- * Si algo falla después de insertar el recorrido no se revierte nada: el
- * recorrido queda en estado `finalizado` sin cobertura ni puntos y se devuelve
- * un error genérico.
+ * Antitrampa: antes de escribir nada se evalúa la plausibilidad física del
+ * track (velocidad media, velocidad entre muestras, precisión y km totales).
+ *
+ * Idempotente por `id` (lo genera el cliente). El recorrido se marca con
+ * `procesado_at` recién cuando terminó todo el post-procesado, así que:
+ * - si ya existe y está procesado, devuelve el resumen recalculado sin escribir;
+ * - si existe pero quedó a medias (`procesado_at` null, por un fallo previo o
+ *   por una carrera entre dos envíos), se reprocesa; cada paso es idempotente.
  */
 export async function finalizarRecorrido(
   payload: unknown,
@@ -365,43 +441,62 @@ export async function finalizarRecorrido(
   if (!parseo.success) return { ok: false, error: primerError(parseo.error) }
   const datos = parseo.data
 
+  const kmCrudo = kmDeTrack(coordenadasDeTrack(datos.track))
+  const plausibilidad = evaluarPlausibilidad({
+    km: kmCrudo,
+    inicio: new Date(datos.inicio),
+    fin: new Date(datos.fin),
+    puntos: datos.puntos,
+  })
+  if (!plausibilidad.ok) {
+    console.error('[recorrido] implausible', plausibilidad.motivos)
+    return { ok: false, error: ERROR_IMPLAUSIBLE }
+  }
+
   const supabase = await crearClienteServidor()
   const sesion = await sesionYMunicipio(supabase)
   if ('error' in sesion) return { ok: false, error: sesion.error }
 
   const ctx: Contexto = { ...sesion, recorridoId: datos.id }
-  const km = Number(kmDeTrack(coordenadasDeTrack(datos.track)).toFixed(3))
+  const km = Number(kmCrudo.toFixed(3))
 
   try {
     const admin = crearClienteAdmin()
 
-    const { data: existente, error: errorExistente } = await supabase
-      .from('recorridos')
-      .select('id, usuario_id, km')
-      .eq('id', datos.id)
-      .maybeSingle()
-    if (errorExistente) throw new Error(errorExistente.message)
+    let existente = await buscarRecorrido(supabase, datos.id)
     if (existente && existente.usuario_id !== ctx.usuarioId) {
       return { ok: false, error: ERROR_AJENO }
     }
-    if (existente) {
-      return { ok: true, data: await resumenGuardado(supabase, admin, ctx, Number(existente.km)) }
+
+    if (!existente) {
+      const { error: errorInsert } = await supabase.from('recorridos').insert({
+        id: datos.id,
+        usuario_id: ctx.usuarioId,
+        municipio: ctx.municipio,
+        inicio: datos.inicio,
+        fin: datos.fin,
+        km,
+        puntos_gps: datos.puntosGps,
+        track: datos.track,
+        estado: 'finalizado',
+      })
+      if (errorInsert) {
+        // Carrera: dos envíos del mismo recorrido llegaron a la vez. El perdedor
+        // relee la fila y sigue por la rama idempotente.
+        if (errorInsert.code !== CODIGO_DUPLICADO) throw new Error(errorInsert.message)
+        existente = await buscarRecorrido(supabase, datos.id)
+        if (!existente) throw new Error(errorInsert.message)
+        if (existente.usuario_id !== ctx.usuarioId) return { ok: false, error: ERROR_AJENO }
+      }
     }
 
-    const { error: errorInsert } = await supabase.from('recorridos').insert({
-      id: datos.id,
-      usuario_id: ctx.usuarioId,
-      municipio: ctx.municipio,
-      inicio: datos.inicio,
-      fin: datos.fin,
-      km,
-      puntos_gps: datos.puntosGps,
-      track: datos.track,
-      estado: 'finalizado',
-    })
-    if (errorInsert) throw new Error(errorInsert.message)
+    const kmGuardado = existente ? existente.km : km
+    if (existente?.procesado_at) {
+      return { ok: true, data: await resumenGuardado(supabase, admin, ctx, kmGuardado) }
+    }
 
-    const resumen = await procesarRecorrido(supabase, admin, ctx, datos, km)
+    const resumen = await procesarRecorrido(supabase, admin, ctx, datos, kmGuardado)
+    await marcarProcesado(admin, ctx.recorridoId)
     revalidarDashboard()
     return { ok: true, data: resumen }
   } catch (error) {

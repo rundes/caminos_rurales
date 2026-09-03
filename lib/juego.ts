@@ -2,6 +2,12 @@ export const PUNTOS_KM_NUEVO = 10
 export const PUNTOS_KM_REPETIDO = 2
 export const PUNTOS_OBSERVACION = 5
 
+/**
+ * Antitrampa: techo de puntos que un usuario puede sumar en 24 h. El excedente
+ * se trunca (los eventos se siguen registrando, con el puntaje recortado).
+ */
+export const PUNTOS_MAX_DIA = 2000
+
 const KM_EXPLORADOR = 50
 const KM_CARTOGRAFO = 200
 
@@ -47,6 +53,33 @@ export function calcularPuntos(input: {
   }
 
   return eventos
+}
+
+/**
+ * Recorta los eventos para que `puntosPreviosDia + total` no supere el tope
+ * diario. Reparte en orden y descarta los eventos que quedan en cero.
+ */
+export function limitarPorTopeDiario(
+  eventos: readonly EventoPuntos[],
+  puntosPreviosDia: number,
+  tope: number = PUNTOS_MAX_DIA,
+): EventoPuntos[] {
+  let disponible = Math.max(0, tope - Math.max(0, puntosPreviosDia))
+  const limitados: EventoPuntos[] = []
+
+  for (const evento of eventos) {
+    const otorgados = Math.min(evento.puntos, disponible)
+    if (otorgados <= 0) continue
+    limitados.push(otorgados === evento.puntos ? evento : { ...evento, puntos: otorgados })
+    disponible -= otorgados
+  }
+
+  return limitados
+}
+
+/** Suma de puntos de una lista de eventos. */
+export function totalPuntos(eventos: readonly EventoPuntos[]): number {
+  return eventos.reduce((suma, e) => suma + e.puntos, 0)
 }
 
 export type CoberturaLocalidad = { localidad: string; tramos: number; cubiertos: number }

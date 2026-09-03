@@ -78,3 +78,18 @@ describe('comprimirImagen', () => {
     expect(await comprimirImagen(foto, undefined, deps)).toBe(foto)
   })
 })
+
+describe('deps por defecto', () => {
+  test('decodifica respetando la orientacion EXIF del archivo', async () => {
+    const createImageBitmap = vi.fn().mockResolvedValue({ width: 4000, height: 3000, close })
+    vi.stubGlobal('createImageBitmap', createImageBitmap)
+
+    const foto = archivo('vertical.jpg', 'image/jpeg', 4 * 1024 * 1024)
+    // jsdom no tiene OffscreenCanvas: el lienzo por defecto devuelve null y la
+    // funcion cae al archivo original, pero la decodificacion ya ocurrio.
+    expect(await comprimirImagen(foto)).toBe(foto)
+    expect(createImageBitmap).toHaveBeenCalledWith(foto, { imageOrientation: 'from-image' })
+
+    vi.unstubAllGlobals()
+  })
+})

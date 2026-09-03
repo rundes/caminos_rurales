@@ -69,6 +69,21 @@ const coordenadaTrack = z.tuple([
   z.number().min(-180).max(180),
 ])
 
+/**
+ * Punto GPS crudo, opcional: lo manda el cliente además del `track`
+ * simplificado para que el servidor pueda evaluar la plausibilidad
+ * (velocidad entre muestras y precisión media).
+ */
+const puntoGpsTrack = z.object({
+  lat: z.number().min(-90, { message: 'Latitud fuera de rango' }).max(90, { message: 'Latitud fuera de rango' }),
+  lng: z
+    .number()
+    .min(-180, { message: 'Longitud fuera de rango' })
+    .max(180, { message: 'Longitud fuera de rango' }),
+  t: z.int().min(0, { message: 'Marca de tiempo inválida' }),
+  precision: z.number().min(0, { message: 'Precisión inválida' }),
+})
+
 export const esquemaRecorrido = z
   .object({
     id: z.uuid({ message: 'Recorrido sin identificador válido' }),
@@ -79,6 +94,10 @@ export const esquemaRecorrido = z
       .array(coordenadaTrack, { message: 'El recorrido no tiene puntos' })
       .min(2, { message: 'El recorrido necesita al menos 2 puntos' })
       .max(MAX_PUNTOS_TRACK, { message: 'El recorrido tiene demasiados puntos' }),
+    puntos: z
+      .array(puntoGpsTrack)
+      .max(MAX_PUNTOS_TRACK, { message: 'El recorrido tiene demasiados puntos' })
+      .optional(),
     observaciones: z
       .array(esquemaObservacion)
       .max(MAX_OBSERVACIONES, { message: 'Demasiadas observaciones en un recorrido' }),
@@ -88,5 +107,6 @@ export const esquemaRecorrido = z
     path: ['fin'],
   })
 
+export type PuntoGpsPayload = z.infer<typeof puntoGpsTrack>
 export type Observacion = z.infer<typeof esquemaObservacion>
 export type RecorridoPayload = z.infer<typeof esquemaRecorrido>

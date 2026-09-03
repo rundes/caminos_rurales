@@ -241,6 +241,7 @@ export type Database = {
           inicio: string
           km: number
           municipio: string
+          procesado_at: string | null
           puntos_gps: number
           track: Json
           usuario_id: string
@@ -253,6 +254,7 @@ export type Database = {
           inicio: string
           km?: number
           municipio: string
+          procesado_at?: string | null
           puntos_gps?: number
           track?: Json
           usuario_id: string
@@ -265,6 +267,7 @@ export type Database = {
           inicio?: string
           km?: number
           municipio?: string
+          procesado_at?: string | null
           puntos_gps?: number
           track?: Json
           usuario_id?: string

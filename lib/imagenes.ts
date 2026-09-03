@@ -39,7 +39,9 @@ function crearCanvasNavegador(ancho: number, alto: number): Lienzo | null {
 }
 
 const DEPS_DEFECTO: DepsCompresion = {
-  crearBitmap: (archivo) => createImageBitmap(archivo),
+  // `from-image` respeta el EXIF: sin esto las fotos verticales del celular
+  // se suben rotadas, porque el canvas ignora la orientación del archivo.
+  crearBitmap: (archivo) => createImageBitmap(archivo, { imageOrientation: 'from-image' }),
   crearCanvas: crearCanvasNavegador,
 }
 
