@@ -90,10 +90,18 @@ export async function POST(request: Request) {
     }
   } catch (e) {
     console.error('[procesar-ia]', e)
+    // Rollback: si ya se llegaron a insertar fallas en esta corrida antes de que
+    // fallara la actualización del camino, hay que borrarlas para no dejar
+    // detecciones huérfanas de un procesamiento que se va a reintentar.
+    const { error: errorLimpieza } = await admin.from('fallas_deteccion').delete().eq('relevamiento_id', relevamiento.id)
+    if (errorLimpieza) console.error('[procesar-ia] no se pudieron borrar las fallas insertadas', errorLimpieza)
     const { error: errorReset } = await admin
       .from('relevamientos')
       .update({ procesado_ia: false })
       .eq('id', relevamiento.id)
+    // Falla residual: si este reset falla, procesado_ia queda en true aunque no
+    // haya fallas guardadas (ya fueron borradas arriba). El relevamiento queda
+    // marcado como procesado sin poder reintentarse y requiere arreglo manual.
     if (errorReset) console.error('[procesar-ia] no se pudo revertir procesado_ia', errorReset)
     return NextResponse.json({ ok: false, error: 'Error interno al procesar' }, { status: 500 })
   }

@@ -15,6 +15,9 @@ const claimEq1 = vi.fn()
 const claimEq2 = vi.fn()
 const claimSelectResultado = vi.fn()
 const fallasInsert = vi.fn()
+const fallasDelete = vi.fn()
+const fallasDeleteEq = vi.fn()
+const fallasDeleteResultado = vi.fn()
 const caminosUpdate = vi.fn()
 const caminosEq = vi.fn()
 const caminosResultado = vi.fn()
@@ -103,7 +106,18 @@ beforeEach(() => {
       }
     }
     if (tabla === 'fallas_deteccion') {
-      return { insert: (filas: unknown) => fallasInsert(filas) }
+      return {
+        insert: (filas: unknown) => fallasInsert(filas),
+        delete: () => {
+          fallasDelete()
+          return {
+            eq: (col: string, val: unknown) => {
+              fallasDeleteEq(col, val)
+              return fallasDeleteResultado()
+            },
+          }
+        },
+      }
     }
     if (tabla === 'caminos') {
       return {
@@ -122,6 +136,7 @@ beforeEach(() => {
   })
   claimSelectResultado.mockReturnValue({ data: [{ id: RELEVAMIENTO_ID }], error: null })
   fallasInsert.mockReturnValue({ error: null })
+  fallasDeleteResultado.mockReturnValue({ error: null })
   caminosResultado.mockReturnValue({ error: null })
   resetResultado.mockReturnValue({ error: null })
 })
@@ -222,6 +237,28 @@ describe('POST /api/procesar-ia', () => {
     expect(body.ok).toBe(false)
     expect(body.error).not.toContain('boom')
     expect(spy).toHaveBeenCalled()
+    expect(resetUpdate).toHaveBeenCalledWith({ procesado_ia: false })
+    expect(resetEq).toHaveBeenCalledWith('id', RELEVAMIENTO_ID)
+
+    spy.mockRestore()
+  })
+
+  test('500 cuando falla la actualización del camino: borra las fallas insertadas y revierte procesado_ia', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    caminosResultado.mockReturnValue({ error: { message: 'boom' } })
+
+    const res = await POST(crearRequest({ relevamiento_id: RELEVAMIENTO_ID }))
+    const body = await res.json()
+
+    expect(res.status).toBe(500)
+    expect(body.ok).toBe(false)
+    expect(body.error).not.toContain('boom')
+    expect(spy).toHaveBeenCalled()
+
+    expect(fallasInsert).toHaveBeenCalledTimes(1)
+    expect(fallasDelete).toHaveBeenCalledTimes(1)
+    expect(fallasDeleteEq).toHaveBeenCalledWith('relevamiento_id', RELEVAMIENTO_ID)
+
     expect(resetUpdate).toHaveBeenCalledWith({ procesado_ia: false })
     expect(resetEq).toHaveBeenCalledWith('id', RELEVAMIENTO_ID)
 

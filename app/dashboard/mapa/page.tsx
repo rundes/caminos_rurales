@@ -1,3 +1,4 @@
+import { Suspense } from 'react'
 import { MapaCliente } from '@/components/MapaCliente'
 import { aPuntos, filtrarPuntos, municipiosDe, type FilaFalla } from '@/lib/fallas'
 import { buscarPartido } from '@/lib/partidos'
@@ -8,6 +9,7 @@ type Props = { searchParams: Promise<{ tipo?: string; municipio?: string }> }
 
 const CENTRO_PROVINCIA: [number, number] = [-36.6, -60.0]
 const SEGUNDOS_URL_FIRMADA = 60 * 60
+const LIMITE_FALLAS = 2000
 
 export default async function MapaPage({ searchParams }: Props) {
   const filtros = await searchParams
@@ -17,7 +19,7 @@ export default async function MapaPage({ searchParams }: Props) {
     .from('fallas_deteccion')
     .select('id, tipo_falla, severidad, latitud, longitud, url_evidencia_imagen, created_at, relevamientos(fecha, caminos(municipio))')
     .order('created_at', { ascending: false })
-    .limit(2000)
+    .limit(LIMITE_FALLAS)
 
   if (error) {
     console.error('[mapa]', error.message)
@@ -47,7 +49,9 @@ export default async function MapaPage({ searchParams }: Props) {
   return (
     <div className="flex flex-col gap-4">
       <h1 className="text-2xl font-bold">Mapa de fallas</h1>
-      <Filtros municipios={municipios} />
+      <Suspense fallback={null}>
+        <Filtros municipios={municipios} />
+      </Suspense>
       <p className="text-sm text-gray-600">
         {puntos.length} falla(s). Rojo: alta · Amarillo: media · Verde: baja.
       </p>
