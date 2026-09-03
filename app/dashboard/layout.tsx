@@ -20,11 +20,14 @@ export default async function DashboardLayout({ children }: { children: React.Re
 
   const { data: perfil, error } = await supabase
     .from('perfiles')
-    .select('nombre, rol, municipio_id')
+    .select('nombre, rol, municipio_id, acepto_terminos_at')
     .eq('id', user.id)
     .maybeSingle()
 
   if (error) console.error('[dashboard]', error.message)
+  // Sin términos aceptados no se entra al dashboard (ante un error de lectura
+  // se deja pasar y la cabecera muestra el aviso, para no encerrar al usuario).
+  if (!error && !perfil?.acepto_terminos_at) redirect('/terminos')
 
   const partido = perfil ? buscarPartido(perfil.municipio_id)?.nombre ?? perfil.municipio_id : ''
 

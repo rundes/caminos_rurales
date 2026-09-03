@@ -30,6 +30,33 @@ Scripts:
 - `node scripts/aplicar-sql.mjs <archivo.sql>`: aplica SQL al proyecto (requiere `SUPABASE_ACCESS_TOKEN`).
 - `node scripts/generar-partidos.mjs`: regenera `lib/partidos.ts` desde la API georef.
 
+## Almacenamiento de evidencia
+
+Las fotos y videos de las observaciones se suben desde el navegador con un `PUT`
+a una URL firmada que devuelve la Server Action `prepararSubida`. El proveedor se
+elige con la variable `ALMACENAMIENTO`:
+
+- **Supabase Storage** (por defecto, `ALMACENAMIENTO=supabase` o sin definir):
+  usa `createSignedUploadUrl` sobre el bucket `evidencia-vial`. En la base se
+  guarda la **ruta** dentro del bucket y se firma una URL de lectura de 1 h cada
+  vez que hay que mostrarla.
+- **Google Cloud Storage** (`ALMACENAMIENTO=gcs`): usa una URL firmada V4 de
+  escritura válida 15 minutos. Requiere `GCS_BUCKET` (por ejemplo `maipu-pba`) y
+  `GCS_SERVICE_ACCOUNT_KEY` con el JSON de la cuenta de servicio **en una sola
+  línea**. En la base se guarda la URL pública
+  `https://storage.googleapis.com/<bucket>/<ruta>`.
+
+Para GCS el bucket debe ser de **lectura pública** (`allUsers` con rol
+`Storage Object Viewer`) y tener CORS que habilite `PUT` desde el dominio de la
+app:
+
+```json
+[{ "origin": ["https://tu-dominio"], "method": ["PUT", "GET"], "responseHeader": ["Content-Type"], "maxAgeSeconds": 3600 }]
+```
+
+Las fotos se comprimen en el teléfono antes de subirlas (`lib/imagenes.ts`:
+1600 px de lado mayor, JPEG calidad 0.8); los videos se suben sin transcodificar.
+
 ## Roles
 
 Los usuarios nuevos tienen rol `productor`. Para crear caminos hace falta `municipio` o `auditor`; se cambia desde Supabase:
