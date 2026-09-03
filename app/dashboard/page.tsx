@@ -1,4 +1,6 @@
 import { KpiCard } from '@/components/KpiCard'
+import { TarjetaCobertura } from '@/components/TarjetaCobertura'
+import { obtenerCoberturaMunicipio } from '@/lib/cobertura-consultas'
 import { formatearFecha } from '@/lib/fechas'
 import { formatearNumero, sumarKm } from '@/lib/kpis'
 import { crearClienteServidor } from '@/lib/supabase/server'
@@ -8,7 +10,14 @@ const CANTIDAD_ULTIMOS = 5
 export default async function DashboardPage() {
   const supabase = await crearClienteServidor()
 
-  const [recorridos, observaciones, ultimos] = await Promise.all([
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  const { data: perfil } = user
+    ? await supabase.from('perfiles').select('municipio_id').eq('id', user.id).maybeSingle()
+    : { data: null }
+
+  const [recorridos, observaciones, ultimos, resumenCobertura] = await Promise.all([
     supabase.from('recorridos').select('km'),
     supabase.from('fallas_deteccion').select('id', { count: 'exact', head: true }),
     supabase
@@ -16,6 +25,7 @@ export default async function DashboardPage() {
       .select('id, inicio, km')
       .order('inicio', { ascending: false })
       .limit(CANTIDAD_ULTIMOS),
+    perfil ? obtenerCoberturaMunicipio(supabase, perfil.municipio_id) : null,
   ])
 
   const error = recorridos.error ?? observaciones.error ?? ultimos.error
@@ -29,6 +39,7 @@ export default async function DashboardPage() {
   return (
     <div className="flex flex-col gap-6">
       <h1 className="text-2xl font-bold">Resumen</h1>
+      {resumenCobertura && <TarjetaCobertura resumen={resumenCobertura} />}
       <div className="grid grid-cols-2 gap-4">
         <KpiCard etiqueta="Km relevados" valor={formatearNumero(km)} />
         <KpiCard etiqueta="Observaciones" valor={observaciones.count ?? 0} />

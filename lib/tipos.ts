@@ -22,6 +22,7 @@ export type PuntoFalla = {
   longitud: number
   fecha: string
   url_evidencia_imagen: string | null
+  url_evidencia_video: string | null
   municipio: string
 }
 

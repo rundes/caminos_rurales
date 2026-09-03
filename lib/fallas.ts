@@ -7,6 +7,7 @@ export type FilaFalla = {
   latitud: number
   longitud: number
   url_evidencia_imagen: string | null
+  url_evidencia_video: string | null
   created_at: string | null
   recorridos: { inicio: string; municipio: string } | null
 }
@@ -22,6 +23,7 @@ export function aPuntos(filas: readonly FilaFalla[]): PuntoFalla[] {
     longitud: Number(f.longitud),
     fecha: f.recorridos?.inicio ?? f.created_at ?? '',
     url_evidencia_imagen: f.url_evidencia_imagen,
+    url_evidencia_video: f.url_evidencia_video,
     municipio: f.recorridos?.municipio ?? 'desconocido',
   }))
 }
