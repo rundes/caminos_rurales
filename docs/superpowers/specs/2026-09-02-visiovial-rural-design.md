@@ -2,7 +2,7 @@
 
 Fecha: 2026-09-02
 Repo: `rundes/caminos_rurales`
-Estado: aprobado por el usuario en conversación; pendiente de revisión escrita.
+Estado: implementado en rama feat/mvp; pendiente verificación manual del usuario.
 
 ## 1. Objetivo
 
