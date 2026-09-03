@@ -20,9 +20,10 @@ export default async function MapaPage({ searchParams }: Props) {
   const {
     data: { user },
   } = await supabase.auth.getUser()
-  const { data: perfil } = user
+  const { data: perfil, error: errorPerfil } = user
     ? await supabase.from('perfiles').select('municipio_id').eq('id', user.id).maybeSingle()
-    : { data: null }
+    : { data: null, error: null }
+  if (errorPerfil) console.error('[mapa]', errorPerfil.message)
   const municipioActual = perfil?.municipio_id ?? null
   const capas = capasDe(municipioActual)
 

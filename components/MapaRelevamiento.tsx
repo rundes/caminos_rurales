@@ -2,7 +2,7 @@
 
 import 'leaflet/dist/leaflet.css'
 import { useEffect } from 'react'
-import { CircleMarker, MapContainer, Popup, TileLayer, useMap } from 'react-leaflet'
+import { CircleMarker, LayersControl, MapContainer, Popup, TileLayer, useMap } from 'react-leaflet'
 import { CapasMunicipio } from '@/components/CapasMunicipio'
 import { TESELAS_IGN, type CapasMunicipio as CapasMunicipioTipo } from '@/lib/capas'
 import { colorSeveridad } from '@/lib/severidad'
@@ -19,6 +19,8 @@ type Props = {
 }
 
 const ZOOM_INICIAL = 10
+const URL_OSM = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'
+const ATRIBUCION_OSM = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
 
 /** Encuadra el mapa en `limites` una sola vez al montar (no en cada render). */
 function EnfoqueLimites({ limites }: { limites: LimitesBounds }) {
@@ -35,13 +37,20 @@ function EnfoqueLimites({ limites }: { limites: LimitesBounds }) {
 export function MapaRelevamiento({ puntos, centro, urlsEvidencia, capas, limites }: Props) {
   return (
     <MapContainer center={centro} zoom={ZOOM_INICIAL} className="h-[60dvh] w-full rounded-2xl" scrollWheelZoom>
-      <TileLayer
-        attribution={TESELAS_IGN.attribution}
-        url={TESELAS_IGN.url}
-        tms={TESELAS_IGN.tms}
-        maxNativeZoom={TESELAS_IGN.maxNativeZoom}
-        maxZoom={TESELAS_IGN.maxZoom}
-      />
+      <LayersControl position="topright">
+        <LayersControl.BaseLayer checked name="IGN">
+          <TileLayer
+            attribution={TESELAS_IGN.attribution}
+            url={TESELAS_IGN.url}
+            tms={TESELAS_IGN.tms}
+            maxNativeZoom={TESELAS_IGN.maxNativeZoom}
+            maxZoom={TESELAS_IGN.maxZoom}
+          />
+        </LayersControl.BaseLayer>
+        <LayersControl.BaseLayer name="OpenStreetMap">
+          <TileLayer attribution={ATRIBUCION_OSM} url={URL_OSM} />
+        </LayersControl.BaseLayer>
+      </LayersControl>
       {limites && <EnfoqueLimites limites={limites} />}
       {capas && <CapasMunicipio capas={capas} />}
       {puntos.map((p) => (

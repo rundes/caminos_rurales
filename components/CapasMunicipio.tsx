@@ -17,32 +17,41 @@ const RELLENO_LOCALIDAD = 0.08
 const RADIO_POI = 4
 const COLOR_POI = '#616161'
 
-/** Descarga un GeoJSON estático desde `public/`. Si falla, loguea y no rompe el mapa. */
+type EstadoGeoJSON = { url: string; datos: FeatureCollection }
+
+/**
+ * Descarga un GeoJSON estático desde `public/`. Si falla, loguea y no rompe
+ * el mapa. Al cambiar `url` los datos de la url anterior dejan de mostrarse
+ * de inmediato (se derivan del estado en vez de resetearse con un setState
+ * síncrono en el efecto) mientras se espera la respuesta nueva.
+ */
 function useGeoJSON(url: string | undefined): FeatureCollection | null {
-  const [datos, setDatos] = useState<FeatureCollection | null>(null)
+  const [estado, setEstado] = useState<EstadoGeoJSON | null>(null)
 
   useEffect(() => {
     if (!url) return
-    let cancelado = false
 
-    fetch(url)
+    const controlador = new AbortController()
+
+    fetch(url, { signal: controlador.signal })
       .then((respuesta) => {
         if (!respuesta.ok) throw new Error(`HTTP ${respuesta.status}`)
         return respuesta.json() as Promise<FeatureCollection>
       })
       .then((json) => {
-        if (!cancelado) setDatos(json)
+        setEstado({ url, datos: json })
       })
       .catch((error) => {
+        if (error instanceof DOMException && error.name === 'AbortError') return
         console.error('[capas]', error)
       })
 
     return () => {
-      cancelado = true
+      controlador.abort()
     }
   }, [url])
 
-  return datos
+  return url && estado?.url === url ? estado.datos : null
 }
 
 function etiquetaCamino(propiedades: Record<string, unknown>): string {
