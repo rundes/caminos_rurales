@@ -78,7 +78,8 @@ Convención: `perfiles.municipio_id` y `caminos.municipio` guardan el slug del p
 - Server Actions devuelven `{ ok: true, data } | { ok: false, error: string }`. Nunca lanzan al cliente.
 - Formularios con `useActionState` muestran estado de carga y mensaje de error en español.
 - Subida de archivos: error por archivo, botón reintentar. Relevamiento queda creado aunque falle un archivo.
-- Endpoint IA: 401 sin sesión, 404 relevamiento ajeno, 409 si ya procesado, 500 con log en servidor.
+- Endpoint IA: 401 sin sesión, 404 relevamiento inexistente, 403 relevamiento ajeno, 409 si ya procesado, 500 con log en servidor.
+- El flag `procesado_ia` actúa como bloqueo: un segundo POST concurrente recibe 409.
 - Validación de entradas con zod en `lib/validaciones.ts`, compartida entre cliente y servidor.
 
 ## 7. Testing

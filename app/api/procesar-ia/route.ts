@@ -51,6 +51,23 @@ export async function POST(request: Request) {
       : []
   const primeraEvidencia = archivos[0] ?? null
 
+  const admin = crearClienteAdmin()
+
+  // Bloqueo atómico: solo la petición que logra pasar procesado_ia de false a true continúa.
+  const { data: reclamado, error: errorReclamo } = await admin
+    .from('relevamientos')
+    .update({ procesado_ia: true })
+    .eq('id', relevamiento.id)
+    .eq('procesado_ia', false)
+    .select('id')
+  if (errorReclamo) {
+    console.error('[procesar-ia]', errorReclamo)
+    return NextResponse.json({ ok: false, error: 'Error interno al procesar' }, { status: 500 })
+  }
+  if (!reclamado?.length) {
+    return NextResponse.json({ ok: false, error: 'Ya fue procesado' }, { status: 409 })
+  }
+
   const fallas = generarFallasSimuladas({ lat: partido.lat, lng: partido.lng }).map((f) => ({
     ...f,
     relevamiento_id: relevamiento.id,
@@ -58,15 +75,8 @@ export async function POST(request: Request) {
   }))
 
   try {
-    const admin = crearClienteAdmin()
     const { error: errorFallas } = await admin.from('fallas_deteccion').insert(fallas)
     if (errorFallas) throw new Error(errorFallas.message)
-
-    const { error: errorRelUpd } = await admin
-      .from('relevamientos')
-      .update({ procesado_ia: true })
-      .eq('id', relevamiento.id)
-    if (errorRelUpd) throw new Error(errorRelUpd.message)
 
     if (relevamiento.camino_id) {
       const { error: errorCamino } = await admin
@@ -80,6 +90,11 @@ export async function POST(request: Request) {
     }
   } catch (e) {
     console.error('[procesar-ia]', e)
+    const { error: errorReset } = await admin
+      .from('relevamientos')
+      .update({ procesado_ia: false })
+      .eq('id', relevamiento.id)
+    if (errorReset) console.error('[procesar-ia] no se pudo revertir procesado_ia', errorReset)
     return NextResponse.json({ ok: false, error: 'Error interno al procesar' }, { status: 500 })
   }
 
