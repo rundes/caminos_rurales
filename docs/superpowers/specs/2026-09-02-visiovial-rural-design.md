@@ -1,5 +1,14 @@
 # Visiovial Rural - Diseño del MVP
 
+> **Superseded parcialmente por el diseño v2 de recorridos.** Ver
+> `docs/superpowers/specs/2026-09-03-recorridos-cobertura-design.md`. El flujo
+> "cargar viaje + simulador IA" descrito acá (relevamientos, `procesar-ia`,
+> `lib/simulador.ts`) fue reemplazado por recorridos GPS en vivo con
+> observaciones, cobertura por tramo y gamificación; la tabla `relevamientos`
+> ya no existe. Lo que sigue vigente: autenticación, perfiles, `caminos`,
+> `fallas_deteccion` (ahora "observaciones") y el patrón general de RLS por
+> municipio.
+
 Fecha: 2026-09-02
 Repo: `rundes/caminos_rurales`
 Estado: implementado en rama feat/mvp; pendiente verificación manual del usuario.
