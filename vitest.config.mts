@@ -10,8 +10,14 @@ export default defineConfig({
     include: ['__tests__/**/*.test.{ts,tsx}'],
     coverage: {
       provider: 'v8',
-      include: ['lib/**', 'components/**', 'app/**/actions.ts'],
-      exclude: ['lib/supabase/database.types.ts', 'lib/partidos.ts'],
+      include: ['lib/**', 'components/**', 'app/**/actions.ts', 'app/**/route.ts'],
+      exclude: [
+        'lib/supabase/database.types.ts',
+        'lib/partidos.ts',
+        'lib/supabase/server.ts',
+        'lib/supabase/client.ts',
+        'lib/supabase/admin.ts',
+      ],
     },
   },
 })

@@ -66,7 +66,8 @@ describe('subirPendientes', () => {
     expect(items[1].estado).toBe('error')
   })
 
-  test('marca error con el mensaje del storage y notifica cada cambio por id', async () => {
+  test('marca error con un mensaje genérico y notifica cada cambio por id', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
     upload.mockResolvedValue({ error: { message: 'sin permiso' } })
     const items: ArchivoEnLista[] = [{ id: '1', archivo: foto('a.jpg'), estado: 'pendiente' }]
     const cambios: Array<[string, Partial<ArchivoEnLista>]> = []
@@ -74,9 +75,11 @@ describe('subirPendientes', () => {
     const finales = await subirPendientes(cliente, 'u1', 'r1', items, (id, parche) => cambios.push([id, parche]))
 
     expect(cambios[0]).toEqual(['1', { estado: 'subiendo', mensaje: undefined }])
-    expect(cambios[1]).toEqual(['1', { estado: 'error', mensaje: 'sin permiso' }])
-    expect(finales[0].mensaje).toBe('sin permiso')
+    expect(cambios[1]).toEqual(['1', { estado: 'error', mensaje: 'No se pudo subir. Reintentá.' }])
+    expect(finales[0].mensaje).toBe('No se pudo subir. Reintentá.')
     expect(rutasSubidas(finales)).toEqual([])
+    expect(spy).toHaveBeenCalledWith('[subida]', 'sin permiso')
+    spy.mockRestore()
   })
 })
 

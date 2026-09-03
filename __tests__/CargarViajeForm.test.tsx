@@ -74,6 +74,7 @@ describe('CargarViajeForm', () => {
   })
 
   test('marca el archivo que falló y reintenta sin recrear el relevamiento', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
     upload
       .mockResolvedValueOnce({ error: null })
       .mockResolvedValueOnce({ error: { message: 'boom' } })
@@ -84,9 +85,11 @@ describe('CargarViajeForm', () => {
     await userEvent.click(screen.getByRole('button', { name: /guardar relevamiento/i }))
 
     const reintentar = await screen.findByRole('button', { name: /reintentar/i })
-    expect(screen.getByText('boom')).toBeInTheDocument()
+    expect(screen.getByText('No se pudo subir. Reintentá.')).toBeInTheDocument()
+    expect(spy).toHaveBeenCalledWith('[subida]', 'boom')
     expect(vi.mocked(registrarArchivos).mock.calls[0][2]).toHaveLength(1)
     expect(fetchMock).not.toHaveBeenCalled()
+    spy.mockRestore()
 
     upload.mockClear()
     await userEvent.click(reintentar)

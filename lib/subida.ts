@@ -75,8 +75,9 @@ export async function subirPendientes(
     alActualizar(item.id, { estado: 'subiendo', mensaje: undefined })
     const ruta = rutaEvidencia(uid, relevamientoId, item.archivo.name)
     const { error } = await bucket.upload(ruta, item.archivo)
+    if (error) console.error('[subida]', error.message)
     const parche: Partial<ArchivoEnLista> = error
-      ? { estado: 'error', mensaje: error.message }
+      ? { estado: 'error', mensaje: 'No se pudo subir. Reintentá.' }
       : { estado: 'ok', ruta, mensaje: undefined }
 
     alActualizar(item.id, parche)

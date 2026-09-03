@@ -232,7 +232,7 @@ export function CargarViajeForm({ caminos, uid }: { caminos: Camino[]; uid: stri
       )}
 
       {puedeReintentar ? (
-        <Boton type="button" onClick={() => subirYProcesar(relevamientoId, km)}>
+        <Boton type="button" cargando={ocupado} onClick={() => subirYProcesar(relevamientoId, km)}>
           Reintentar
         </Boton>
       ) : (

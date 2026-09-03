@@ -24,9 +24,9 @@ export default async function DashboardLayout({ children }: { children: React.Re
     .eq('id', user.id)
     .maybeSingle()
 
-  const partido = perfil ? buscarPartido(perfil.municipio_id)?.nombre ?? perfil.municipio_id : ''
-
   if (error) console.error('[dashboard]', error.message)
+
+  const partido = perfil ? buscarPartido(perfil.municipio_id)?.nombre ?? perfil.municipio_id : ''
 
   return (
     // pb-24 deja espacio libre debajo del contenido para que la nav inferior fija no lo tape

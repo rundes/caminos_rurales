@@ -20,7 +20,8 @@ export default async function DashboardPage() {
 
   const error = relevamientos.error ?? fallas.error ?? ultimos.error
   if (error) {
-    return <p className="rounded-xl bg-red-50 p-4 text-red-800">No se pudieron cargar los datos: {error.message}</p>
+    console.error('[dashboard]', error.message)
+    return <p className="rounded-xl bg-red-50 p-4 text-red-800">No se pudieron cargar los datos.</p>
   }
 
   const km = sumarKm(relevamientos.data ?? [])
