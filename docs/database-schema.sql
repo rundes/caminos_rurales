@@ -1,7 +1,7 @@
 -- Visiovial Rural - Esquema de base de datos (Supabase / PostgreSQL 17)
 -- Estado final: refleja 0001_schema.sql + 0002_storage_por_municipio.sql +
--- 0003a_tipos_falla.sql + 0003_recorridos.sql + 0004_recorridos_procesado.sql.
--- Una instalación nueva puede
+-- 0003a_tipos_falla.sql + 0003_recorridos.sql + 0004_recorridos_procesado.sql +
+-- 0005_fallas_update.sql. Una instalación nueva puede
 -- correr solo este archivo. La tabla `relevamientos` ya no existe: el flujo
 -- es recorrido GPS -> cobertura de tramos -> puntos e insignias.
 
@@ -296,6 +296,11 @@ create policy "fallas_insert_propio" on public.fallas_deteccion
   with check (
     recorrido_id in (select id from public.recorridos where usuario_id = auth.uid())
   );
+
+create policy "fallas_update_propio" on public.fallas_deteccion
+  for update to authenticated
+  using (recorrido_id in (select id from public.recorridos where usuario_id = auth.uid()))
+  with check (recorrido_id in (select id from public.recorridos where usuario_id = auth.uid()));
 
 -- cobertura, puntos y logros: solo lectura; los escribe el servidor con la clave secreta.
 create policy "cobertura_select" on public.cobertura_tramos

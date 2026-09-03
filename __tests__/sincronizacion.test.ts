@@ -181,12 +181,16 @@ describe('sincronizarRecorrido', () => {
       id: string
       puntosGps: number
       track: [number, number][]
+      puntos: { lat: number; lng: number; t: number; precision: number }[]
       observaciones: { evidencia?: { ruta: string; tipo: string } }[]
     }
     expect(payload.id).toBe(ID)
     expect(payload.puntosGps).toBe(3)
     expect(payload.track.length).toBeGreaterThanOrEqual(2)
     expect(payload.track[0]).toEqual([-36.85, -57.88])
+    expect(payload.track.length).toBe(payload.puntos.length)
+    expect(payload.puntos[0]).toEqual({ lat: -36.85, lng: -57.88, t: AHORA, precision: 8 })
+    expect(payload.puntos.every((p) => typeof p.t === 'number' && typeof p.precision === 'number')).toBe(true)
     expect(payload.observaciones[0].evidencia).toEqual({ ruta: DESTINO.ruta, tipo: 'imagen' })
   })
 

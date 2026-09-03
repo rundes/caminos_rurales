@@ -27,7 +27,7 @@ Scripts:
 - `npm test`: tests unitarios (Vitest).
 - `npm run test:coverage`: cobertura.
 - `npm run tipos`: regenera `lib/supabase/database.types.ts` ejecutando `npx --yes supabase gen types` (no requiere instalación local; requiere `SUPABASE_ACCESS_TOKEN`).
-- `node scripts/aplicar-sql.mjs <archivo.sql>`: aplica SQL al proyecto (requiere `SUPABASE_ACCESS_TOKEN`).
+- `node scripts/aplicar-sql.mjs <archivo.sql>`: aplica SQL al proyecto (requiere `SUPABASE_ACCESS_TOKEN`). Las migraciones en `supabase/migrations/` (0001 a 0005) se aplican en orden con este script; `0003a_tipos_falla.sql` debe aplicarse antes que `0003_recorridos.sql`, de la que depende.
 - `node scripts/generar-partidos.mjs`: regenera `lib/partidos.ts` desde la API georef.
 
 ## Almacenamiento de evidencia

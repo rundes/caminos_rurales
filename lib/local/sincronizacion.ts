@@ -3,13 +3,15 @@ import type { DestinoSubida } from '@/lib/almacenamiento/tipos'
 import { valorParaGuardar } from '@/lib/almacenamiento/tipos'
 import { simplificar, type PuntoGps } from '@/lib/track'
 import type { ResultadoAccion } from '@/lib/tipos'
-import type { Observacion, RecorridoPayload } from '@/lib/validaciones'
+import type { Observacion, PuntoGpsPayload, RecorridoPayload } from '@/lib/validaciones'
 import type { BaseLocal, ObservacionLocal, RecorridoLocal, TipoEvidencia } from './tipos'
 
 /** Espera entre reintentos, en milisegundos. El último valor se repite. */
 export const BACKOFF_MS = [5_000, 30_000, 120_000] as const
 export const MAX_INTENTOS = 20
 export const TOLERANCIA_SIMPLIFICADO_M = 10
+/** Tope de puntos en el payload, igual al máximo aceptado por `esquemaRecorrido`. */
+export const MAX_PUNTOS_PAYLOAD = 20000
 
 const ERROR_SIN_RECORRIDO = 'No se encontró el recorrido guardado en el dispositivo.'
 const ERROR_SIN_TRACK = 'El recorrido no tiene puntos suficientes para subirse.'
@@ -78,6 +80,23 @@ function aObservacionPayload(observacion: ObservacionLocal): Observacion {
   }
 }
 
+/**
+ * Reduce `puntos` a lo sumo `tope` elementos tomando uno cada `stride`
+ * posiciones, preservando siempre el primer y el último punto.
+ */
+function downsamplear<T>(puntos: readonly T[], tope: number): T[] {
+  if (puntos.length <= tope) return puntos.slice()
+
+  const stride = Math.ceil(puntos.length / tope)
+  const salida: T[] = []
+  for (let i = 0; i < puntos.length; i += stride) {
+    salida.push(puntos[i])
+  }
+  const ultimo = puntos[puntos.length - 1]
+  if (salida[salida.length - 1] !== ultimo) salida.push(ultimo)
+  return salida
+}
+
 async function armarPayload(
   recorrido: RecorridoLocal,
   observaciones: readonly ObservacionLocal[],
@@ -86,9 +105,17 @@ async function armarPayload(
   const puntos = await deps.db.listarPuntos(recorrido.id)
   if (puntos.length < 2) throw new Error(ERROR_SIN_TRACK)
 
-  const track = simplificar(puntos as PuntoGps[], TOLERANCIA_SIMPLIFICADO_M).map(
-    (p): [number, number] => [p.lat, p.lng],
+  const simplificado = downsamplear(
+    simplificar(puntos as PuntoGps[], TOLERANCIA_SIMPLIFICADO_M),
+    MAX_PUNTOS_PAYLOAD,
   )
+  const track = simplificado.map((p): [number, number] => [p.lat, p.lng])
+  const puntosPayload: PuntoGpsPayload[] = simplificado.map((p) => ({
+    lat: p.lat,
+    lng: p.lng,
+    t: p.t,
+    precision: p.precision,
+  }))
 
   return {
     id: recorrido.id,
@@ -96,6 +123,7 @@ async function armarPayload(
     fin: recorrido.fin ?? new Date(deps.ahora()).toISOString(),
     puntosGps: puntos.length,
     track,
+    puntos: puntosPayload,
     observaciones: observaciones.map(aObservacionPayload),
   }
 }
