@@ -55,15 +55,19 @@ export async function registrarArchivos(
   } = await supabase.auth.getUser()
   if (!user) return { ok: false, error: SESION_VENCIDA }
 
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from('relevamientos')
     .update({ metadata: { km, archivos: rutas } })
     .eq('id', parseo.data)
     .eq('usuario_id', user.id)
+    .select('id')
 
   if (error) {
     console.error('[cargar-viaje]', error.message)
     return { ok: false, error: 'No se pudieron registrar los archivos. Intentá de nuevo.' }
+  }
+  if (!data || data.length === 0) {
+    return { ok: false, error: 'Relevamiento no encontrado' }
   }
   revalidatePath('/dashboard')
   return { ok: true, data: undefined }

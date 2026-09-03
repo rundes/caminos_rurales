@@ -5,15 +5,19 @@ const insert = vi.fn()
 const insertSingle = vi.fn()
 const update = vi.fn()
 const eq = vi.fn()
+const select = vi.fn()
 const updateResultado = vi.fn()
 
-/** `.update().eq('id').eq('usuario_id')` — cada `eq` devuelve el mismo encadenable thenable. */
+/** `.update().eq('id').eq('usuario_id').select('id')` — cada `eq` devuelve el mismo encadenable. */
 const encadenable = {
   eq: (...args: unknown[]) => {
     eq(...args)
     return encadenable
   },
-  then: (resolver: (valor: unknown) => unknown) => Promise.resolve(updateResultado()).then(resolver),
+  select: (...args: unknown[]) => {
+    select(...args)
+    return Promise.resolve(updateResultado())
+  },
 }
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -42,7 +46,7 @@ const RELEVAMIENTO = '7c1f2e40-9b3a-4c5d-8e6f-0a1b2c3d4e5f'
 beforeEach(() => {
   vi.clearAllMocks()
   getUser.mockResolvedValue({ data: { user: { id: 'u1' } } })
-  updateResultado.mockReturnValue({ error: null })
+  updateResultado.mockReturnValue({ data: [{ id: RELEVAMIENTO }], error: null })
 })
 
 describe('crearRelevamiento', () => {
@@ -95,8 +99,18 @@ describe('registrarArchivos', () => {
     expect(update).toHaveBeenCalledWith({ metadata: { km: 4.5, archivos: ['u1/r1/a.jpg'] } })
     expect(eq).toHaveBeenCalledWith('id', RELEVAMIENTO)
     expect(eq).toHaveBeenCalledWith('usuario_id', 'u1')
+    expect(select).toHaveBeenCalledWith('id')
     expect(revalidatePath).toHaveBeenCalledWith('/dashboard')
     expect(r).toEqual({ ok: true, data: undefined })
+  })
+
+  test('devuelve error cuando el update no afecta ninguna fila', async () => {
+    updateResultado.mockReturnValue({ data: [], error: null })
+
+    const r = await registrarArchivos(RELEVAMIENTO, 4.5, ['u1/r1/a.jpg'])
+
+    expect(r).toEqual({ ok: false, error: 'Relevamiento no encontrado' })
+    expect(revalidatePath).not.toHaveBeenCalled()
   })
 
   test('rechaza un id que no es uuid sin tocar la base', async () => {

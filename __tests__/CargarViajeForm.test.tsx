@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 
@@ -96,6 +96,46 @@ describe('CargarViajeForm', () => {
     expect(upload.mock.calls[0][1]).toHaveProperty('name', 'b.jpg')
     expect(crearRelevamiento).toHaveBeenCalledTimes(1)
     await waitFor(() => expect(vi.mocked(registrarArchivos).mock.calls[1][2]).toHaveLength(2))
+  })
+
+  test('un 409 al reintentar se trata como éxito y no deja botón de reintentar', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      json: async () => ({ ok: false, error: 'Error interno al procesar' }),
+    })
+
+    render(<CargarViajeForm caminos={CAMINOS} uid="u1" />)
+    await completarFormulario([foto('a.jpg')])
+    await userEvent.click(screen.getByRole('button', { name: /guardar relevamiento/i }))
+
+    const reintentar = await screen.findByRole('button', { name: /reintentar/i })
+    expect(screen.getByText('Error interno al procesar')).toBeInTheDocument()
+
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 409,
+      json: async () => ({ ok: false, error: 'Ya fue procesado' }),
+    })
+    await userEvent.click(reintentar)
+
+    const estado = await screen.findByText(/relevamiento guardado/i)
+    expect(estado).toHaveTextContent('Ya había sido procesado')
+    expect(screen.queryByRole('button', { name: /reintentar/i })).not.toBeInTheDocument()
+  })
+
+  test('ignora un segundo submit disparado mientras el primero está en curso', async () => {
+    vi.mocked(crearRelevamiento).mockImplementation(() => new Promise(() => {}))
+
+    render(<CargarViajeForm caminos={CAMINOS} uid="u1" />)
+    await completarFormulario([foto('a.jpg')])
+    const boton = screen.getByRole('button', { name: /guardar relevamiento/i })
+    const form = boton.closest('form') as HTMLFormElement
+
+    fireEvent.submit(form)
+    fireEvent.submit(form)
+
+    await waitFor(() => expect(crearRelevamiento).toHaveBeenCalledTimes(1))
   })
 
   test('muestra el motivo de un archivo no permitido y no lo sube', async () => {

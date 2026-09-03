@@ -94,13 +94,25 @@ export function aplicarParche(
   return items.map((item) => (item.id === id ? { ...item, ...parche } : item))
 }
 
-export async function procesarRelevamiento(relevamientoId: string): Promise<ResultadoAccion<{ fallas: number }>> {
+/**
+ * Un 409 de `/api/procesar-ia` significa "ya fue procesado" (por este mismo pedido o uno
+ * concurrente): no es un error para el usuario, es un resultado exitoso sin fallas nuevas.
+ */
+export type ResultadoProcesamiento = { fallas: number } | { fallas: null; yaProcesado: true }
+
+export async function procesarRelevamiento(
+  relevamientoId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<ResultadoAccion<ResultadoProcesamiento>> {
   try {
-    const respuesta = await fetch(RUTA_PROCESAR_IA, {
+    const respuesta = await fetcher(RUTA_PROCESAR_IA, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ relevamiento_id: relevamientoId }),
     })
+    if (respuesta.status === 409) {
+      return { ok: true, data: { fallas: null, yaProcesado: true } }
+    }
     const cuerpo = (await respuesta.json()) as { ok?: boolean; fallas?: number; error?: string }
     if (!respuesta.ok || !cuerpo.ok) {
       return { ok: false, error: cuerpo.error ?? `Error ${respuesta.status} al procesar` }

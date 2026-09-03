@@ -1,7 +1,7 @@
 'use client'
 
 import { useRouter } from 'next/navigation'
-import { useState, type ChangeEvent, type DragEvent, type FormEvent } from 'react'
+import { useRef, useState, type ChangeEvent, type DragEvent, type FormEvent } from 'react'
 import { Boton } from '@/components/Boton'
 import { TIPOS_PERMITIDOS } from '@/lib/archivos'
 import { crearClienteNavegador } from '@/lib/supabase/client'
@@ -18,7 +18,7 @@ import { ORIGENES_DATOS } from '@/lib/validaciones'
 import { crearRelevamiento, registrarArchivos } from './actions'
 
 type Camino = { id: string; nombre_codigo: string }
-type Fase = 'formulario' | 'subiendo' | 'procesando' | 'listo' | 'error'
+type Fase = 'formulario' | 'creando' | 'subiendo' | 'procesando' | 'listo' | 'error'
 
 const ETIQUETA_ORIGEN: Record<(typeof ORIGENES_DATOS)[number], string> = {
   formulario: 'Formulario manual',
@@ -37,8 +37,9 @@ export function CargarViajeForm({ caminos, uid }: { caminos: Camino[]; uid: stri
   const [relevamientoId, setRelevamientoId] = useState<string | null>(null)
   const [km, setKm] = useState<number | null>(null)
   const [llaveFormulario, setLlaveFormulario] = useState(0)
+  const enviandoRef = useRef(false)
 
-  const ocupado = fase === 'subiendo' || fase === 'procesando'
+  const ocupado = fase === 'creando' || fase === 'subiendo' || fase === 'procesando'
 
   function agregar(lista: FileList | null) {
     if (!lista || ocupado) return
@@ -81,27 +82,40 @@ export function CargarViajeForm({ caminos, uid }: { caminos: Camino[]; uid: stri
 
     setFase('listo')
     setResumen(
-      `Relevamiento guardado. ${rutas.length} archivo(s) subidos, ${procesado.data.fallas} fallas detectadas.`,
+      procesado.data.fallas === null
+        ? `Relevamiento guardado. ${rutas.length} archivo(s) subidos. Ya había sido procesado.`
+        : `Relevamiento guardado. ${rutas.length} archivo(s) subidos, ${procesado.data.fallas} fallas detectadas.`,
     )
     router.refresh()
   }
 
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
+    if (enviandoRef.current) return
+    enviandoRef.current = true
     setError(null)
-    if (relevamientoId !== null && km !== null) return subirYProcesar(relevamientoId, km)
 
-    const fd = new FormData(e.currentTarget)
-    const creado = await crearRelevamiento({
-      camino_id: String(fd.get('camino_id') ?? ''),
-      origen_datos: String(fd.get('origen_datos') ?? ''),
-      km: String(fd.get('km') ?? '0'),
-    })
-    if (!creado.ok) return fallar(creado.error)
+    try {
+      if (relevamientoId !== null && km !== null) {
+        await subirYProcesar(relevamientoId, km)
+        return
+      }
 
-    setRelevamientoId(creado.data.id)
-    setKm(creado.data.km)
-    return subirYProcesar(creado.data.id, creado.data.km)
+      setFase('creando')
+      const fd = new FormData(e.currentTarget)
+      const creado = await crearRelevamiento({
+        camino_id: String(fd.get('camino_id') ?? ''),
+        origen_datos: String(fd.get('origen_datos') ?? ''),
+        km: String(fd.get('km') ?? '0'),
+      })
+      if (!creado.ok) return fallar(creado.error)
+
+      setRelevamientoId(creado.data.id)
+      setKm(creado.data.km)
+      await subirYProcesar(creado.data.id, creado.data.km)
+    } finally {
+      enviandoRef.current = false
+    }
   }
 
   function reiniciar() {

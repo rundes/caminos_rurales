@@ -103,9 +103,20 @@ describe('procesarRelevamiento', () => {
   test('devuelve el error del endpoint', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue({ ok: false, status: 409, json: async () => ({ ok: false, error: 'Ya procesado' }) }),
+      vi.fn().mockResolvedValue({ ok: false, status: 500, json: async () => ({ ok: false, error: 'Error interno' }) }),
     )
-    await expect(procesarRelevamiento('r1')).resolves.toEqual({ ok: false, error: 'Ya procesado' })
+    await expect(procesarRelevamiento('r1')).resolves.toEqual({ ok: false, error: 'Error interno' })
+  })
+
+  test('un 409 se trata como ya procesado, no como error', async () => {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValue({ ok: false, status: 409, json: async () => ({ ok: false, error: 'Ya fue procesado' }) })
+
+    await expect(procesarRelevamiento('r1', fetcher)).resolves.toEqual({
+      ok: true,
+      data: { fallas: null, yaProcesado: true },
+    })
   })
 
   test('devuelve un mensaje genérico si la red falla', async () => {
