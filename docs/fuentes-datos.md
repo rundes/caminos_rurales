@@ -43,8 +43,8 @@ Campos relevantes de cada feature:
 | Campo | Significado | Decodificación usada |
 |---|---|---|
 | `rtn` | Nombre/número de ruta | Se usa tal cual para el rótulo del tramo. |
-| `typ` | Tipo de vía | Códigos DVP (pavimentada, mejorada, tierra, etc.); se mapean a una etiqueta legible en la capa, sin alterar la geometría. |
-| `rst` | Estado/jurisdicción | Se usa para distinguir red provincial de red nacional/municipal al filtrar. |
+| `typ` | Tipo de vía | 40 = ruta provincial, 47 = autovía (RP 2). Otros códigos se muestran tal cual. |
+| `rst` | Superficie | 1 = pavimentado, 2 = consolidado, 3 = tierra. Define el color del tramo en la capa. |
 
 Esta capa es de referencia visual (fondo de mapa); el denominador de cobertura
 (`public.tramos`) se siembra desde la capa de OSM, no desde esta.
