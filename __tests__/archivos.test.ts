@@ -6,6 +6,10 @@ describe('validarArchivo', () => {
     const f = new File([new Uint8Array(5 * 1024 * 1024)], 'foto.jpg', { type: 'image/jpeg' })
     expect(validarArchivo(f)).toBeNull()
   })
+  test('acepta video webm', () => {
+    const f = new File(['x'], 'clip.webm', { type: 'video/webm' })
+    expect(validarArchivo(f)).toBeNull()
+  })
   test('rechaza tipo no permitido', () => {
     const f = new File(['x'], 'doc.pdf', { type: 'application/pdf' })
     expect(validarArchivo(f)).toMatch(/tipo/i)
@@ -18,7 +22,7 @@ describe('validarArchivo', () => {
 })
 
 describe('rutaEvidencia', () => {
-  test('arma uid/relevamiento/timestamp-nombre sin caracteres raros', () => {
+  test('arma uid/recorrido/timestamp-nombre sin caracteres raros', () => {
     const r = rutaEvidencia('u1', 'r1', 'mi foto ñ.JPG', 1700000000000)
     expect(r).toBe('u1/r1/1700000000000-mi-foto-n.jpg')
   })

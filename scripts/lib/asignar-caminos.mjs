@@ -43,6 +43,9 @@ export const ETIQUETAS_POLIGONOS_RURALES = {
 export const CENTROIDE_MAIPU_CABECERA = [-57.58612, -36.88693]
 export const ETIQUETA_CABECERA = 'Maipú'
 
+// Prefijo del código que agrupa los tramos sin nombre por localidad rural.
+export const PREFIJO_VECINALES = 'Caminos vecinales - '
+
 function distanciaKmEntre(a, b) {
   return kmDeLineas([[a, b]])
 }
@@ -172,7 +175,21 @@ export function asignarNombreCodigo(feature, contexto) {
   if (normalizado) return normalizado
 
   const localidad = localidadMasCercana(punto, contexto.localidadesRurales)
-  return `Caminos vecinales - ${localidad.label}`
+  return `${PREFIJO_VECINALES}${localidad.label}`
+}
+
+/**
+ * Localidad de un tramo ya clasificado: el sufijo de "Caminos vecinales - X"
+ * o, para códigos numéricos y rutas provinciales, la localidad rural más
+ * cercana a su punto medio. Consumida por scripts/seed-tramos.mjs.
+ */
+export function localidadDeTramo(feature, contexto) {
+  const codigo = feature.properties?.nombre_codigo
+  if (typeof codigo === 'string' && codigo.startsWith(PREFIJO_VECINALES)) {
+    return codigo.slice(PREFIJO_VECINALES.length)
+  }
+  const punto = puntoMedio(feature.geometry?.coordinates ?? [])
+  return localidadMasCercana(punto, contexto.localidadesRurales).label
 }
 
 /**

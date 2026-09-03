@@ -3,7 +3,6 @@ import {
   esquemaCamino,
   esquemaLogin,
   esquemaRegistro,
-  esquemaRelevamiento,
   primerError,
 } from '@/lib/validaciones'
 
@@ -42,35 +41,6 @@ describe('esquemaCamino', () => {
   test('exige nombre_codigo de al menos 2 caracteres', () => {
     expect(esquemaCamino.safeParse({ nombre_codigo: 'A' }).success).toBe(false)
     expect(esquemaCamino.safeParse({ nombre_codigo: 'CR-01' }).success).toBe(true)
-  })
-})
-
-describe('esquemaRelevamiento', () => {
-  test('convierte km desde string y valida origen', () => {
-    const r = esquemaRelevamiento.safeParse({
-      camino_id: '0d5a3c9a-2f3e-4d1b-9c8a-1b2c3d4e5f60',
-      origen_datos: 'formulario',
-      km: '12.5',
-    })
-    expect(r.success).toBe(true)
-    if (r.success) expect(r.data.km).toBe(12.5)
-  })
-  test('rechaza km vacío en vez de coercionar a 0', () => {
-    const r = esquemaRelevamiento.safeParse({
-      camino_id: '0d5a3c9a-2f3e-4d1b-9c8a-1b2c3d4e5f60',
-      origen_datos: 'formulario',
-      km: '',
-    })
-    expect(r.success).toBe(false)
-    if (!r.success) expect(primerError(r.error)).toMatch(/km/i)
-  })
-  test('rechaza km negativos', () => {
-    const r = esquemaRelevamiento.safeParse({
-      camino_id: '0d5a3c9a-2f3e-4d1b-9c8a-1b2c3d4e5f60',
-      origen_datos: 'formulario',
-      km: '-1',
-    })
-    expect(r.success).toBe(false)
   })
 })
 

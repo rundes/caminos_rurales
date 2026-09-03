@@ -7,8 +7,8 @@ import { signOut } from '@/app/login/actions'
 const ENLACES = [
   { href: '/dashboard', etiqueta: 'Inicio' },
   { href: '/dashboard/caminos', etiqueta: 'Caminos' },
-  { href: '/dashboard/cargar-viaje', etiqueta: 'Cargar viaje' },
   { href: '/dashboard/mapa', etiqueta: 'Mapa' },
+  { href: '/dashboard/ranking', etiqueta: 'Ranking' },
 ]
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {

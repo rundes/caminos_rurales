@@ -10,7 +10,7 @@ const filas = [
     longitud: -60.1,
     url_evidencia_imagen: null,
     created_at: '2026-01-01T00:00:00Z',
-    relevamientos: { fecha: '2026-01-02T00:00:00Z', caminos: { municipio: 'carlos-tejedor' } },
+    recorridos: { inicio: '2026-01-02T00:00:00Z', municipio: 'carlos-tejedor' },
   },
   {
     id: 'f2',
@@ -20,7 +20,7 @@ const filas = [
     longitud: -60.2,
     url_evidencia_imagen: 'u/r/a.jpg',
     created_at: '2026-01-01T00:00:00Z',
-    relevamientos: null,
+    recorridos: null,
   },
 ]
 

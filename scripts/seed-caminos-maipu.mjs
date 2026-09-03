@@ -10,6 +10,7 @@ import { readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { construirContexto, procesarColeccion } from './lib/asignar-caminos.mjs'
+import { aplicarSql } from './lib/management-api.mjs'
 
 // path.join(process.cwd(), ...) en vez de `new URL('../public/...',
 // import.meta.url)`: ese patrón lo intercepta la resolución de assets de
@@ -17,7 +18,6 @@ import { construirContexto, procesarColeccion } from './lib/asignar-caminos.mjs'
 // file:// (rompe fileURLToPath al testear este módulo).
 const RUTA_CAMINOS = path.join(process.cwd(), 'public/capas/maipu/caminos.geojson')
 const RUTA_LOCALIDADES = path.join(process.cwd(), 'public/capas/maipu/localidades.geojson')
-const PROJECT_REF = 'gtuulbdxgtcqybbtocpz'
 const MUNICIPIO = 'maipu'
 
 function escaparSql(texto) {
@@ -37,17 +37,6 @@ where not exists (
   where c.nombre_codigo = v.nombre_codigo and c.municipio = '${municipio}'
 );
 `
-}
-
-async function aplicarSql(sql, token) {
-  const respuesta = await fetch(`https://api.supabase.com/v1/projects/${PROJECT_REF}/database/query`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query: sql }),
-  })
-  const cuerpo = await respuesta.text()
-  if (!respuesta.ok) throw new Error(`Error ${respuesta.status}: ${cuerpo}`)
-  return cuerpo
 }
 
 function imprimirResumen(resumen) {

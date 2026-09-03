@@ -29,7 +29,7 @@ export default async function MapaPage({ searchParams }: Props) {
 
   const { data, error } = await supabase
     .from('fallas_deteccion')
-    .select('id, tipo_falla, severidad, latitud, longitud, url_evidencia_imagen, created_at, relevamientos(fecha, caminos(municipio))')
+    .select('id, tipo_falla, severidad, latitud, longitud, url_evidencia_imagen, created_at, recorridos(inicio, municipio)')
     .order('created_at', { ascending: false })
     .limit(LIMITE_FALLAS)
 
@@ -65,12 +65,12 @@ export default async function MapaPage({ searchParams }: Props) {
 
   return (
     <div className="flex flex-col gap-4">
-      <h1 className="text-2xl font-bold">Mapa de fallas</h1>
+      <h1 className="text-2xl font-bold">Mapa de observaciones</h1>
       <Suspense fallback={null}>
         <Filtros municipios={municipios} />
       </Suspense>
       <p className="text-sm text-gray-600">
-        {puntos.length} falla(s). Rojo: alta · Amarillo: media · Verde: baja.
+        {puntos.length} observación(es). Rojo: alta · Amarillo: media · Verde: baja.
       </p>
       <MapaCliente
         puntos={puntos}

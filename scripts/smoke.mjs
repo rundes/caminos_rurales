@@ -1,3 +1,5 @@
+// DESACTUALIZADO: refleja el flujo v1 (relevamientos + procesar-ia), que ya
+// no existe. No lo ejecutes: se reescribe para el flujo de recorridos en Task 6.
 // Smoke test de integración contra Supabase real + dev server local.
 // Uso: SUPABASE_ACCESS_TOKEN=sbp_... node scripts/smoke.mjs
 // Requiere .env.local con las claves del proyecto y `npm run dev` corriendo en :3000.

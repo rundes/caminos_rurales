@@ -2,26 +2,16 @@ import { describe, expect, test } from 'vitest'
 import { formatearNumero, sumarKm } from '@/lib/kpis'
 
 describe('sumarKm', () => {
-  test('suma metadata.km ignorando valores inválidos', () => {
-    const filas = [
-      { metadata: { km: 10 } },
-      { metadata: { km: '5.5' } },
-      { metadata: {} },
-      { metadata: null },
-      { metadata: { km: 'x' } },
-    ]
-    expect(sumarKm(filas)).toBe(15.5)
+  test('suma los km de los recorridos, incluidos los numeric que llegan como string', () => {
+    expect(sumarKm([{ km: 10 }, { km: '5.5' }, { km: 0 }])).toBe(15.5)
   })
 
-  test('ignora metadata que no es un objeto con km válido', () => {
-    const filas = [
-      { metadata: [] },
-      { metadata: 'texto' },
-      { metadata: { km: [5] } },
-      { metadata: { km: true } },
-      { metadata: { km: -10 } },
-    ]
-    expect(sumarKm(filas)).toBe(0)
+  test('ignora km nulos, no numéricos o negativos', () => {
+    expect(sumarKm([{ km: null }, { km: 'x' }, { km: -10 }])).toBe(0)
+  })
+
+  test('redondea el total a un decimal', () => {
+    expect(sumarKm([{ km: 0.05 }, { km: 0.06 }])).toBe(0.1)
   })
 })
 
