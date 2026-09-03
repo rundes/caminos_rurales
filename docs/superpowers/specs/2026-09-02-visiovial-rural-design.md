@@ -56,7 +56,7 @@ Agregados que el PDF omite y sin los cuales la app no funciona:
    - Perfil: lee el propio y los de su municipio, edita solo el propio.
    - Funciones `municipio_actual()` y `rol_actual()` con `security definer` evitan recursión de RLS.
 2. **Trigger `handle_new_user`** crea la fila en `perfiles` al registrarse, tomando `nombre` y `municipio_id` del metadata de signup.
-3. **Bucket privado `evidencia-vial`** (100 MB por archivo, imágenes y video). Cada usuario sube a `{uid}/{relevamiento_id}/`. Lectura para autenticados.
+3. **Bucket privado `evidencia-vial`** (100 MB por archivo, imágenes y video). Cada usuario sube a `{uid}/{relevamiento_id}/`. Lectura solo para usuarios del mismo municipio que quien subió.
 4. **Índices** en FKs, `caminos.municipio` y `fallas.tipo_falla`.
 
 Convención: `perfiles.municipio_id` y `caminos.municipio` guardan el slug del partido (ej. `carlos-tejedor`) definido en `lib/partidos.ts`.
