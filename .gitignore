@@ -31,3 +31,5 @@ supabase/.temp/
 # Next dev los regenera automáticamente
 AGENTS.md
 CLAUDE.md
+.vercel/
+
