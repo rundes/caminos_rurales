@@ -178,7 +178,7 @@ values (
   array['image/jpeg', 'image/png', 'image/webp', 'video/mp4', 'video/quicktime']
 );
 
--- Cada usuario sube a su carpeta {auth.uid()}/...; lectura limitada a su municipio.
+-- Cada usuario sube a su carpeta {auth.uid()}/...; lectura para autenticados.
 create policy "evidencia_insert_propio" on storage.objects
   for insert to authenticated
   with check (
@@ -186,15 +186,9 @@ create policy "evidencia_insert_propio" on storage.objects
     and (storage.foldername(name))[1] = auth.uid()::text
   );
 
--- Lectura de evidencia limitada a usuarios del mismo municipio que quien subió el archivo.
-create policy "evidencia_select_municipio" on storage.objects
+create policy "evidencia_select" on storage.objects
   for select to authenticated
-  using (
-    bucket_id = 'evidencia-vial'
-    and (storage.foldername(name))[1] in (
-      select id::text from public.perfiles where municipio_id = public.municipio_actual()
-    )
-  );
+  using (bucket_id = 'evidencia-vial');
 
 create policy "evidencia_delete_propio" on storage.objects
   for delete to authenticated

@@ -2,7 +2,7 @@
 
 Fecha: 2026-09-02
 Repo: `rundes/caminos_rurales`
-Estado: aprobado por el usuario en conversación; pendiente de revisión escrita.
+Estado: implementado en rama feat/mvp; pendiente verificación manual del usuario.
 
 ## 1. Objetivo
 
@@ -56,7 +56,7 @@ Agregados que el PDF omite y sin los cuales la app no funciona:
    - Perfil: lee el propio y los de su municipio, edita solo el propio.
    - Funciones `municipio_actual()` y `rol_actual()` con `security definer` evitan recursión de RLS.
 2. **Trigger `handle_new_user`** crea la fila en `perfiles` al registrarse, tomando `nombre` y `municipio_id` del metadata de signup.
-3. **Bucket privado `evidencia-vial`** (100 MB por archivo, imágenes y video). Cada usuario sube a `{uid}/{relevamiento_id}/`. Lectura para autenticados.
+3. **Bucket privado `evidencia-vial`** (100 MB por archivo, imágenes y video). Cada usuario sube a `{uid}/{relevamiento_id}/`. Lectura solo para usuarios del mismo municipio que quien subió.
 4. **Índices** en FKs, `caminos.municipio` y `fallas.tipo_falla`.
 
 Convención: `perfiles.municipio_id` y `caminos.municipio` guardan el slug del partido (ej. `carlos-tejedor`) definido en `lib/partidos.ts`.
@@ -78,7 +78,8 @@ Convención: `perfiles.municipio_id` y `caminos.municipio` guardan el slug del p
 - Server Actions devuelven `{ ok: true, data } | { ok: false, error: string }`. Nunca lanzan al cliente.
 - Formularios con `useActionState` muestran estado de carga y mensaje de error en español.
 - Subida de archivos: error por archivo, botón reintentar. Relevamiento queda creado aunque falle un archivo.
-- Endpoint IA: 401 sin sesión, 404 relevamiento ajeno, 409 si ya procesado, 500 con log en servidor.
+- Endpoint IA: 401 sin sesión, 404 relevamiento inexistente, 403 relevamiento ajeno, 409 si ya procesado, 500 con log en servidor.
+- El flag `procesado_ia` actúa como bloqueo: un segundo POST concurrente recibe 409.
 - Validación de entradas con zod en `lib/validaciones.ts`, compartida entre cliente y servidor.
 
 ## 7. Testing

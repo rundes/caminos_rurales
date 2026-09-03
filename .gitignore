@@ -15,6 +15,11 @@ dist/
 build/
 .next/
 out/
+next-env.d.ts
+*.tsbuildinfo
+
+# Tests
+coverage/
 
 # Sistema / editores
 .DS_Store
@@ -22,3 +27,7 @@ Thumbs.db
 .vscode/
 .idea/
 *.log
+supabase/.temp/
+# Next dev los regenera automáticamente
+AGENTS.md
+CLAUDE.md
