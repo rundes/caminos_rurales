@@ -9,10 +9,12 @@ import { calcularCobertura } from '@/lib/cobertura'
 import { calcularPuntos, evaluarInsignias } from '@/lib/juego'
 import {
   aCoberturaPorLocalidad,
+  clasificarTramos,
   contarConEvidencia,
   coordenadasDeTrack,
   filaObservacion,
   fraccionCubierta,
+  kmDeTramos,
   partirCobertura,
   type FilaCoberturaLocalidad,
   type ParticionCobertura,
@@ -54,6 +56,12 @@ const cacheTramos = new Map<string, { expira: number; tramos: TramoMunicipio[] }
  * implícito de PostgREST (1000) en municipios con muchos recorridos.
  */
 const MAX_FILAS_COBERTURA = 20000
+
+/**
+ * Ventana anti-farmeo: un tramo repetido no da puntos si el mismo usuario ya
+ * lo cubrió dentro de las últimas 24 h.
+ */
+const VENTANA_REPETIDO_MS = 24 * 60 * 60 * 1000
 
 async function sesionYMunicipio(
   supabase: ClienteServidor,
@@ -108,6 +116,25 @@ async function tramosYaCubiertos(admin: ClienteAdmin, ids: readonly string[]): P
   return new Set((data ?? []).map((f) => f.tramo_id))
 }
 
+/** Tramos que el propio usuario ya cubrió dentro de la ventana anti-farmeo, restringido a `ids`. */
+async function tramosCubiertosRecientePorUsuario(
+  admin: ClienteAdmin,
+  usuarioId: string,
+  ids: readonly string[],
+): Promise<Set<string>> {
+  if (ids.length === 0) return new Set()
+  const desde = new Date(Date.now() - VENTANA_REPETIDO_MS).toISOString()
+  const { data, error } = await admin
+    .from('cobertura_tramos')
+    .select('tramo_id')
+    .eq('usuario_id', usuarioId)
+    .in('tramo_id', [...ids])
+    .gte('created_at', desde)
+    .limit(MAX_FILAS_COBERTURA)
+  if (error) throw new Error(error.message)
+  return new Set((data ?? []).map((f) => f.tramo_id))
+}
+
 async function coberturaPorLocalidad(
   supabase: ClienteServidor,
   municipio: string,
@@ -117,15 +144,20 @@ async function coberturaPorLocalidad(
   return (data ?? []) as FilaCoberturaLocalidad[]
 }
 
+type ParticionConPuntos = ParticionCobertura & { kmRepetidosConPuntos: number }
+
 async function guardarCobertura(
   admin: ClienteAdmin,
   ctx: Contexto,
   datos: RecorridoPayload,
-): Promise<ParticionCobertura> {
+): Promise<ParticionConPuntos> {
   const tramos = await tramosDeMunicipio(admin, ctx.municipio)
   const { cubiertos } = calcularCobertura(coordenadasDeTrack(datos.track), tramos)
   const previos = await tramosYaCubiertos(admin, cubiertos)
+  const previosUsuarioReciente = await tramosCubiertosRecientePorUsuario(admin, ctx.usuarioId, cubiertos)
   const particion = partirCobertura(tramos, cubiertos, previos)
+  const clasificacion = clasificarTramos(cubiertos, previos, previosUsuarioReciente)
+  const kmRepetidosConPuntos = kmDeTramos(tramos, clasificacion.repetidosConPuntos)
 
   if (cubiertos.length > 0) {
     const { error } = await admin.from('cobertura_tramos').upsert(
@@ -139,7 +171,7 @@ async function guardarCobertura(
     if (error) throw new Error(error.message)
   }
 
-  return particion
+  return { ...particion, kmRepetidosConPuntos }
 }
 
 async function guardarObservaciones(
@@ -156,12 +188,13 @@ async function guardarObservaciones(
 async function guardarPuntos(
   admin: ClienteAdmin,
   ctx: Contexto,
-  particion: ParticionCobertura,
+  particion: ParticionConPuntos,
   observacionesConEvidencia: number,
 ): Promise<number> {
   const eventos = calcularPuntos({
     kmNuevos: particion.kmNuevos,
-    kmRepetidos: particion.kmRepetidos,
+    // Solo cuentan para puntos los repetidos que el usuario no cubrió en las últimas 24 h (anti-farmeo).
+    kmRepetidos: particion.kmRepetidosConPuntos,
     observacionesConEvidencia,
   })
   if (eventos.length === 0) return 0

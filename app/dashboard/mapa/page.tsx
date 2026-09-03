@@ -79,9 +79,9 @@ export default async function MapaPage({ searchParams }: Props) {
         <Filtros municipios={municipios} />
       </Suspense>
       <p className="text-sm text-gray-600">
-        {puntos.length} observación(es). Rojo: alta · Amarillo: media · Verde: baja.
+        {puntos.length} observación(es). Observaciones: rojo alta · amarillo media · verde baja.
       </p>
-      <p className="text-sm text-gray-600">Verde: cubierto · Gris: pendiente.</p>
+      <p className="text-sm text-gray-600">Tramos: verde cubierto · gris pendiente.</p>
       <MapaCliente
         puntos={puntos}
         centro={centro}

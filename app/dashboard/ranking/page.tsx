@@ -2,6 +2,7 @@ import { Insignia } from '@/components/Insignia'
 import { TarjetaCobertura } from '@/components/TarjetaCobertura'
 import { obtenerCoberturaMunicipio, obtenerLogrosPropios, obtenerRanking } from '@/lib/cobertura-consultas'
 import { formatearNumero } from '@/lib/kpis'
+import { seleccionarRanking } from '@/lib/ranking'
 import { crearClienteServidor } from '@/lib/supabase/server'
 
 const TOP = 10
@@ -38,9 +39,11 @@ export default async function RankingPage() {
     obtenerLogrosPropios(supabase, user.id),
   ])
 
-  const top10 = ranking.slice(0, TOP)
-  const filaPropia = ranking.find((f) => f.usuario_id === user.id)
-  const mostrarFilaPropia = Boolean(filaPropia && filaPropia.posicion > TOP)
+  const { top: top10, propia: filaPropia, mostrarPropiaAparte: mostrarFilaPropia } = seleccionarRanking(
+    ranking,
+    user.id,
+    TOP,
+  )
 
   const codigosLogrados = new Set(logros.map((l) => l.codigo))
   const codigosPosibles = [
@@ -76,6 +79,9 @@ export default async function RankingPage() {
             </span>
             <span className="font-medium text-green-800">{formatearNumero(filaPropia.puntos)} pts</span>
           </div>
+        )}
+        {!filaPropia && (
+          <p className="mt-3 text-sm text-gray-500">Todavía no tenés puntos. Hacé tu primer recorrido.</p>
         )}
       </section>
 

@@ -85,6 +85,7 @@ export async function obtenerTramosConEstado(supabase: Cliente, municipio: strin
 
   if (errorCobertura) {
     console.error('[cobertura-consultas]', errorCobertura.message)
+    return []
   }
 
   const veces = new Map<string, number>()

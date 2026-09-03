@@ -10,6 +10,7 @@ interface Consulta extends PromiseLike<Resultado> {
   select(...args: unknown[]): Consulta
   eq(...args: unknown[]): Consulta
   in(...args: unknown[]): Consulta
+  gte(...args: unknown[]): Consulta
   limit(...args: unknown[]): Consulta
   maybeSingle(): Promise<Resultado>
   insert(filas: unknown): Promise<{ error: null }>
@@ -22,6 +23,7 @@ const db = {
   recorridoExistente: null as Fila | null,
   tramos: [] as Fila[],
   coberturaPrevia: [] as Fila[],
+  coberturaRecienteUsuario: [] as Fila[],
   coberturaDelRecorrido: [] as Fila[],
   coberturaDeEsosTramos: [] as Fila[],
   puntosDelRecorrido: [] as Fila[],
@@ -53,6 +55,9 @@ function resolver(tabla: string, ops: Operacion[]): Resultado {
   if (tabla === 'cobertura_tramos' && cols.includes('created_at')) {
     return { data: db.coberturaDeEsosTramos, error: null }
   }
+  if (tabla === 'cobertura_tramos' && tieneMetodo(ops, 'gte')) {
+    return { data: db.coberturaRecienteUsuario, error: null }
+  }
   if (tabla === 'cobertura_tramos' && tieneMetodo(ops, 'in')) {
     return { data: db.coberturaPrevia, error: null }
   }
@@ -72,6 +77,7 @@ function crearTabla(cliente: 'usuario' | 'admin', tabla: string): Consulta {
     select: (...args) => registrar('select', args),
     eq: (...args) => registrar('eq', args),
     in: (...args) => registrar('in', args),
+    gte: (...args) => registrar('gte', args),
     limit: (...args) => registrar('limit', args),
     maybeSingle: async () => resolver(tabla, ops),
     insert: async (filas) => {
@@ -170,6 +176,7 @@ beforeEach(() => {
   db.recorridoExistente = null
   db.tramos = [TRAMO_CUBIERTO, TRAMO_LEJANO]
   db.coberturaPrevia = []
+  db.coberturaRecienteUsuario = []
   db.coberturaDelRecorrido = []
   db.coberturaDeEsosTramos = []
   db.puntosDelRecorrido = []
@@ -220,6 +227,31 @@ describe('finalizarRecorrido', () => {
     expect(r.ok && r.data.tramosNuevos).toBe(0)
     expect(r.ok && r.data.tramosRepetidos).toBe(1)
     // 2 km repetidos * 2 puntos
+    expect(r.ok && r.data.puntos).toBe(4)
+  })
+
+  test('anti-farmeo: un tramo repetido cubierto por el mismo usuario hace 1 hora no da puntos', async () => {
+    db.coberturaPrevia = [{ tramo_id: 'w1' }]
+    db.coberturaRecienteUsuario = [{ tramo_id: 'w1' }]
+    const r = await finalizarRecorrido(payload())
+    expect(r.ok && r.data.tramosNuevos).toBe(0)
+    // sigue contando como repetido a efectos informativos...
+    expect(r.ok && r.data.tramosRepetidos).toBe(1)
+    // ...pero no otorga puntos porque el usuario lo cubrió hace menos de 24 h
+    expect(r.ok && r.data.puntos).toBe(0)
+    expect(escrituraDe('puntos_eventos')).toBeUndefined()
+    // igual se registra la cobertura del tramo para este recorrido
+    expect(escrituraDe('cobertura_tramos')).toMatchObject({
+      filas: [{ tramo_id: 'w1', recorrido_id: ID_RECORRIDO, usuario_id: 'u1' }],
+    })
+  })
+
+  test('anti-farmeo: un tramo repetido cubierto por el mismo usuario hace 2 días sí da puntos', async () => {
+    db.coberturaPrevia = [{ tramo_id: 'w1' }]
+    db.coberturaRecienteUsuario = []
+    const r = await finalizarRecorrido(payload())
+    expect(r.ok && r.data.tramosRepetidos).toBe(1)
+    // 2 km repetidos * 2 puntos, igual que un repetido sin restricción reciente
     expect(r.ok && r.data.puntos).toBe(4)
   })
 

@@ -1,10 +1,12 @@
 import { describe, expect, test } from 'vitest'
 import {
   aCoberturaPorLocalidad,
+  clasificarTramos,
   contarConEvidencia,
   coordenadasDeTrack,
   filaObservacion,
   fraccionCubierta,
+  kmDeTramos,
   partirCobertura,
   type FilaCoberturaLocalidad,
   type TramoMunicipio,
@@ -56,6 +58,47 @@ describe('partirCobertura', () => {
       kmNuevos: 0,
       kmRepetidos: 0,
     })
+  })
+})
+
+describe('clasificarTramos', () => {
+  test('separa nuevos, repetidos con puntos y repetidos sin puntos (cubiertos por el usuario en las últimas 24 h)', () => {
+    const r = clasificarTramos(
+      ['w1', 'w2', 'w3'],
+      new Set(['w2', 'w3']), // w2 y w3 ya fueron cubiertos alguna vez en el municipio
+      new Set(['w3']), // w3 lo cubrió este mismo usuario en las últimas 24 h
+    )
+    expect(r.nuevos).toEqual(['w1'])
+    expect(r.repetidosConPuntos).toEqual(['w2'])
+    expect(r.repetidosSinPuntos).toEqual(['w3'])
+  })
+
+  test('sin cubiertos devuelve todo vacío', () => {
+    expect(clasificarTramos([], new Set(), new Set())).toEqual({
+      nuevos: [],
+      repetidosConPuntos: [],
+      repetidosSinPuntos: [],
+    })
+  })
+
+  test('un repetido cubierto por el usuario hace tiempo (no reciente) sí da puntos', () => {
+    const r = clasificarTramos(['w1'], new Set(['w1']), new Set())
+    expect(r.repetidosConPuntos).toEqual(['w1'])
+    expect(r.repetidosSinPuntos).toEqual([])
+  })
+})
+
+describe('kmDeTramos', () => {
+  test('suma los km de los ids indicados', () => {
+    expect(kmDeTramos(TRAMOS, ['w1', 'w3'])).toBe(7)
+  })
+
+  test('ignora ids desconocidos', () => {
+    expect(kmDeTramos(TRAMOS, ['fantasma'])).toBe(0)
+  })
+
+  test('sin ids da 0', () => {
+    expect(kmDeTramos(TRAMOS, [])).toBe(0)
   })
 })
 

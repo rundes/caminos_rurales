@@ -52,6 +52,46 @@ export function partirCobertura(
   return particion
 }
 
+export type ClasificacionTramos = {
+  nuevos: string[]
+  repetidosConPuntos: string[]
+  repetidosSinPuntos: string[]
+}
+
+/**
+ * Separa los tramos cubiertos en nuevos (nadie los había cubierto en el
+ * municipio) y repetidos; entre los repetidos distingue los que dan puntos de
+ * los que no. Anti-farmeo: un repetido no da puntos si el mismo usuario ya
+ * cubrió ese tramo en las últimas 24 h (`previosUsuarioReciente`).
+ */
+export function clasificarTramos(
+  cubiertos: readonly string[],
+  previosMunicipio: ReadonlySet<string>,
+  previosUsuarioReciente: ReadonlySet<string>,
+): ClasificacionTramos {
+  const nuevos: string[] = []
+  const repetidosConPuntos: string[] = []
+  const repetidosSinPuntos: string[] = []
+
+  for (const id of cubiertos) {
+    if (!previosMunicipio.has(id)) {
+      nuevos.push(id)
+    } else if (previosUsuarioReciente.has(id)) {
+      repetidosSinPuntos.push(id)
+    } else {
+      repetidosConPuntos.push(id)
+    }
+  }
+
+  return { nuevos, repetidosConPuntos, repetidosSinPuntos }
+}
+
+/** Suma los km de los tramos indicados por id (ignora ids desconocidos). */
+export function kmDeTramos(tramos: readonly TramoMunicipio[], ids: readonly string[]): number {
+  const porId = new Map(tramos.map((t) => [t.id, t.km]))
+  return ids.reduce((suma, id) => suma + (porId.get(id) ?? 0), 0)
+}
+
 /** Fracción de km cubiertos sobre el total del municipio, entre 0 y 1. */
 export function fraccionCubierta(filas: readonly FilaCoberturaLocalidad[]): number {
   const total = filas.reduce((suma, f) => suma + Number(f.km), 0)

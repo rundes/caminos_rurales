@@ -163,3 +163,55 @@ describe('calcularCobertura', () => {
     expect(duracionMs).toBeLessThan(2000)
   })
 })
+
+describe('umbral de cobertura (frontera inclusiva)', () => {
+  // Línea de 500 m: muestreada cada 50 m da 11 muestras (500 / 50 = 10 pasos + 1).
+  const RADIO_M = 40
+  const PASO_M = 50
+  const LINEA_500M: [number, number][] = [
+    [LNG_TRAMO, LAT_BASE],
+    [LNG_TRAMO, LAT_BASE + offsetLatKm(0.5)],
+  ]
+  const tramo500: TramoGeometria = { id: 't500', km: 0.5, geometria: LINEA_500M }
+
+  /** Track formado por las primeras `cantidad` muestras exactas del tramo (distancia 0). */
+  function trackConMuestras(cantidad: number): Coordenada[] {
+    const muestras = muestrearLinea(LINEA_500M, PASO_M)
+    expect(muestras).toHaveLength(11)
+    return muestras.slice(0, cantidad)
+  }
+
+  test('7/11 (~0.636) cubre con el umbral por defecto (0.6)', () => {
+    const track = trackConMuestras(7)
+    const { cubiertos, fraccionPorTramo } = calcularCobertura(track, [tramo500], {
+      radioM: RADIO_M,
+      umbral: 0.6,
+      pasoM: PASO_M,
+    })
+    expect(fraccionPorTramo.t500).toBeCloseTo(7 / 11)
+    expect(cubiertos).toContain('t500')
+  })
+
+  test('6/11 (~0.545) no cubre con el umbral por defecto (0.6)', () => {
+    const track = trackConMuestras(6)
+    const { cubiertos, fraccionPorTramo } = calcularCobertura(track, [tramo500], {
+      radioM: RADIO_M,
+      umbral: 0.6,
+      pasoM: PASO_M,
+    })
+    expect(fraccionPorTramo.t500).toBeCloseTo(6 / 11)
+    expect(cubiertos).not.toContain('t500')
+  })
+
+  test('cuando la fracción es exactamente igual al umbral, el tramo queda cubierto (>=, no >)', () => {
+    const umbral = 7 / 11
+    const track = trackConMuestras(7)
+    const { cubiertos, fraccionPorTramo } = calcularCobertura(track, [tramo500], {
+      radioM: RADIO_M,
+      umbral,
+      pasoM: PASO_M,
+    })
+    expect(fraccionPorTramo.t500).toBe(umbral)
+    expect(cubiertos).toContain('t500')
+  })
+})

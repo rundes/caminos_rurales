@@ -16,7 +16,7 @@ Relevar el 100 % de los caminos rurales del municipio. El relevador abre la app,
 | Offline | Track y observaciones se guardan en IndexedDB (`idb`) durante el recorrido. Al finalizar se encolan y se suben cuando hay conexión, con reintentos. |
 | Denominador de cobertura | Tabla `tramos`: un registro por tramo OSM con geometría, km, `nombre_codigo` y localidad. Maipú: 165 tramos, 610 km. |
 | Regla de cobertura | Un tramo se considera cubierto por un recorrido si al menos el 60 % de sus muestras (cada 50 m a lo largo de la geometría) tienen un punto del track a menos de 40 m. |
-| Puntos | 10 por km nuevo (primera cobertura del tramo en el municipio), 2 por km repetido, 5 por observación con evidencia. Registrados en `puntos_eventos`. |
+| Puntos | 10 por km nuevo (primera cobertura del tramo en el municipio), 2 por km repetido (máximo una vez por tramo cada 24 h por usuario), 5 por observación con evidencia. Registrados en `puntos_eventos`. |
 | Insignias | `primer_recorrido`, `explorador_50km`, `cartografo_200km`, `localidad_completa:<localidad>`, `municipio_100`. Registradas en `logros`. |
 | Ranking | Suma de puntos por usuario dentro del municipio. Top 10 + posición propia. |
 | Observaciones | Reutiliza `fallas_deteccion` con columnas nuevas (`recorrido_id`, `descripcion`, `url_evidencia_video`) y tipos nuevos. En la UI se llaman "observaciones". |
