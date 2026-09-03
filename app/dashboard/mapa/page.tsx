@@ -1,6 +1,7 @@
 import { Suspense } from 'react'
 import { MapaCliente } from '@/components/MapaCliente'
 import { capasDe } from '@/lib/capas'
+import { limitesDe } from '@/lib/capas-servidor'
 import { aPuntos, filtrarPuntos, municipiosDe, type FilaFalla } from '@/lib/fallas'
 import { buscarPartido } from '@/lib/partidos'
 import { crearClienteServidor } from '@/lib/supabase/server'
@@ -59,6 +60,8 @@ export default async function MapaPage({ searchParams }: Props) {
         ? [puntos[0].latitud, puntos[0].longitud]
         : CENTRO_PROVINCIA
 
+  const limites = partidoActual ? await limitesDe(municipioActual) : null
+
   return (
     <div className="flex flex-col gap-4">
       <h1 className="text-2xl font-bold">Mapa de fallas</h1>
@@ -68,7 +71,13 @@ export default async function MapaPage({ searchParams }: Props) {
       <p className="text-sm text-gray-600">
         {puntos.length} falla(s). Rojo: alta · Amarillo: media · Verde: baja.
       </p>
-      <MapaCliente puntos={puntos} centro={centro} urlsEvidencia={urlsEvidencia} capas={capas} />
+      <MapaCliente
+        puntos={puntos}
+        centro={centro}
+        urlsEvidencia={urlsEvidencia}
+        capas={capas}
+        limites={limites ?? undefined}
+      />
     </div>
   )
 }

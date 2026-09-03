@@ -1,7 +1,17 @@
-export type CapasMunicipio = { caminos?: string; localidades?: string }
+export type CapasMunicipio = {
+  caminos?: string
+  localidades?: string
+  limite?: string
+  redProvincial?: string
+}
 
 const CAPAS: Record<string, CapasMunicipio> = {
-  maipu: { caminos: '/capas/maipu/caminos.geojson', localidades: '/capas/maipu/localidades.geojson' },
+  maipu: {
+    caminos: '/capas/maipu/caminos.geojson',
+    localidades: '/capas/maipu/localidades.geojson',
+    limite: '/capas/maipu/limite.geojson',
+    redProvincial: '/capas/maipu/red-provincial.geojson',
+  },
 }
 
 /** Devuelve las capas GeoJSON registradas para un municipio, o null si no tiene. */
@@ -31,4 +41,20 @@ export function colorSuperficie(surface: string | null): string {
   if (surface === 'unpaved') return COLOR_NO_PAVIMENTADO
   if (SUPERFICIES_PAVIMENTADAS.has(surface)) return COLOR_PAVIMENTADO
   return COLOR_DESCONOCIDO
+}
+
+const COLOR_RED_PAVIMENTADO = '#1e40af'
+const COLOR_RED_CONSOLIDADO = '#7c3aed'
+const COLOR_RED_TIERRA = '#b45309'
+
+const COLORES_RED_PROVINCIAL: Record<string, string> = {
+  pavimentado: COLOR_RED_PAVIMENTADO,
+  consolidado: COLOR_RED_CONSOLIDADO,
+  tierra: COLOR_RED_TIERRA,
+}
+
+/** Color según la superficie decodificada de un tramo de la red vial provincial (IGN/DVP). */
+export function colorRedProvincial(superficie: string | null): string {
+  if (!superficie) return COLOR_RED_TIERRA
+  return COLORES_RED_PROVINCIAL[superficie] ?? COLOR_RED_TIERRA
 }

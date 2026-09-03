@@ -1,11 +1,13 @@
 import { describe, expect, test } from 'vitest'
-import { capasDe, colorSuperficie } from '@/lib/capas'
+import { capasDe, colorRedProvincial, colorSuperficie } from '@/lib/capas'
 
 describe('capasDe', () => {
   test('devuelve las rutas de capas para maipu', () => {
     expect(capasDe('maipu')).toEqual({
       caminos: '/capas/maipu/caminos.geojson',
       localidades: '/capas/maipu/localidades.geojson',
+      limite: '/capas/maipu/limite.geojson',
+      redProvincial: '/capas/maipu/red-provincial.geojson',
     })
   })
 
@@ -34,5 +36,24 @@ describe('colorSuperficie', () => {
   test('superficie desconocida o nula usa el color neutro', () => {
     expect(colorSuperficie(null)).toBe('#a1887f')
     expect(colorSuperficie('otra-cosa')).toBe('#a1887f')
+  })
+})
+
+describe('colorRedProvincial', () => {
+  test('pavimentado es azul', () => {
+    expect(colorRedProvincial('pavimentado')).toBe('#1e40af')
+  })
+
+  test('consolidado es violeta', () => {
+    expect(colorRedProvincial('consolidado')).toBe('#7c3aed')
+  })
+
+  test('tierra es marrón', () => {
+    expect(colorRedProvincial('tierra')).toBe('#b45309')
+  })
+
+  test('superficie desconocida o nula cae al color de tierra', () => {
+    expect(colorRedProvincial(null)).toBe('#b45309')
+    expect(colorRedProvincial('otra-cosa')).toBe('#b45309')
   })
 })
