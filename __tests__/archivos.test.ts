@@ -26,4 +26,21 @@ describe('rutaEvidencia', () => {
     const r = rutaEvidencia('u1', 'r1', 'mi foto ñ.JPG', 1700000000000)
     expect(r).toBe('u1/r1/1700000000000-mi-foto-n.jpg')
   })
+
+  test('con el id de la observación la ruta es determinística', () => {
+    const obs = '22222222-2222-4222-8222-222222222222'
+
+    const primera = rutaEvidencia('u1', 'r1', 'foto.jpg', obs)
+    const reintento = rutaEvidencia('u1', 'r1', 'foto.jpg', obs)
+
+    expect(primera).toBe(`u1/r1/${obs}-foto.jpg`)
+    expect(reintento).toBe(primera)
+  })
+
+  test('sin id cae al timestamp, así que dos llamadas difieren', () => {
+    const a = rutaEvidencia('u1', 'r1', 'foto.jpg', 1)
+    const b = rutaEvidencia('u1', 'r1', 'foto.jpg', 2)
+
+    expect(a).not.toBe(b)
+  })
 })

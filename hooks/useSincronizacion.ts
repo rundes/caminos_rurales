@@ -8,7 +8,8 @@ import {
 } from '@/app/dashboard/recorrido/actions'
 import { comprimirImagen } from '@/lib/imagenes'
 import { baseLocal } from '@/lib/local/db'
-import { procesarCola, type DepsSincronizacion } from '@/lib/local/sincronizacion'
+import { procesarCola } from '@/lib/local/cola'
+import type { DepsSincronizacion } from '@/lib/local/deps'
 import { subirArchivo } from '@/lib/subida'
 import { useEnLinea } from './useEnLinea'
 
@@ -25,33 +26,46 @@ const DEPS: DepsSincronizacion = {
 
 export type EstadoSincronizacion = {
   pendientes: number
-  ultimoResumen: ResumenRecorrido | null
+  /** Resumen del servidor por recorrido, para no mostrarle a uno el de otro. */
+  resumenes: Record<string, ResumenRecorrido>
   sincronizar: () => Promise<void>
 }
 
 /**
- * Vacía la cola de recorridos pendientes: al montar, al recuperar conexión y
- * cada minuto mientras queden pendientes. Nunca corre dos pasadas a la vez.
+ * Vacía la cola de recorridos pendientes del usuario: al montar, al recuperar
+ * conexión y cada minuto mientras queden pendientes. Nunca corre dos pasadas a
+ * la vez; si llega un pedido mientras corre, se reencola para el final.
  */
-export function useSincronizacion(): EstadoSincronizacion {
+export function useSincronizacion(usuarioId: string): EstadoSincronizacion {
   const [pendientes, setPendientes] = useState(0)
-  const [ultimoResumen, setUltimoResumen] = useState<ResumenRecorrido | null>(null)
+  const [resumenes, setResumenes] = useState<Record<string, ResumenRecorrido>>({})
   const enLinea = useEnLinea()
   const corriendo = useRef(false)
+  const pendienteDeCorrer = useRef(false)
 
   const sincronizar = useCallback(async () => {
-    if (corriendo.current) return
+    if (corriendo.current) {
+      pendienteDeCorrer.current = true
+      return
+    }
     corriendo.current = true
     try {
-      const resultado = await procesarCola(DEPS)
-      setPendientes(resultado.pendientes)
-      if (resultado.ultimoResumen) setUltimoResumen(resultado.ultimoResumen)
+      // Si llegó un pedido mientras corría la pasada, se repite en vez de perderse.
+      do {
+        pendienteDeCorrer.current = false
+        const resultado = await procesarCola(DEPS, usuarioId)
+        setPendientes(resultado.pendientes)
+        if (Object.keys(resultado.resumenes).length > 0) {
+          setResumenes((previos) => ({ ...previos, ...resultado.resumenes }))
+        }
+      } while (pendienteDeCorrer.current)
     } catch (error) {
       console.error('[sincronizacion]', error)
     } finally {
+      pendienteDeCorrer.current = false
       corriendo.current = false
     }
-  }, [])
+  }, [usuarioId])
 
   // El pase se difiere a un microtask para no encadenar renders desde el efecto.
   useEffect(() => {
@@ -67,5 +81,5 @@ export function useSincronizacion(): EstadoSincronizacion {
     return () => clearInterval(id)
   }, [pendientes, sincronizar])
 
-  return { pendientes, ultimoResumen, sincronizar }
+  return { pendientes, resumenes, sincronizar }
 }

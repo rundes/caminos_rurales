@@ -9,12 +9,17 @@ import type {
 } from './tipos'
 
 export const NOMBRE_DB = 'visiovial'
-export const VERSION_DB = 1
+/**
+ * v2 agrega el índice `usuarioId` en `recorridos`. Los registros de la v1 no
+ * tienen ese campo: quedan fuera del índice y por lo tanto se tratan como
+ * ajenos (nunca se procesan ni se suben con la sesión actual).
+ */
+export const VERSION_DB = 2
 
 const ERROR_SIN_INDEXEDDB = 'Este navegador no puede guardar el recorrido en el dispositivo.'
 
 interface EsquemaVisiovial extends DBSchema {
-  recorridos: { key: string; value: RecorridoLocal }
+  recorridos: { key: string; value: RecorridoLocal; indexes: { usuarioId: string } }
   puntos: { key: number; value: PuntoLocal; indexes: { recorridoId: string } }
   observaciones: { key: string; value: ObservacionLocal; indexes: { recorridoId: string } }
   cola: { key: string; value: ItemCola }
@@ -22,31 +27,73 @@ interface EsquemaVisiovial extends DBSchema {
 
 export type DbVisiovial = IDBPDatabase<EsquemaVisiovial>
 
+/** Stores que se vacían al cerrar sesión. */
+const STORES = ['recorridos', 'puntos', 'observaciones', 'cola'] as const
+
 let conexion: Promise<DbVisiovial> | null = null
+
+function olvidar(): void {
+  conexion = null
+}
 
 /**
  * Abre (una sola vez por pestaña) la base local. La conexión se memoiza en un
- * módulo, así que todos los hooks comparten la misma.
+ * módulo, así que todos los hooks comparten la misma. Si la apertura falla la
+ * promesa memoizada se descarta, para que el siguiente intento vuelva a abrir.
  */
 export function abrirDb(): Promise<DbVisiovial> {
   if (typeof indexedDB === 'undefined') return Promise.reject(new Error(ERROR_SIN_INDEXEDDB))
-  conexion ??= openDB<EsquemaVisiovial>(NOMBRE_DB, VERSION_DB, {
-    upgrade(db) {
-      db.createObjectStore('recorridos', { keyPath: 'id' })
-      db.createObjectStore('puntos', { autoIncrement: true }).createIndex('recorridoId', 'recorridoId')
-      db.createObjectStore('observaciones', { keyPath: 'id' }).createIndex('recorridoId', 'recorridoId')
-      db.createObjectStore('cola', { keyPath: 'recorridoId' })
-    },
-  })
+  if (!conexion) {
+    conexion = openDB<EsquemaVisiovial>(NOMBRE_DB, VERSION_DB, {
+      upgrade(db, anterior, _nueva, tx) {
+        if (anterior < 1) {
+          db.createObjectStore('puntos', { autoIncrement: true }).createIndex('recorridoId', 'recorridoId')
+          db.createObjectStore('observaciones', { keyPath: 'id' }).createIndex('recorridoId', 'recorridoId')
+          db.createObjectStore('cola', { keyPath: 'recorridoId' })
+        }
+        const recorridos =
+          anterior < 1
+            ? db.createObjectStore('recorridos', { keyPath: 'id' })
+            : tx.objectStore('recorridos')
+        if (!recorridos.indexNames.contains('usuarioId')) recorridos.createIndex('usuarioId', 'usuarioId')
+      },
+      // Otra pestaña quiere migrar: cerramos para no bloquearla.
+      blocking(_anterior, _nueva, evento) {
+        ;(evento.target as unknown as DbVisiovial)?.close?.()
+        olvidar()
+      },
+      blocked() {
+        olvidar()
+      },
+      terminated() {
+        olvidar()
+      },
+    })
+    conexion.catch((error) => {
+      console.error('[db]', error)
+      olvidar()
+    })
+  }
   return conexion
 }
 
-/** Cierra y olvida la conexión memoizada (solo se usa en tests). */
+/** Cierra y olvida la conexión memoizada (solo se usa en tests y al salir). */
 export async function cerrarDb(): Promise<void> {
-  if (!conexion) return
-  const db = await conexion
-  db.close()
-  conexion = null
+  const pendiente = conexion
+  if (!pendiente) return
+  olvidar()
+  try {
+    ;(await pendiente).close()
+  } catch (error) {
+    console.error('[db]', error)
+  }
+}
+
+/** Vacía los cuatro stores locales. Se usa al cerrar sesión. */
+export async function limpiarLocal(): Promise<void> {
+  const db = await abrirDb()
+  const tx = db.transaction(STORES, 'readwrite')
+  await Promise.all([...STORES.map((store) => tx.objectStore(store).clear()), tx.done])
 }
 
 export async function guardarRecorrido(recorrido: RecorridoLocal): Promise<void> {
@@ -59,11 +106,16 @@ export async function obtenerRecorrido(id: string): Promise<RecorridoLocal | und
   return db.get('recorridos', id)
 }
 
-/** Recorrido que quedó abierto de una sesión anterior (la app se cerró en medio). */
-export async function recorridoEnCurso(): Promise<RecorridoLocal | undefined> {
+/** Recorridos del usuario en sesión. Los de la v1 (sin `usuarioId`) quedan afuera. */
+export async function listarRecorridos(usuarioId: string): Promise<RecorridoLocal[]> {
   const db = await abrirDb()
-  const todos = await db.getAll('recorridos')
-  return todos.find((r) => r.estado === 'en_curso')
+  return db.getAllFromIndex('recorridos', 'usuarioId', usuarioId)
+}
+
+/** Recorrido del usuario que quedó abierto de una sesión anterior. */
+export async function recorridoEnCurso(usuarioId: string): Promise<RecorridoLocal | undefined> {
+  const propios = await listarRecorridos(usuarioId)
+  return propios.find((r) => r.estado === 'en_curso')
 }
 
 export async function cambiarEstadoRecorrido(id: string, estado: EstadoRecorridoLocal): Promise<void> {
@@ -127,6 +179,7 @@ export const baseLocal: BaseLocal = {
   guardarRecorrido,
   obtenerRecorrido,
   recorridoEnCurso,
+  listarRecorridos,
   guardarPunto,
   listarPuntos,
   guardarObservacion,

@@ -41,6 +41,15 @@ export type ResumenRecorrido = {
 
 type Contexto = { usuarioId: string; municipio: string; recorridoId: string }
 
+/**
+ * Resultado de `finalizarRecorrido`. Un fallo marcado `definitivo` no se
+ * reintenta nunca: el payload es inválido, el recorrido es de otra persona o
+ * el track no es físicamente plausible. Reintentarlo daría siempre lo mismo.
+ */
+export type ResultadoRecorrido =
+  | ResultadoAccion<ResumenRecorrido>
+  | { ok: false; error: string; definitivo: true }
+
 const ERROR_SESION = 'Sesión vencida. Volvé a ingresar.'
 const ERROR_PERFIL = 'No se pudo cargar tu perfil'
 const ERROR_SIN_MUNICIPIO = 'Tu perfil no tiene un partido asignado'
@@ -434,11 +443,9 @@ function revalidarDashboard(): void {
  * - si existe pero quedó a medias (`procesado_at` null, por un fallo previo o
  *   por una carrera entre dos envíos), se reprocesa; cada paso es idempotente.
  */
-export async function finalizarRecorrido(
-  payload: unknown,
-): Promise<ResultadoAccion<ResumenRecorrido>> {
+export async function finalizarRecorrido(payload: unknown): Promise<ResultadoRecorrido> {
   const parseo = esquemaRecorrido.safeParse(payload)
-  if (!parseo.success) return { ok: false, error: primerError(parseo.error) }
+  if (!parseo.success) return { ok: false, error: primerError(parseo.error), definitivo: true }
   const datos = parseo.data
 
   const kmCrudo = kmDeTrack(coordenadasDeTrack(datos.track))
@@ -450,7 +457,7 @@ export async function finalizarRecorrido(
   })
   if (!plausibilidad.ok) {
     console.error('[recorrido] implausible', plausibilidad.motivos)
-    return { ok: false, error: ERROR_IMPLAUSIBLE }
+    return { ok: false, error: ERROR_IMPLAUSIBLE, definitivo: true }
   }
 
   const supabase = await crearClienteServidor()
@@ -465,7 +472,7 @@ export async function finalizarRecorrido(
 
     let existente = await buscarRecorrido(supabase, datos.id)
     if (existente && existente.usuario_id !== ctx.usuarioId) {
-      return { ok: false, error: ERROR_AJENO }
+      return { ok: false, error: ERROR_AJENO, definitivo: true }
     }
 
     if (!existente) {
@@ -486,7 +493,9 @@ export async function finalizarRecorrido(
         if (errorInsert.code !== CODIGO_DUPLICADO) throw new Error(errorInsert.message)
         existente = await buscarRecorrido(supabase, datos.id)
         if (!existente) throw new Error(errorInsert.message)
-        if (existente.usuario_id !== ctx.usuarioId) return { ok: false, error: ERROR_AJENO }
+        if (existente.usuario_id !== ctx.usuarioId) {
+          return { ok: false, error: ERROR_AJENO, definitivo: true }
+        }
       }
     }
 
@@ -519,6 +528,7 @@ export async function prepararSubida(
   recorridoId: string,
   nombre: string,
   contentType: string,
+  observacionId?: string,
 ): Promise<ResultadoAccion<DestinoSubida>> {
   const parseo = esquemaSubida.safeParse({ recorridoId, nombre, contentType })
   if (!parseo.success) return { ok: false, error: primerError(parseo.error) }
@@ -530,7 +540,7 @@ export async function prepararSubida(
   if (!user) return { ok: false, error: ERROR_SESION }
 
   try {
-    const ruta = rutaEvidencia(user.id, parseo.data.recorridoId, parseo.data.nombre)
+    const ruta = rutaEvidencia(user.id, parseo.data.recorridoId, parseo.data.nombre, observacionId)
     const destino = await obtenerProveedor().prepararSubida(ruta, parseo.data.contentType)
     return { ok: true, data: destino }
   } catch (error) {

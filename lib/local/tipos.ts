@@ -1,16 +1,26 @@
 import type { Severidad, TipoFalla } from '@/lib/tipos'
 
-export type EstadoRecorridoLocal = 'en_curso' | 'finalizado' | 'subiendo' | 'subido' | 'error'
+export type EstadoRecorridoLocal =
+  | 'en_curso'
+  | 'finalizado'
+  | 'subiendo'
+  | 'subido'
+  | 'error'
+  | 'descartado'
 
 /** Recorrido tal como se guarda en el dispositivo mientras se graba y hasta que se sube. */
 export type RecorridoLocal = {
   id: string
+  /** Dueño del recorrido. La cola solo procesa lo que pertenece al usuario en sesión. */
+  usuarioId: string
   inicio: string
   fin?: string
   estado: EstadoRecorridoLocal
   municipio: string
   puntosGps: number
   km: number
+  /** Último error del servidor, para poder mostrarlo cuando el estado es `error`. */
+  ultimoError?: string
 }
 
 /** Punto GPS aceptado por el filtro del grabador, ya asociado a un recorrido. */
@@ -60,7 +70,8 @@ export type ItemCola = {
 export interface BaseLocal {
   guardarRecorrido(recorrido: RecorridoLocal): Promise<void>
   obtenerRecorrido(id: string): Promise<RecorridoLocal | undefined>
-  recorridoEnCurso(): Promise<RecorridoLocal | undefined>
+  recorridoEnCurso(usuarioId: string): Promise<RecorridoLocal | undefined>
+  listarRecorridos(usuarioId: string): Promise<RecorridoLocal[]>
   guardarPunto(punto: PuntoLocal): Promise<void>
   listarPuntos(recorridoId: string): Promise<PuntoLocal[]>
   guardarObservacion(observacion: ObservacionLocal): Promise<void>

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, type FormEvent } from 'react'
+import { useRef, useState, type FormEvent } from 'react'
 import { Boton } from '@/components/Boton'
 import { medirDuracionVideo, validarEvidencia, type MedirDuracion } from '@/lib/evidencia'
 import { ETIQUETA_SEVERIDAD, ETIQUETA_TIPO_FALLA, type Severidad, type TipoFalla } from '@/lib/tipos'
@@ -39,6 +39,8 @@ export function ObservacionForm({ posicion, onGuardar, onCancelar, medirDuracion
   const [archivo, setArchivo] = useState<File | undefined>(undefined)
   const [error, setError] = useState<string | null>(null)
   const [guardando, setGuardando] = useState(false)
+  const [validando, setValidando] = useState(false)
+  const entradaArchivo = useRef<HTMLInputElement>(null)
 
   async function alElegirArchivo(elegido: File | undefined) {
     if (!elegido) {
@@ -46,14 +48,21 @@ export function ObservacionForm({ posicion, onGuardar, onCancelar, medirDuracion
       setError(null)
       return
     }
-    const problema = await validarEvidencia(elegido, medirDuracion)
-    if (problema) {
-      setArchivo(undefined)
-      setError(problema)
-      return
+    setValidando(true)
+    try {
+      const problema = await validarEvidencia(elegido, medirDuracion)
+      if (problema) {
+        setArchivo(undefined)
+        setError(problema)
+        // Sin limpiar el input, volver a elegir el mismo archivo no dispara `change`.
+        if (entradaArchivo.current) entradaArchivo.current.value = ''
+        return
+      }
+      setError(null)
+      setArchivo(elegido)
+    } finally {
+      setValidando(false)
     }
-    setError(null)
-    setArchivo(elegido)
   }
 
   async function enviar(evento: FormEvent<HTMLFormElement>) {
@@ -119,6 +128,7 @@ export function ObservacionForm({ posicion, onGuardar, onCancelar, medirDuracion
           Foto o video (máx. 15 s)
         </label>
         <input
+          ref={entradaArchivo}
           id="evidencia"
           type="file"
           accept="image/*,video/*"
@@ -149,7 +159,7 @@ export function ObservacionForm({ posicion, onGuardar, onCancelar, medirDuracion
       )}
 
       <div className="flex flex-col gap-2">
-        <Boton type="submit" cargando={guardando}>
+        <Boton type="submit" cargando={guardando} disabled={validando}>
           Guardar observación
         </Boton>
         <Boton type="button" variante="secundario" onClick={onCancelar}>

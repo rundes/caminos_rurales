@@ -21,7 +21,7 @@ export default async function DashboardPage() {
   if (error) console.error('[dashboard]', error.message)
 
   const municipio = perfil?.municipio_id ?? null
-  if (!municipio) {
+  if (!user || !municipio) {
     return <p className="rounded-xl bg-red-50 p-4 text-red-800">Tu perfil no tiene un partido asignado.</p>
   }
 
@@ -37,7 +37,13 @@ export default async function DashboardPage() {
     <div className="flex flex-col gap-6">
       <h1 className="text-2xl font-bold">Recorrido</h1>
       <TarjetaCobertura resumen={cobertura} />
-      <RecorridoView municipio={municipio} capas={capasDe(municipio)} limites={limites} centro={centro} />
+      <RecorridoView
+        usuarioId={user.id}
+        municipio={municipio}
+        capas={capasDe(municipio)}
+        limites={limites}
+        centro={centro}
+      />
     </div>
   )
 }

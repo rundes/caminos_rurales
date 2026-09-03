@@ -27,6 +27,16 @@ function limpiarNombre(nombre: string): string {
     .replace(/(^-|-$)/g, '')
 }
 
-export function rutaEvidencia(uid: string, recorridoId: string, nombre: string, ahora = Date.now()): string {
-  return `${uid}/${recorridoId}/${ahora}-${limpiarNombre(nombre)}`
+/**
+ * Ruta de la evidencia en el almacenamiento. Con el `id` de la observación la
+ * ruta es determinística: un reintento de subida pisa el mismo objeto en vez
+ * de dejar copias huérfanas. Sin `id` cae al timestamp.
+ */
+export function rutaEvidencia(
+  uid: string,
+  recorridoId: string,
+  nombre: string,
+  id: string | number = Date.now(),
+): string {
+  return `${uid}/${recorridoId}/${id}-${limpiarNombre(nombre)}`
 }

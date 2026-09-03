@@ -2,7 +2,7 @@
 
 import 'leaflet/dist/leaflet.css'
 import { useEffect } from 'react'
-import { CircleMarker, MapContainer, Polyline, TileLayer, useMap } from 'react-leaflet'
+import { CircleMarker, MapContainer, Polyline, TileLayer, useMap, useMapEvents } from 'react-leaflet'
 import { CapasMunicipio } from '@/components/CapasMunicipio'
 import { TESELAS_IGN, type CapasMunicipio as CapasMunicipioTipo } from '@/lib/capas'
 
@@ -14,6 +14,8 @@ type Props = {
   posicion: Posicion | null
   capas?: CapasMunicipioTipo | null
   seguir?: boolean
+  /** Se llama cuando la persona arrastra el mapa: corta el seguimiento. */
+  onArrastrar?: () => void
 }
 
 const ZOOM_RECORRIDO = 15
@@ -34,8 +36,16 @@ function Seguidor({ posicion, seguir }: { posicion: Posicion | null; seguir: boo
   return null
 }
 
+/** Corta el seguimiento en cuanto la persona mueve el mapa con el dedo. */
+function DetectorArrastre({ onArrastrar }: { onArrastrar?: () => void }) {
+  useMapEvents({
+    dragstart: () => onArrastrar?.(),
+  })
+  return null
+}
+
 /** Mapa en vivo del recorrido: base IGN, capas del municipio, traza y posición. */
-export function MapaRecorrido({ centro, track, posicion, capas, seguir = true }: Props) {
+export function MapaRecorrido({ centro, track, posicion, capas, seguir = true, onArrastrar }: Props) {
   return (
     <MapContainer
       center={posicion ?? centro}
@@ -62,6 +72,7 @@ export function MapaRecorrido({ centro, track, posicion, capas, seguir = true }:
         />
       )}
       <Seguidor posicion={posicion} seguir={seguir} />
+      <DetectorArrastre onArrastrar={onArrastrar} />
     </MapContainer>
   )
 }

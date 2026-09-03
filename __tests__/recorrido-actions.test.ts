@@ -514,7 +514,7 @@ describe('finalizarRecorrido', () => {
       }),
     )
 
-    expect(r).toEqual({ ok: false, error: expect.stringMatching(/no pudo validarse/i) })
+    expect(r).toEqual({ ok: false, error: expect.stringMatching(/no pudo validarse/i), definitivo: true })
     expect(spy).toHaveBeenCalledWith(
       '[recorrido] implausible',
       expect.arrayContaining([expect.any(String)]),
@@ -538,7 +538,7 @@ describe('finalizarRecorrido', () => {
       }),
     )
 
-    expect(r).toEqual({ ok: false, error: expect.stringMatching(/no pudo validarse/i) })
+    expect(r).toEqual({ ok: false, error: expect.stringMatching(/no pudo validarse/i), definitivo: true })
     expect(crearClienteAdmin).not.toHaveBeenCalled()
     spy.mockRestore()
   })
@@ -558,13 +558,13 @@ describe('finalizarRecorrido', () => {
   test('rechaza un recorrido con el mismo id de otra persona', async () => {
     db.recorridoExistente = { id: ID_RECORRIDO, usuario_id: 'u2', km: 4.2, procesado_at: null }
     const r = await finalizarRecorrido(payload())
-    expect(r).toEqual({ ok: false, error: expect.stringMatching(/otra persona/i) })
+    expect(r).toEqual({ ok: false, error: expect.stringMatching(/otra persona/i), definitivo: true })
     expect(escrituras).toEqual([])
   })
 
   test('datos inválidos: no crea el cliente admin ni escribe nada', async () => {
     const r = await finalizarRecorrido(payload({ track: [[0, 0]] }))
-    expect(r).toEqual({ ok: false, error: expect.stringMatching(/al menos 2 puntos/i) })
+    expect(r).toEqual({ ok: false, error: expect.stringMatching(/al menos 2 puntos/i), definitivo: true })
     expect(crearClienteAdmin).not.toHaveBeenCalled()
     expect(escrituras).toEqual([])
     expect(tablasUsuario).toEqual([])
@@ -572,7 +572,7 @@ describe('finalizarRecorrido', () => {
 
   test('rechaza un recorrido que termina antes de empezar', async () => {
     const r = await finalizarRecorrido(payload({ fin: '2026-09-03T09:00:00.000Z' }))
-    expect(r).toEqual({ ok: false, error: expect.stringMatching(/anterior al inicio/i) })
+    expect(r).toEqual({ ok: false, error: expect.stringMatching(/anterior al inicio/i), definitivo: true })
     expect(crearClienteAdmin).not.toHaveBeenCalled()
   })
 

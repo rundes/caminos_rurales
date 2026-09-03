@@ -3,7 +3,11 @@ import { filtrarPunto, type PuntoGps } from '@/lib/track'
 
 export type EstadoGrabacion = 'inactivo' | 'grabando' | 'pausado' | 'finalizado'
 
-/** Estado inmutable del grabador de recorridos. Todas las transiciones son puras. */
+/**
+ * Estado inmutable del grabador de recorridos. Todas las transiciones son
+ * puras. No guarda el track: los puntos viven en un `ref` del hook (y en
+ * IndexedDB), acá solo queda el agregado que la UI necesita pintar.
+ */
 export type Grabador = {
   estado: EstadoGrabacion
   recorridoId: string | null
@@ -11,7 +15,7 @@ export type Grabador = {
   fin: number | null
   ultimo: PuntoGps | null
   km: number
-  puntosGps: PuntoGps[]
+  cantidad: number
 }
 
 export const GRABADOR_INICIAL: Grabador = {
@@ -21,12 +25,12 @@ export const GRABADOR_INICIAL: Grabador = {
   fin: null,
   ultimo: null,
   km: 0,
-  puntosGps: [],
+  cantidad: 0,
 }
 
 /** Arranca un recorrido nuevo. `ahora` en milisegundos epoch. */
 export function iniciar(recorridoId: string, ahora: number): Grabador {
-  return { ...GRABADOR_INICIAL, estado: 'grabando', recorridoId, inicio: ahora, puntosGps: [] }
+  return { ...GRABADOR_INICIAL, estado: 'grabando', recorridoId, inicio: ahora }
 }
 
 /**
@@ -43,21 +47,22 @@ export function retomar(recorridoId: string, inicio: number, puntos: readonly Pu
     fin: null,
     ultimo: puntos.length > 0 ? puntos[puntos.length - 1] : null,
     km,
-    puntosGps: [...puntos],
+    cantidad: puntos.length,
   }
 }
 
 /**
  * Incorpora un punto GPS si el grabador está grabando y el punto pasa el
  * filtro de precisión y distancia mínima. Si se descarta devuelve el mismo
- * objeto de estado, así quien llama puede detectarlo por identidad.
+ * objeto de estado, así quien llama puede detectarlo por identidad. En pausa
+ * nunca acepta puntos.
  */
 export function agregarPunto(grabador: Grabador, punto: PuntoGps): Grabador {
   if (grabador.estado !== 'grabando') return grabador
   if (!filtrarPunto(grabador.ultimo, punto)) return grabador
 
   const km = grabador.ultimo ? grabador.km + distanciaKm(grabador.ultimo, punto) : grabador.km
-  return { ...grabador, ultimo: punto, km, puntosGps: [...grabador.puntosGps, punto] }
+  return { ...grabador, ultimo: punto, km, cantidad: grabador.cantidad + 1 }
 }
 
 export function pausar(grabador: Grabador): Grabador {

@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest'
-import type { ResumenRecorrido } from '@/app/dashboard/recorrido/actions'
+import type { ResultadoRecorrido, ResumenRecorrido } from '@/app/dashboard/recorrido/actions'
 import type { DestinoSubida } from '@/lib/almacenamiento/tipos'
+import { procesarCola } from '@/lib/local/cola'
 import {
   BACKOFF_MS,
   MAX_INTENTOS,
-  procesarCola,
   sincronizarRecorrido,
   type DepsSincronizacion,
 } from '@/lib/local/sincronizacion'
@@ -14,6 +14,8 @@ import type { ResultadoAccion } from '@/lib/tipos'
 const ID = '11111111-1111-4111-8111-111111111111'
 const ID_OBS = '22222222-2222-4222-8222-222222222222'
 const AHORA = 1_700_000_000_000
+const USUARIO = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa'
+const OTRO_USUARIO = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb'
 
 const RESUMEN: ResumenRecorrido = {
   km: 1.2,
@@ -49,7 +51,10 @@ function crearBase(inicial: Inicial) {
   const db: BaseLocal = {
     guardarRecorrido: async (r) => void recorridos.set(r.id, r),
     obtenerRecorrido: async (id) => recorridos.get(id),
-    recorridoEnCurso: async () => [...recorridos.values()].find((r) => r.estado === 'en_curso'),
+    recorridoEnCurso: async (usuarioId) =>
+      [...recorridos.values()].find((r) => r.usuarioId === usuarioId && r.estado === 'en_curso'),
+    listarRecorridos: async (usuarioId) =>
+      [...recorridos.values()].filter((r) => r.usuarioId === usuarioId),
     guardarPunto: async (p) => void puntos.push(p),
     listarPuntos: async (id) => puntos.filter((p) => p.recorridoId === id),
     guardarObservacion: async (o) => void observaciones.set(o.id, o),
@@ -71,6 +76,7 @@ type Base = ReturnType<typeof crearBase>
 function recorrido(estado: RecorridoLocal['estado'] = 'finalizado'): RecorridoLocal {
   return {
     id: ID,
+    usuarioId: USUARIO,
     inicio: '2026-09-03T10:00:00.000Z',
     fin: '2026-09-03T10:30:00.000Z',
     estado,
@@ -114,7 +120,7 @@ type DepsEspiadas = DepsSincronizacion & {
 
 function crearDeps(
   base: Base,
-  respuesta: ResultadoAccion<ResumenRecorrido> = { ok: true, data: RESUMEN },
+  respuesta: ResultadoRecorrido = { ok: true, data: RESUMEN },
   orden: string[] = [],
 ): DepsEspiadas {
   return {
@@ -272,6 +278,40 @@ describe('sincronizarRecorrido', () => {
     expect(base.recorridos.get(ID)?.estado).toBe('error')
   })
 
+  test('un error definitivo marca el recorrido en error y lo saca de la cola sin reintentar', async () => {
+    const base = crearBase({
+      recorridos: [recorrido()],
+      puntos: puntosDe(),
+      cola: [{ recorridoId: ID, intentos: 0, proximoIntento: 0 }],
+    })
+    const deps = crearDeps(base, {
+      ok: false,
+      error: 'Ese recorrido ya fue registrado por otra persona.',
+      definitivo: true,
+    })
+
+    const resultado = await sincronizarRecorrido(ID, deps)
+
+    expect(resultado.ok).toBe(false)
+    expect(base.cola.size).toBe(0)
+    expect(base.recorridos.get(ID)?.estado).toBe('error')
+    expect(base.recorridos.get(ID)?.ultimoError).toMatch(/otra persona/i)
+  })
+
+  test('manda el id de la observación al preparar la subida', async () => {
+    const base = crearBase({
+      recorridos: [recorrido()],
+      puntos: puntosDe(),
+      observaciones: [observacionConFoto()],
+      cola: [{ recorridoId: ID, intentos: 0, proximoIntento: 0 }],
+    })
+    const deps = crearDeps(base)
+
+    await sincronizarRecorrido(ID, deps)
+
+    expect(deps.prepararSubida).toHaveBeenCalledWith(ID, 'foto.jpg', 'image/jpeg', ID_OBS)
+  })
+
   test('si el recorrido ya no está en el dispositivo se saca de la cola', async () => {
     const base = crearBase({ cola: [{ recorridoId: ID, intentos: 0, proximoIntento: 0 }] })
     const deps = crearDeps(base)
@@ -284,7 +324,7 @@ describe('sincronizarRecorrido', () => {
 })
 
 describe('procesarCola', () => {
-  test('procesa solo los items vencidos y devuelve el último resumen', async () => {
+  test('procesa solo los items vencidos y devuelve el resumen por recorrido', async () => {
     const otro: RecorridoLocal = { ...recorrido(), id: 'otro' }
     const base = crearBase({
       recorridos: [recorrido(), otro],
@@ -296,23 +336,54 @@ describe('procesarCola', () => {
     })
     const deps = crearDeps(base)
 
-    const resultado = await procesarCola(deps)
+    const resultado = await procesarCola(deps, USUARIO)
 
     expect(deps.finalizarRecorrido).toHaveBeenCalledTimes(1)
-    expect(resultado).toEqual({ procesados: 1, pendientes: 1, ultimoResumen: RESUMEN })
+    expect(resultado).toEqual({ procesados: 1, pendientes: 1, resumenes: { [ID]: RESUMEN } })
   })
 
-  test('ignora los items que agotaron los intentos', async () => {
+  test('los items agotados no se procesan, se marcan en error y no cuentan como pendientes', async () => {
     const base = crearBase({
       recorridos: [recorrido()],
       puntos: puntosDe(),
-      cola: [{ recorridoId: ID, intentos: MAX_INTENTOS, proximoIntento: 0 }],
+      cola: [{ recorridoId: ID, intentos: MAX_INTENTOS, proximoIntento: 0, ultimoError: 'falló' }],
     })
     const deps = crearDeps(base)
 
-    const resultado = await procesarCola(deps)
+    const resultado = await procesarCola(deps, USUARIO)
 
     expect(deps.finalizarRecorrido).not.toHaveBeenCalled()
     expect(resultado.procesados).toBe(0)
+    expect(resultado.pendientes).toBe(0)
+    expect(base.recorridos.get(ID)?.estado).toBe('error')
+    expect(base.recorridos.get(ID)?.ultimoError).toBe('falló')
+  })
+
+  test('no toca los recorridos de otro usuario', async () => {
+    const ajeno: RecorridoLocal = { ...recorrido(), id: 'ajeno', usuarioId: OTRO_USUARIO }
+    const base = crearBase({
+      recorridos: [ajeno],
+      puntos: puntosDe('ajeno'),
+      cola: [{ recorridoId: 'ajeno', intentos: 0, proximoIntento: 0 }],
+    })
+    const deps = crearDeps(base)
+
+    const resultado = await procesarCola(deps, USUARIO)
+
+    expect(deps.finalizarRecorrido).not.toHaveBeenCalled()
+    expect(resultado).toEqual({ procesados: 0, pendientes: 0, resumenes: {} })
+    expect(base.recorridos.get('ajeno')?.estado).toBe('finalizado')
+    expect(base.cola.size).toBe(1)
+  })
+
+  test('reencola un recorrido finalizado del usuario que perdió su item de cola', async () => {
+    const base = crearBase({ recorridos: [recorrido()], puntos: puntosDe(), cola: [] })
+    const deps = crearDeps(base)
+
+    const resultado = await procesarCola(deps, USUARIO)
+
+    expect(deps.finalizarRecorrido).toHaveBeenCalledTimes(1)
+    expect(resultado.procesados).toBe(1)
+    expect(base.recorridos.get(ID)?.estado).toBe('subido')
   })
 })

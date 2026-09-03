@@ -1,19 +1,29 @@
 /*
- * Service worker de Visiovial Rural. Sin librerías: precache del shell,
- * network-first para navegación y assets de Next, cache-first para las capas
- * GeoJSON, los íconos y las teselas de IGN/OSM.
+ * Service worker de Visiovial Rural. Sin librerías.
+ *
+ * Regla principal: el HTML autenticado NUNCA se cachea. Una navegación se
+ * resuelve siempre contra la red y, si no hay señal, cae en `/offline`, que es
+ * una página estática sin datos de nadie. Así un celular compartido no puede
+ * mostrarle a la persona equivocada el dashboard de otra.
+ *
+ * Los assets de `/_next/*`, las capas GeoJSON, los íconos y las teselas sí se
+ * cachean: no llevan información de sesión.
  */
-const VERSION = 'v1'
+importScripts('/sw-cache.js')
+
+const VERSION = 'v2'
 const CACHE_SHELL = `visiovial-shell-${VERSION}`
 const CACHE_ESTATICO = `visiovial-estatico-${VERSION}`
 const CACHE_NEXT = `visiovial-next-${VERSION}`
 const CACHE_TESELAS = `visiovial-teselas-${VERSION}`
 
 const CACHES_PROPIOS = [CACHE_SHELL, CACHE_ESTATICO, CACHE_NEXT, CACHE_TESELAS]
-const MAX_TESELAS = 300
+const MAX_TESELAS = 1500
+
+const RUTA_OFFLINE = '/offline'
 
 const PRECACHE = [
-  '/dashboard',
+  RUTA_OFFLINE,
   '/manifest.json',
   '/icons/icon-192.png',
   '/icons/icon-512.png',
@@ -24,13 +34,14 @@ const PRECACHE = [
 
 const HOSTS_TESELAS = ['wms.ign.gob.ar', 'tile.openstreetmap.org']
 
+// Sin `skipWaiting()`: el SW nuevo espera a que se cierren las pestañas. Tomar
+// el control en medio de una sesión mezcla chunks de dos builds distintos.
 self.addEventListener('install', (evento) => {
   evento.waitUntil(
     caches
       .open(CACHE_SHELL)
       .then((cache) => cache.addAll(PRECACHE))
-      .catch((error) => console.error('[sw]', error))
-      .then(() => self.skipWaiting()),
+      .catch((error) => console.error('[sw]', error)),
   )
 })
 
@@ -45,13 +56,17 @@ self.addEventListener('activate', (evento) => {
   )
 })
 
-/** Recorta un cache a `max` entradas borrando las más viejas (orden de inserción). */
-async function recortarCache(nombre, max) {
-  const cache = await caches.open(nombre)
-  const claves = await cache.keys()
-  if (claves.length <= max) return
-  await Promise.all(claves.slice(0, claves.length - max).map((clave) => cache.delete(clave)))
+/** Borra todos los caches. Lo dispara la app al cerrar sesión. */
+async function limpiarTodo() {
+  const nombres = await caches.keys()
+  await Promise.all(nombres.map((nombre) => caches.delete(nombre)))
 }
+
+self.addEventListener('message', (evento) => {
+  if (evento.data && evento.data.type === 'LIMPIAR') {
+    evento.waitUntil(limpiarTodo().catch((error) => console.error('[sw]', error)))
+  }
+})
 
 async function cacheFirst(peticion, nombreCache, max) {
   const cache = await caches.open(nombreCache)
@@ -61,20 +76,34 @@ async function cacheFirst(peticion, nombreCache, max) {
   const respuesta = await fetch(peticion)
   if (respuesta && (respuesta.ok || respuesta.type === 'opaque')) {
     await cache.put(peticion, respuesta.clone())
-    if (max) await recortarCache(nombreCache, max)
+    if (max) await self.recortarCache(cache, max)
   }
   return respuesta
 }
 
-async function networkFirst(peticion, nombreCache, alternativa) {
+async function networkFirst(peticion, nombreCache) {
   const cache = await caches.open(nombreCache)
   try {
     const respuesta = await fetch(peticion)
     if (respuesta && respuesta.ok) await cache.put(peticion, respuesta.clone())
     return respuesta
   } catch (error) {
-    const guardada = (await cache.match(peticion)) || (alternativa ? await caches.match(alternativa) : undefined)
+    const guardada = await cache.match(peticion)
     if (guardada) return guardada
+    throw error
+  }
+}
+
+/**
+ * Navegación: siempre red, nunca `cache.put`. Sin señal se devuelve la página
+ * estática de offline; si ni eso está, se propaga el fallo.
+ */
+async function navegacion(peticion) {
+  try {
+    return await fetch(peticion)
+  } catch (error) {
+    const alternativa = await caches.match(RUTA_OFFLINE)
+    if (alternativa) return alternativa
     throw error
   }
 }
@@ -93,13 +122,13 @@ self.addEventListener('fetch', (evento) => {
     return
   }
 
-  if (url.pathname.startsWith('/capas/') || url.pathname.startsWith('/icons/')) {
-    evento.respondWith(cacheFirst(peticion, CACHE_ESTATICO))
+  if (peticion.mode === 'navigate') {
+    evento.respondWith(navegacion(peticion))
     return
   }
 
-  if (peticion.mode === 'navigate') {
-    evento.respondWith(networkFirst(peticion, CACHE_SHELL, '/dashboard'))
+  if (url.pathname.startsWith('/capas/') || url.pathname.startsWith('/icons/')) {
+    evento.respondWith(cacheFirst(peticion, CACHE_ESTATICO))
     return
   }
 

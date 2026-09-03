@@ -2,7 +2,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { crearClienteServidor } from '@/lib/supabase/server'
 import { buscarPartido } from '@/lib/partidos'
-import { signOut } from '@/app/login/actions'
+import { BotonSalir } from '@/components/BotonSalir'
 
 const ENLACES = [
   { href: '/dashboard', etiqueta: 'Inicio' },
@@ -45,11 +45,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
             </p>
           </div>
         )}
-        <form action={signOut}>
-          <button type="submit" className="rounded-lg bg-green-700 px-3 py-2 text-sm">
-            Salir
-          </button>
-        </form>
+        <BotonSalir />
       </header>
       <main className="mx-auto max-w-3xl px-4 py-6">{children}</main>
       <nav

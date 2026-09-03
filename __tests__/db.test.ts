@@ -9,8 +9,10 @@ import {
   guardarPunto,
   guardarRecorrido,
   listarCola,
+  limpiarLocal,
   listarObservaciones,
   listarPuntos,
+  listarRecorridos,
   obtenerItemCola,
   obtenerRecorrido,
   recorridoEnCurso,
@@ -18,9 +20,12 @@ import {
 import type { ObservacionLocal, RecorridoLocal } from '@/lib/local/tipos'
 
 const ID = '11111111-1111-4111-8111-111111111111'
+const USUARIO = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa'
+const OTRO_USUARIO = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb'
 
 const RECORRIDO: RecorridoLocal = {
   id: ID,
+  usuarioId: USUARIO,
   inicio: '2026-09-03T10:00:00.000Z',
   estado: 'en_curso',
   municipio: 'maipu',
@@ -53,12 +58,24 @@ describe('base local', () => {
     await guardarRecorrido(RECORRIDO)
 
     expect(await obtenerRecorrido(ID)).toEqual(RECORRIDO)
-    expect(await recorridoEnCurso()).toEqual(RECORRIDO)
+    expect(await recorridoEnCurso(USUARIO)).toEqual(RECORRIDO)
 
     await cambiarEstadoRecorrido(ID, 'finalizado')
 
     expect((await obtenerRecorrido(ID))?.estado).toBe('finalizado')
-    expect(await recorridoEnCurso()).toBeUndefined()
+    expect(await recorridoEnCurso(USUARIO)).toBeUndefined()
+  })
+
+  test('no devuelve recorridos de otro usuario', async () => {
+    await guardarRecorrido(RECORRIDO)
+    await guardarRecorrido({ ...RECORRIDO, id: 'ajeno', usuarioId: OTRO_USUARIO })
+
+    expect((await listarRecorridos(USUARIO)).map((r) => r.id)).toEqual([ID])
+    expect(await recorridoEnCurso(OTRO_USUARIO)).toEqual({
+      ...RECORRIDO,
+      id: 'ajeno',
+      usuarioId: OTRO_USUARIO,
+    })
   })
 
   test('guarda puntos por recorrido y los devuelve ordenados por tiempo', async () => {
@@ -93,6 +110,20 @@ describe('base local', () => {
     expect(await listarCola()).toHaveLength(1)
 
     await borrarItemCola(ID)
+    expect(await listarCola()).toEqual([])
+  })
+
+  test('limpiarLocal vacía los cuatro stores', async () => {
+    await guardarRecorrido(RECORRIDO)
+    await guardarPunto({ recorridoId: ID, lat: -36.8, lng: -57.8, t: 1, precision: 8 })
+    await guardarObservacion(OBSERVACION)
+    await encolar(ID)
+
+    await limpiarLocal()
+
+    expect(await listarRecorridos(USUARIO)).toEqual([])
+    expect(await listarPuntos(ID)).toEqual([])
+    expect(await listarObservaciones(ID)).toEqual([])
     expect(await listarCola()).toEqual([])
   })
 })

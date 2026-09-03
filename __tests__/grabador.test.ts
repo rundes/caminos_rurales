@@ -27,7 +27,7 @@ describe('grabador', () => {
     expect(grabador.recorridoId).toBe(ID)
     expect(grabador.inicio).toBe(T0)
     expect(grabador.km).toBe(0)
-    expect(grabador.puntosGps).toHaveLength(0)
+    expect(grabador.cantidad).toBe(0)
   })
 
   test('descarta puntos de baja precisión sin cambiar el estado', () => {
@@ -51,7 +51,7 @@ describe('grabador', () => {
     grabador = agregarPunto(grabador, punto(1))
     grabador = agregarPunto(grabador, punto(2))
 
-    expect(grabador.puntosGps).toHaveLength(3)
+    expect(grabador.cantidad).toBe(3)
     expect(grabador.km).toBeGreaterThan(0.02)
     expect(grabador.km).toBeLessThan(0.03)
     expect(grabador.ultimo).toEqual(punto(2))
@@ -66,7 +66,7 @@ describe('grabador', () => {
 
     const reanudado = reanudar(pausado)
     expect(reanudado.estado).toBe('grabando')
-    expect(agregarPunto(reanudado, punto(1)).puntosGps).toHaveLength(2)
+    expect(agregarPunto(reanudado, punto(1)).cantidad).toBe(2)
   })
 
   test('finalizar registra el fin y deja de aceptar puntos', () => {
@@ -78,6 +78,17 @@ describe('grabador', () => {
     expect(duracionMs(grabador, T0 + 999_999)).toBe(60_000)
   })
 
+  test('en pausa descarta el punto sin tocar km ni cantidad', () => {
+    const pausado = pausar(agregarPunto(agregarPunto(iniciar(ID, T0), punto(0)), punto(1)))
+
+    const despues = agregarPunto(pausado, punto(5))
+
+    expect(despues).toBe(pausado)
+    expect(despues.km).toBe(pausado.km)
+    expect(despues.cantidad).toBe(2)
+    expect(despues.ultimo).toEqual(punto(1))
+  })
+
   test('retomar reconstruye kilómetros y último punto desde los puntos guardados', () => {
     const puntos = [punto(0), punto(1), punto(2)]
 
@@ -85,6 +96,7 @@ describe('grabador', () => {
 
     expect(grabador.estado).toBe('grabando')
     expect(grabador.ultimo).toEqual(punto(2))
+    expect(grabador.cantidad).toBe(3)
     expect(grabador.km).toBeCloseTo(agregarPunto(agregarPunto(agregarPunto(iniciar(ID, T0), punto(0)), punto(1)), punto(2)).km, 6)
   })
 

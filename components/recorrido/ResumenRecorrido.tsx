@@ -10,11 +10,13 @@ type Props = {
   km: number
   puntosGps: number
   resumen: Resumen | null
-  pendiente: boolean
+  /** Sin señal el recorrido queda esperando; con señal se está subiendo. */
+  sinConexion: boolean
   onNuevo: () => void
 }
 
 const PENDIENTE = 'Pendiente de subir (sin conexión). Lo enviamos solo cuando vuelva la señal.'
+const SUBIENDO = 'Subiendo…'
 
 function Dato({ etiqueta, valor }: { etiqueta: string; valor: string | number }) {
   return (
@@ -26,7 +28,7 @@ function Dato({ etiqueta, valor }: { etiqueta: string; valor: string | number })
 }
 
 /** Cierre del recorrido: totales locales y, cuando llega, el resumen del servidor. */
-export function ResumenRecorrido({ km, puntosGps, resumen, pendiente, onNuevo }: Props) {
+export function ResumenRecorrido({ km, puntosGps, resumen, sinConexion, onNuevo }: Props) {
   return (
     <section className="flex flex-col gap-4 rounded-2xl bg-white p-5 shadow-sm">
       <h2 className="text-lg font-semibold text-gray-900">Recorrido finalizado</h2>
@@ -56,7 +58,7 @@ export function ResumenRecorrido({ km, puntosGps, resumen, pendiente, onNuevo }:
         </>
       ) : (
         <p role="status" className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">
-          {pendiente ? PENDIENTE : 'Subiendo el recorrido…'}
+          {sinConexion ? PENDIENTE : SUBIENDO}
         </p>
       )}
 
