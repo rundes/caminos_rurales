@@ -50,3 +50,13 @@ Checklist para validar el flujo completo en el proyecto Supabase real:
 - [ ] El dashboard se actualiza con los nuevos datos.
 - [ ] El mapa muestra marcadores y el filtro por tipo de falla funciona.
 - [ ] El popup "Ver evidencia" abre una URL firmada.
+
+## Smoke test de integración
+
+Con `npm run dev` corriendo y `SUPABASE_ACCESS_TOKEN` en el entorno:
+
+```bash
+node scripts/smoke.mjs
+```
+
+Verifica contra el proyecto Supabase real: trigger de perfil, RLS por municipio y rol, políticas de storage, endpoint `/api/procesar-ia` (200/409/401), URLs firmadas y rutas protegidas. Crea y borra sus propios datos de prueba.
