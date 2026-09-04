@@ -20,7 +20,8 @@ export function TerminosForm() {
           className="mt-1 size-6 shrink-0 accent-green-700"
         />
         <span className="text-lg font-medium">
-          Acepto los términos y el uso de mi ubicación y mis fotos para el relevamiento.
+          Acepto los términos y el uso de mi ubicación, mis fotos y los sensores de movimiento del
+          dispositivo (acelerómetro y giroscopio) para estimar el estado del camino.
         </span>
       </label>
 

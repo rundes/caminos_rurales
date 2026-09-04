@@ -1,7 +1,8 @@
 -- Visiovial Rural - Esquema de base de datos (Supabase / PostgreSQL 17)
 -- Estado final: refleja 0001_schema.sql + 0002_storage_por_municipio.sql +
 -- 0003a_tipos_falla.sql + 0003_recorridos.sql + 0004_recorridos_procesado.sql +
--- 0005_fallas_update.sql. Una instalación nueva puede
+-- 0005_fallas_update.sql + 0006a_enums_sensor.sql + 0006_muestras_sensor.sql.
+-- Una instalación nueva puede
 -- correr solo este archivo. La tabla `relevamientos` ya no existe: el flujo
 -- es recorrido GPS -> cobertura de tramos -> puntos e insignias.
 
@@ -21,6 +22,10 @@ create type tipo_falla as enum (
 );
 create type nivel_severidad as enum ('baja', 'media', 'alta');
 create type recorrido_estado as enum ('finalizado', 'descartado');
+-- Calidad estimada de un segmento de 5 s / 100 m a partir de la rugosidad.
+create type calidad_segmento as enum ('sin_dato', 'bueno', 'regular', 'malo', 'intransitable');
+-- Quién originó una observación: la persona o el detector de impactos.
+create type origen_observacion as enum ('manual', 'sensor');
 
 -- 2. TABLA PERFILES (sincronizada con auth.users)
 create table public.perfiles (
@@ -89,7 +94,36 @@ create table public.fallas_deteccion (
   descripcion text,
   url_evidencia_imagen text,
   url_evidencia_video text,
+  -- 'sensor' = la generó el detector de impactos durante el recorrido.
+  origen origen_observacion not null default 'manual',
+  -- Pico de aceleración vertical (m/s²) del impacto que la originó.
+  magnitud numeric,
+  -- Tramo más cercano; lo asigna el servidor al procesar el recorrido.
+  tramo_id text references public.tramos(id) on delete set null,
   created_at timestamp with time zone default now()
+);
+
+-- 7b. TABLA MUESTRAS_SENSOR (un segmento agregado de 5 s o 100 m)
+create table public.muestras_sensor (
+  id uuid primary key default gen_random_uuid(),
+  recorrido_id uuid not null references public.recorridos(id) on delete cascade,
+  -- Lo escribe la app con el usuario autenticado (la política lo exige).
+  usuario_id uuid not null references public.perfiles(id) on delete cascade,
+  -- Tramo más cercano al cierre del segmento; null si no hay ninguno a 40 m.
+  tramo_id text references public.tramos(id) on delete set null,
+  t timestamptz not null,
+  latitud numeric(10, 8) not null,
+  longitud numeric(11, 8) not null,
+  velocidad_kmh numeric not null default 0,
+  rumbo numeric,
+  altitud numeric,
+  rms_vertical numeric not null default 0,
+  pico_vertical numeric not null default 0,
+  frenadas integer not null default 0,
+  laterales integer not null default 0,
+  muestras integer not null default 0,
+  calidad calidad_segmento not null default 'sin_dato',
+  created_at timestamptz not null default now()
 );
 
 -- 8. PUNTOS Y LOGROS
@@ -120,6 +154,10 @@ create index recorridos_sin_procesar_idx on public.recorridos (created_at) where
 create index cobertura_tramo_idx on public.cobertura_tramos (tramo_id);
 create index fallas_recorrido_idx on public.fallas_deteccion (recorrido_id);
 create index fallas_tipo_idx on public.fallas_deteccion (tipo_falla);
+create index fallas_tramo_idx on public.fallas_deteccion (tramo_id);
+create index fallas_origen_idx on public.fallas_deteccion (origen);
+create index muestras_recorrido_idx on public.muestras_sensor (recorrido_id);
+create index muestras_tramo_idx on public.muestras_sensor (tramo_id);
 create index puntos_usuario_idx on public.puntos_eventos (usuario_id);
 create index puntos_municipio_idx on public.puntos_eventos (municipio);
 
@@ -202,6 +240,75 @@ begin
 end;
 $$;
 
+-- Rugosidad estimada por tramo: agrega los segmentos con calidad conocida del
+-- municipio (rms medio ponderado por muestras, velocidad media, calidad
+-- predominante) y cuenta los impactos automáticos asignados al tramo.
+create or replace function public.rugosidad_tramos(p_municipio text)
+returns table (
+  tramo_id text,
+  segmentos int,
+  rms_medio numeric,
+  velocidad_media numeric,
+  impactos int,
+  calidad calidad_segmento
+)
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+#variable_conflict use_column
+begin
+  if p_municipio is distinct from public.municipio_actual() then return; end if;
+
+  return query
+  with seg as (
+    select
+      m.tramo_id as tid,
+      m.rms_vertical as rms,
+      m.velocidad_kmh as vel,
+      greatest(m.muestras, 1) as peso,
+      m.calidad as cal
+    from public.muestras_sensor m
+    join public.tramos tr on tr.id = m.tramo_id
+    where tr.municipio = p_municipio and m.calidad <> 'sin_dato'
+  ),
+  agregado as (
+    select
+      s.tid,
+      count(*)::int as segmentos,
+      round(sum(s.rms * s.peso) / nullif(sum(s.peso), 0), 3) as rms_medio,
+      round(avg(s.vel), 1) as velocidad_media
+    from seg s
+    group by s.tid
+  ),
+  moda as (
+    select distinct on (s.tid) s.tid, s.cal
+    from seg s
+    group by s.tid, s.cal
+    order by s.tid, count(*) desc, s.cal
+  ),
+  impacto as (
+    select f.tramo_id as tid, count(*)::int as impactos
+    from public.fallas_deteccion f
+    join public.tramos tr on tr.id = f.tramo_id
+    where tr.municipio = p_municipio and f.origen = 'sensor'
+    group by f.tramo_id
+  )
+  select
+    a.tid,
+    a.segmentos,
+    a.rms_medio,
+    a.velocidad_media,
+    coalesce(i.impactos, 0),
+    m.cal
+  from agregado a
+  join moda m on m.tid = a.tid
+  left join impacto i on i.tid = a.tid
+  order by a.tid;
+end;
+$$;
+
 -- 12. TRIGGER: crear perfil al registrarse
 -- El formulario de registro envía nombre y municipio_id en options.data.
 create or replace function public.handle_new_user()
@@ -232,6 +339,7 @@ alter table public.tramos enable row level security;
 alter table public.recorridos enable row level security;
 alter table public.cobertura_tramos enable row level security;
 alter table public.fallas_deteccion enable row level security;
+alter table public.muestras_sensor enable row level security;
 alter table public.puntos_eventos enable row level security;
 alter table public.logros enable row level security;
 
@@ -301,6 +409,39 @@ create policy "fallas_update_propio" on public.fallas_deteccion
   for update to authenticated
   using (recorrido_id in (select id from public.recorridos where usuario_id = auth.uid()))
   with check (recorrido_id in (select id from public.recorridos where usuario_id = auth.uid()));
+
+-- Solo se pueden borrar las observaciones automáticas (reprocesar un recorrido
+-- las regenera); las manuales las escribió la persona y no se tocan.
+create policy "fallas_delete_sensor_propio" on public.fallas_deteccion
+  for delete to authenticated
+  using (
+    origen = 'sensor'
+    and recorrido_id in (select id from public.recorridos where usuario_id = auth.uid())
+  );
+
+-- muestras de sensores: lectura por municipio; escritura y borrado del propio.
+create policy "muestras_select" on public.muestras_sensor
+  for select to authenticated
+  using (
+    recorrido_id in (
+      select r.id from public.recorridos r
+      where r.usuario_id = auth.uid() or r.municipio = public.municipio_actual()
+    )
+  );
+
+create policy "muestras_insert_propio" on public.muestras_sensor
+  for insert to authenticated
+  with check (
+    recorrido_id in (select id from public.recorridos where usuario_id = auth.uid())
+    and usuario_id = auth.uid()
+  );
+
+create policy "muestras_delete_propio" on public.muestras_sensor
+  for delete to authenticated
+  using (
+    recorrido_id in (select id from public.recorridos where usuario_id = auth.uid())
+    and usuario_id = auth.uid()
+  );
 
 -- cobertura, puntos y logros: solo lectura; los escribe el servidor con la clave secreta.
 create policy "cobertura_select" on public.cobertura_tramos

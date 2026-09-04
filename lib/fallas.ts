@@ -1,4 +1,4 @@
-import type { PuntoFalla, Severidad, TipoFalla } from './tipos'
+import type { OrigenObservacion, PuntoFalla, Severidad, TipoFalla } from './tipos'
 
 export type FilaFalla = {
   id: string
@@ -10,6 +10,8 @@ export type FilaFalla = {
   url_evidencia_video: string | null
   created_at: string | null
   recorridos: { inicio: string; municipio: string } | null
+  origen: OrigenObservacion
+  magnitud: number | null
 }
 
 export type FiltrosFallas = { tipo?: string; municipio?: string }
@@ -25,6 +27,8 @@ export function aPuntos(filas: readonly FilaFalla[]): PuntoFalla[] {
     url_evidencia_imagen: f.url_evidencia_imagen,
     url_evidencia_video: f.url_evidencia_video,
     municipio: f.recorridos?.municipio ?? 'desconocido',
+    origen: f.origen,
+    magnitud: f.magnitud === null || f.magnitud === undefined ? null : Number(f.magnitud),
   }))
 }
 

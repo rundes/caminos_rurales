@@ -64,3 +64,17 @@
 - [ ] App nativa (o wrapper) para grabación de recorrido en segundo plano; la PWA solo graba con la app abierta en primer plano.
 - [ ] Moderación de observaciones.
 - [ ] Shapefiles/capas UBA (ver fase 6) y edición de geometrías de tramos.
+
+## Fase 11: Sensores
+- [x] Migraciones `0006a_enums_sensor.sql` (enums `calidad_segmento`, `origen_observacion`, aplicada antes que `0006` por la misma restricción que `0003a`) y `0006_muestras_sensor.sql`: tabla `muestras_sensor`, columnas `origen`/`magnitud`/`tramo_id` en `fallas_deteccion`, función `rugosidad_tramos`.
+- [x] `lib/sensores/umbrales.ts`: umbrales calibrables de calidad de segmento, impacto, frenada/lateral y radio de asignación a tramo.
+- [x] Captura cliente: `DeviceMotionEvent`, permiso iOS pedido en el toque de "Iniciar recorrido", calibración de gravedad, agregación por segmento (5 s / 100 m), detección de impactos con debounce.
+- [x] Almacenamiento local en IndexedDB (store de sensores, versión 3) y envío de agregados (`muestras`, `impactos`) en el payload de `finalizarRecorrido`.
+- [x] Servidor: asignación de segmento/impacto al tramo más cercano, inserción de `muestras_sensor`, impactos como `fallas_deteccion` `origen = 'sensor'`, puntos `km_sensor`.
+- [x] Indicador "Sensores activos" / "Sin sensores" durante la grabación.
+- [x] Mapa: toggle "Estado estimado" con tramos coloreados por calidad y marcador distinto para observaciones de origen sensor.
+- [x] Resumen del recorrido: km por calidad, cantidad de impactos.
+- [x] Términos actualizados con el uso de sensores de movimiento.
+
+## Fase 12 (futura)
+- [ ] Cámara: registro de cuadros georreferenciados y clasificación de superficie.

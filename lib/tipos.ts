@@ -14,6 +14,8 @@ export type TipoFalla =
   | 'senalizacion'
   | 'otro'
 
+export type OrigenObservacion = 'manual' | 'sensor'
+
 export type PuntoFalla = {
   id: string
   tipo_falla: TipoFalla
@@ -24,6 +26,8 @@ export type PuntoFalla = {
   url_evidencia_imagen: string | null
   url_evidencia_video: string | null
   municipio: string
+  origen: OrigenObservacion
+  magnitud: number | null
 }
 
 export const ETIQUETA_TIPO_FALLA: Record<TipoFalla, string> = {

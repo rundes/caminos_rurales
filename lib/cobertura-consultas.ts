@@ -1,6 +1,7 @@
 import 'server-only'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { resumirCobertura, type ResumenCobertura } from './cobertura-resumen'
+import type { RugosidadTramo } from './sensores/tipos'
 import type { Database } from './supabase/database.types'
 
 type Cliente = SupabaseClient<Database>
@@ -101,4 +102,32 @@ export async function obtenerTramosConEstado(supabase: Cliente, municipio: strin
     geometria: t.geometria as [number, number][],
     veces: veces.get(t.id) ?? 0,
   }))
+}
+
+/**
+ * Rugosidad estimada por tramo (calidad predominante, rms y velocidad medias,
+ * impactos y segmentos), vía la función SQL `rugosidad_tramos`.
+ */
+export async function obtenerRugosidadTramos(
+  supabase: Cliente,
+  municipio: string,
+): Promise<Record<string, RugosidadTramo>> {
+  const { data, error } = await supabase.rpc('rugosidad_tramos', { p_municipio: municipio })
+
+  if (error) {
+    console.error('[rugosidad]', error.message)
+    return {}
+  }
+
+  const resultado: Record<string, RugosidadTramo> = {}
+  for (const fila of data ?? []) {
+    resultado[fila.tramo_id] = {
+      calidad: fila.calidad,
+      rms: Number(fila.rms_medio),
+      velocidad: Number(fila.velocidad_media),
+      impactos: Number(fila.impactos),
+      segmentos: Number(fila.segmentos),
+    }
+  }
+  return resultado
 }

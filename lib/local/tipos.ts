@@ -1,3 +1,4 @@
+import type { Impacto, MuestraSensor } from '@/lib/sensores/tipos'
 import type { Severidad, TipoFalla } from '@/lib/tipos'
 
 export type EstadoRecorridoLocal =
@@ -31,6 +32,12 @@ export type PuntoLocal = {
   t: number
   precision: number
 }
+
+/** Segmento agregado de sensores, ya asociado a un recorrido. */
+export type MuestraLocal = MuestraSensor & { recorridoId: string }
+
+/** Impacto detectado por el acelerómetro, ya asociado a un recorrido. */
+export type ImpactoLocal = Impacto & { recorridoId: string }
 
 export type EstadoSubida = 'pendiente' | 'subida' | 'error'
 
@@ -76,6 +83,14 @@ export interface BaseLocal {
   listarPuntos(recorridoId: string): Promise<PuntoLocal[]>
   guardarObservacion(observacion: ObservacionLocal): Promise<void>
   listarObservaciones(recorridoId: string): Promise<ObservacionLocal[]>
+  /**
+   * Sensores. Son opcionales para que un doble de test sin sensores siga
+   * cumpliendo el contrato: sin ellos el payload simplemente no lleva muestras.
+   */
+  guardarMuestra?(muestra: MuestraLocal): Promise<void>
+  listarMuestras?(recorridoId: string): Promise<MuestraLocal[]>
+  guardarImpacto?(impacto: ImpactoLocal): Promise<void>
+  listarImpactos?(recorridoId: string): Promise<ImpactoLocal[]>
   encolar(recorridoId: string): Promise<void>
   obtenerItemCola(recorridoId: string): Promise<ItemCola | undefined>
   guardarItemCola(item: ItemCola): Promise<void>

@@ -5,11 +5,15 @@ import {
   cambiarEstadoRecorrido,
   cerrarDb,
   encolar,
+  guardarImpacto,
+  guardarMuestra,
   guardarObservacion,
   guardarPunto,
   guardarRecorrido,
   listarCola,
   limpiarLocal,
+  listarImpactos,
+  listarMuestras,
   listarObservaciones,
   listarPuntos,
   listarRecorridos,
@@ -17,7 +21,7 @@ import {
   obtenerRecorrido,
   recorridoEnCurso,
 } from '@/lib/local/db'
-import type { ObservacionLocal, RecorridoLocal } from '@/lib/local/tipos'
+import type { ImpactoLocal, MuestraLocal, ObservacionLocal, RecorridoLocal } from '@/lib/local/tipos'
 
 const ID = '11111111-1111-4111-8111-111111111111'
 const USUARIO = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa'
@@ -41,6 +45,28 @@ const OBSERVACION: ObservacionLocal = {
   latitud: -36.85,
   longitud: -57.88,
   estadoSubida: 'pendiente',
+}
+
+function muestra(t: number, recorridoId = ID): MuestraLocal {
+  return {
+    recorridoId,
+    t,
+    lat: -36.85,
+    lng: -57.88,
+    velocidadKmh: 40,
+    rumbo: 90,
+    altitud: 12,
+    rmsVertical: 1.5,
+    picoVertical: 4,
+    frenadas: 0,
+    laterales: 0,
+    muestras: 120,
+    calidad: 'regular',
+  }
+}
+
+function impacto(t: number, recorridoId = ID): ImpactoLocal {
+  return { recorridoId, t, lat: -36.85, lng: -57.88, pico: 8.5, velocidadKmh: 40 }
 }
 
 beforeEach(async () => {
@@ -113,10 +139,33 @@ describe('base local', () => {
     expect(await listarCola()).toEqual([])
   })
 
-  test('limpiarLocal vacía los cuatro stores', async () => {
+  test('guarda muestras de sensores por recorrido y las devuelve ordenadas', async () => {
+    await guardarMuestra(muestra(200))
+    await guardarMuestra(muestra(100))
+    await guardarMuestra(muestra(50, 'otro'))
+
+    const muestras = await listarMuestras(ID)
+
+    expect(muestras.map((m) => m.t)).toEqual([100, 200])
+    expect(muestras[0].calidad).toBe('regular')
+    expect(await listarMuestras('otro')).toHaveLength(1)
+  })
+
+  test('guarda impactos por recorrido y los devuelve ordenados', async () => {
+    await guardarImpacto(impacto(300))
+    await guardarImpacto(impacto(100))
+    await guardarImpacto(impacto(200, 'otro'))
+
+    expect((await listarImpactos(ID)).map((i) => i.t)).toEqual([100, 300])
+    expect(await listarImpactos('otro')).toHaveLength(1)
+  })
+
+  test('limpiarLocal vacía todos los stores', async () => {
     await guardarRecorrido(RECORRIDO)
     await guardarPunto({ recorridoId: ID, lat: -36.8, lng: -57.8, t: 1, precision: 8 })
     await guardarObservacion(OBSERVACION)
+    await guardarMuestra(muestra(100))
+    await guardarImpacto(impacto(100))
     await encolar(ID)
 
     await limpiarLocal()
@@ -124,6 +173,8 @@ describe('base local', () => {
     expect(await listarRecorridos(USUARIO)).toEqual([])
     expect(await listarPuntos(ID)).toEqual([])
     expect(await listarObservaciones(ID)).toEqual([])
+    expect(await listarMuestras(ID)).toEqual([])
+    expect(await listarImpactos(ID)).toEqual([])
     expect(await listarCola()).toEqual([])
   })
 })

@@ -91,9 +91,12 @@ export type Database = {
           id: string
           latitud: number
           longitud: number
+          magnitud: number | null
+          origen: Database["public"]["Enums"]["origen_observacion"]
           recorrido_id: string | null
           severidad: Database["public"]["Enums"]["nivel_severidad"]
           tipo_falla: Database["public"]["Enums"]["tipo_falla"]
+          tramo_id: string | null
           url_evidencia_imagen: string | null
           url_evidencia_video: string | null
         }
@@ -103,9 +106,12 @@ export type Database = {
           id?: string
           latitud: number
           longitud: number
+          magnitud?: number | null
+          origen?: Database["public"]["Enums"]["origen_observacion"]
           recorrido_id?: string | null
           severidad: Database["public"]["Enums"]["nivel_severidad"]
           tipo_falla: Database["public"]["Enums"]["tipo_falla"]
+          tramo_id?: string | null
           url_evidencia_imagen?: string | null
           url_evidencia_video?: string | null
         }
@@ -115,9 +121,12 @@ export type Database = {
           id?: string
           latitud?: number
           longitud?: number
+          magnitud?: number | null
+          origen?: Database["public"]["Enums"]["origen_observacion"]
           recorrido_id?: string | null
           severidad?: Database["public"]["Enums"]["nivel_severidad"]
           tipo_falla?: Database["public"]["Enums"]["tipo_falla"]
+          tramo_id?: string | null
           url_evidencia_imagen?: string | null
           url_evidencia_video?: string | null
         }
@@ -127,6 +136,13 @@ export type Database = {
             columns: ["recorrido_id"]
             isOneToOne: false
             referencedRelation: "recorridos"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fallas_deteccion_tramo_id_fkey"
+            columns: ["tramo_id"]
+            isOneToOne: false
+            referencedRelation: "tramos"
             referencedColumns: ["id"]
           },
         ]
@@ -153,6 +169,88 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "logros_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "perfiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      muestras_sensor: {
+        Row: {
+          altitud: number | null
+          calidad: Database["public"]["Enums"]["calidad_segmento"]
+          created_at: string
+          frenadas: number
+          id: string
+          laterales: number
+          latitud: number
+          longitud: number
+          muestras: number
+          pico_vertical: number
+          recorrido_id: string
+          rms_vertical: number
+          rumbo: number | null
+          t: string
+          tramo_id: string | null
+          usuario_id: string
+          velocidad_kmh: number
+        }
+        Insert: {
+          altitud?: number | null
+          calidad?: Database["public"]["Enums"]["calidad_segmento"]
+          created_at?: string
+          frenadas?: number
+          id?: string
+          laterales?: number
+          latitud: number
+          longitud: number
+          muestras?: number
+          pico_vertical?: number
+          recorrido_id: string
+          rms_vertical?: number
+          rumbo?: number | null
+          t: string
+          tramo_id?: string | null
+          usuario_id: string
+          velocidad_kmh?: number
+        }
+        Update: {
+          altitud?: number | null
+          calidad?: Database["public"]["Enums"]["calidad_segmento"]
+          created_at?: string
+          frenadas?: number
+          id?: string
+          laterales?: number
+          latitud?: number
+          longitud?: number
+          muestras?: number
+          pico_vertical?: number
+          recorrido_id?: string
+          rms_vertical?: number
+          rumbo?: number | null
+          t?: string
+          tramo_id?: string | null
+          usuario_id?: string
+          velocidad_kmh?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "muestras_sensor_recorrido_id_fkey"
+            columns: ["recorrido_id"]
+            isOneToOne: false
+            referencedRelation: "recorridos"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "muestras_sensor_tramo_id_fkey"
+            columns: ["tramo_id"]
+            isOneToOne: false
+            referencedRelation: "tramos"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "muestras_sensor_usuario_id_fkey"
             columns: ["usuario_id"]
             isOneToOne: false
             referencedRelation: "perfiles"
@@ -338,11 +436,29 @@ export type Database = {
         Args: never
         Returns: Database["public"]["Enums"]["rol_usuario"]
       }
+      rugosidad_tramos: {
+        Args: { p_municipio: string }
+        Returns: {
+          calidad: Database["public"]["Enums"]["calidad_segmento"]
+          impactos: number
+          rms_medio: number
+          segmentos: number
+          tramo_id: string
+          velocidad_media: number
+        }[]
+      }
     }
     Enums: {
+      calidad_segmento:
+        | "sin_dato"
+        | "bueno"
+        | "regular"
+        | "malo"
+        | "intransitable"
       estado_camino: "bueno" | "regular" | "malo" | "intransitable"
       nivel_severidad: "baja" | "media" | "alta"
       origen_datos: "app_sensor" | "camara_dashcam" | "formulario"
+      origen_observacion: "manual" | "sensor"
       recorrido_estado: "finalizado" | "descartado"
       rol_usuario: "productor" | "municipio" | "auditor"
       tipo_falla:
@@ -481,9 +597,17 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
+      calidad_segmento: [
+        "sin_dato",
+        "bueno",
+        "regular",
+        "malo",
+        "intransitable",
+      ],
       estado_camino: ["bueno", "regular", "malo", "intransitable"],
       nivel_severidad: ["baja", "media", "alta"],
       origen_datos: ["app_sensor", "camara_dashcam", "formulario"],
+      origen_observacion: ["manual", "sensor"],
       recorrido_estado: ["finalizado", "descartado"],
       rol_usuario: ["productor", "municipio", "auditor"],
       tipo_falla: [

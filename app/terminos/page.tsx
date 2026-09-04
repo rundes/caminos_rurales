@@ -14,6 +14,11 @@ const PUNTOS = [
       'Para adjuntar evidencia a una observación la app te pide acceso a la cámara o a la galería. Las fotos y videos que elijas se suben al servidor junto con la ubicación de la observación. No accedemos a ninguna otra foto de tu teléfono.',
   },
   {
+    titulo: 'Sensores de movimiento',
+    texto:
+      'Durante un recorrido la app usa los sensores de movimiento del dispositivo (acelerómetro y giroscopio) para estimar el estado del camino: cuánto vibra el vehículo y si hay baches o badenes. Se guarda un resumen cada pocos segundos, no las mediciones crudas. Si el celular no tiene sensores o no das el permiso, el recorrido se graba igual.',
+  },
+  {
     titulo: 'Quién ve tus datos',
     texto:
       'Tus recorridos, observaciones, evidencia, puntos e insignias son visibles para las demás personas usuarias de tu mismo municipio y para el equipo municipal. No se publican fuera del municipio ni se venden a terceros.',

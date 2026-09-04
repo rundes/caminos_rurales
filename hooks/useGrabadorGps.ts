@@ -38,7 +38,15 @@ const ERRORES_GPS: Record<number, string> = {
   3: 'El GPS está tardando demasiado. Seguimos intentando.',
 }
 
-export type OpcionesGrabador = { usuarioId: string; municipio: string }
+export type OpcionesGrabador = {
+  usuarioId: string
+  municipio: string
+  /**
+   * Se llama con cada punto aceptado por el filtro (y con la posición cruda,
+   * que trae velocidad, rumbo y altitud). Lo usa la captura de sensores.
+   */
+  onPunto?: (punto: PuntoGps, posicion?: GeolocationPosition) => void
+}
 
 export type ControlGrabador = {
   estado: Grabador
@@ -66,13 +74,19 @@ function mensajeGps(error: GeolocationPositionError): string {
  * `ultimo`, `cantidad`, `precision`), así un recorrido largo no re-renderiza la
  * pantalla entera con cada punto.
  */
-export function useGrabadorGps({ usuarioId, municipio }: OpcionesGrabador): ControlGrabador {
+export function useGrabadorGps({ usuarioId, municipio, onPunto }: OpcionesGrabador): ControlGrabador {
   const [estado, setEstado] = useState<Grabador>(GRABADOR_INICIAL)
   const [error, setError] = useState<string | null>(null)
   const [precision, setPrecision] = useState<number | null>(null)
   const actual = useRef<Grabador>(GRABADOR_INICIAL)
   const puntos = useRef<PuntoGps[]>([])
   const ultimaPrecision = useRef(0)
+  // En un `ref` para que cambiar el callback no reabra el `watchPosition`.
+  const alPuntoExterno = useRef(onPunto)
+
+  useEffect(() => {
+    alPuntoExterno.current = onPunto
+  }, [onPunto])
 
   const alFallarGuardado = useCallback(() => setError(ERROR_SIN_ESPACIO), [])
   const cola = useColaPuntos(alFallarGuardado)
@@ -118,6 +132,7 @@ export function useGrabadorGps({ usuarioId, municipio }: OpcionesGrabador): Cont
       puntos.current.push(punto)
       aplicar(siguiente)
       cola.encolar(punto, siguiente.recorridoId)
+      alPuntoExterno.current?.(punto, posicion)
     }
 
     const id = geolocalizacion.watchPosition(alPunto, (fallo) => setError(mensajeGps(fallo)), OPCIONES_GPS)

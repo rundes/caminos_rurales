@@ -12,6 +12,8 @@ const filas = [
     url_evidencia_video: 'u/r/a.webm',
     created_at: '2026-01-01T00:00:00Z',
     recorridos: { inicio: '2026-01-02T00:00:00Z', municipio: 'carlos-tejedor' },
+    origen: 'manual' as const,
+    magnitud: null,
   },
   {
     id: 'f2',
@@ -23,6 +25,8 @@ const filas = [
     url_evidencia_video: null,
     created_at: '2026-01-01T00:00:00Z',
     recorridos: null,
+    origen: 'sensor' as const,
+    magnitud: 7.4,
   },
 ]
 
@@ -37,6 +41,14 @@ describe('aPuntos', () => {
     const puntos = aPuntos(filas)
     expect(puntos[0].url_evidencia_video).toBe('u/r/a.webm')
     expect(puntos[1].url_evidencia_video).toBeNull()
+  })
+
+  test('mapea origen y magnitud', () => {
+    const puntos = aPuntos(filas)
+    expect(puntos[0].origen).toBe('manual')
+    expect(puntos[0].magnitud).toBeNull()
+    expect(puntos[1].origen).toBe('sensor')
+    expect(puntos[1].magnitud).toBe(7.4)
   })
 })
 

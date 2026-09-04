@@ -2,7 +2,9 @@ import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
 import type {
   BaseLocal,
   EstadoRecorridoLocal,
+  ImpactoLocal,
   ItemCola,
+  MuestraLocal,
   ObservacionLocal,
   PuntoLocal,
   RecorridoLocal,
@@ -13,8 +15,10 @@ export const NOMBRE_DB = 'visiovial'
  * v2 agrega el índice `usuarioId` en `recorridos`. Los registros de la v1 no
  * tienen ese campo: quedan fuera del índice y por lo tanto se tratan como
  * ajenos (nunca se procesan ni se suben con la sesión actual).
+ *
+ * v3 agrega los stores `muestras` e `impactos` de la captura por sensores.
  */
-export const VERSION_DB = 2
+export const VERSION_DB = 3
 
 const ERROR_SIN_INDEXEDDB = 'Este navegador no puede guardar el recorrido en el dispositivo.'
 
@@ -23,12 +27,14 @@ interface EsquemaVisiovial extends DBSchema {
   puntos: { key: number; value: PuntoLocal; indexes: { recorridoId: string } }
   observaciones: { key: string; value: ObservacionLocal; indexes: { recorridoId: string } }
   cola: { key: string; value: ItemCola }
+  muestras: { key: number; value: MuestraLocal; indexes: { recorridoId: string } }
+  impactos: { key: number; value: ImpactoLocal; indexes: { recorridoId: string } }
 }
 
 export type DbVisiovial = IDBPDatabase<EsquemaVisiovial>
 
 /** Stores que se vacían al cerrar sesión. */
-const STORES = ['recorridos', 'puntos', 'observaciones', 'cola'] as const
+const STORES = ['recorridos', 'puntos', 'observaciones', 'cola', 'muestras', 'impactos'] as const
 
 let conexion: Promise<DbVisiovial> | null = null
 
@@ -56,6 +62,10 @@ export function abrirDb(): Promise<DbVisiovial> {
             ? db.createObjectStore('recorridos', { keyPath: 'id' })
             : tx.objectStore('recorridos')
         if (!recorridos.indexNames.contains('usuarioId')) recorridos.createIndex('usuarioId', 'usuarioId')
+        if (anterior < 3) {
+          db.createObjectStore('muestras', { autoIncrement: true }).createIndex('recorridoId', 'recorridoId')
+          db.createObjectStore('impactos', { autoIncrement: true }).createIndex('recorridoId', 'recorridoId')
+        }
       },
       // Otra pestaña quiere migrar: cerramos para no bloquearla.
       blocking(_anterior, _nueva, evento) {
@@ -89,7 +99,7 @@ export async function cerrarDb(): Promise<void> {
   }
 }
 
-/** Vacía los cuatro stores locales. Se usa al cerrar sesión. */
+/** Vacía todos los stores locales. Se usa al cerrar sesión. */
 export async function limpiarLocal(): Promise<void> {
   const db = await abrirDb()
   const tx = db.transaction(STORES, 'readwrite')
@@ -146,6 +156,30 @@ export async function listarObservaciones(recorridoId: string): Promise<Observac
   return db.getAllFromIndex('observaciones', 'recorridoId', recorridoId)
 }
 
+export async function guardarMuestra(muestra: MuestraLocal): Promise<void> {
+  const db = await abrirDb()
+  await db.add('muestras', muestra)
+}
+
+/** Segmentos de sensores de un recorrido, en orden cronológico. */
+export async function listarMuestras(recorridoId: string): Promise<MuestraLocal[]> {
+  const db = await abrirDb()
+  const muestras = await db.getAllFromIndex('muestras', 'recorridoId', recorridoId)
+  return muestras.sort((a, b) => a.t - b.t)
+}
+
+export async function guardarImpacto(impacto: ImpactoLocal): Promise<void> {
+  const db = await abrirDb()
+  await db.add('impactos', impacto)
+}
+
+/** Impactos detectados en un recorrido, en orden cronológico. */
+export async function listarImpactos(recorridoId: string): Promise<ImpactoLocal[]> {
+  const db = await abrirDb()
+  const impactos = await db.getAllFromIndex('impactos', 'recorridoId', recorridoId)
+  return impactos.sort((a, b) => a.t - b.t)
+}
+
 /** Encola un recorrido para subir. Si ya estaba encolado no reinicia sus intentos. */
 export async function encolar(recorridoId: string): Promise<void> {
   const db = await abrirDb()
@@ -184,6 +218,10 @@ export const baseLocal: BaseLocal = {
   listarPuntos,
   guardarObservacion,
   listarObservaciones,
+  guardarMuestra,
+  listarMuestras,
+  guardarImpacto,
+  listarImpactos,
   encolar,
   obtenerItemCola,
   guardarItemCola,

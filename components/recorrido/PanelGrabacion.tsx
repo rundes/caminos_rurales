@@ -3,11 +3,19 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { Boton } from '@/components/Boton'
 import type { CapasMunicipio as CapasMunicipioTipo } from '@/lib/capas'
+import type { EstadoSensores } from '@/hooks/useSensores'
 import type { Grabador } from '@/lib/local/grabador'
 import { simplificar, type PuntoGps } from '@/lib/track'
 import { formatearKm, formatearPrecision } from './formato'
 import { MapaRecorridoCliente } from './MapaRecorridoCliente'
 import { Reloj } from './Reloj'
+
+export type EstadoPanelSensores = {
+  estado: EstadoSensores
+  impactos: number
+  /** Impactos recientes, para los marcadores efímeros del mapa. */
+  posiciones: readonly [number, number][]
+}
 
 type Props = {
   estado: Grabador
@@ -16,6 +24,7 @@ type Props = {
   centro: [number, number]
   capas: CapasMunicipioTipo | null
   error: string | null
+  sensores: EstadoPanelSensores
   onObservacion: () => void
   onPausar: () => void
   onReanudar: () => void
@@ -26,6 +35,30 @@ type Props = {
 const TOLERANCIA_DIBUJO_M = 15
 /** La traza se recalcula cada tantos puntos aceptados, no en cada punto. */
 const PUNTOS_POR_REDIBUJO = 50
+
+/** Por qué no hay sensores, en palabras que sirvan a quien está manejando. */
+const MOTIVO_SIN_SENSORES: Record<EstadoSensores, string | null> = {
+  activo: null,
+  calibrando: null,
+  inactivo: 'todavía no arrancaron',
+  sin_permiso: 'sin permiso de movimiento',
+  no_disponible: 'este dispositivo no los tiene',
+}
+
+/** Estado de la captura por sensores, con el motivo cuando no está activa. */
+function ChipSensores({ estado }: { estado: EstadoSensores }) {
+  if (estado === 'activo') {
+    return <span className="rounded-full bg-green-100 px-3 py-1 text-green-800">Sensores activos</span>
+  }
+  if (estado === 'calibrando') {
+    return <span className="rounded-full bg-amber-100 px-3 py-1 text-amber-900">Calibrando…</span>
+  }
+  return (
+    <span className="rounded-full bg-gray-100 px-3 py-1 text-gray-700">
+      Sin sensores: {MOTIVO_SIN_SENSORES[estado]}
+    </span>
+  )
+}
 
 function Metrica({ etiqueta, valor, vivo = false }: { etiqueta: string; valor: ReactNode; vivo?: boolean }) {
   return (
@@ -48,6 +81,7 @@ export function PanelGrabacion({
   centro,
   capas,
   error,
+  sensores,
   onObservacion,
   onPausar,
   onReanudar,
@@ -78,6 +112,7 @@ export function PanelGrabacion({
         posicion={posicion}
         capas={capas}
         seguir={seguir}
+        impactos={sensores.posiciones}
         onArrastrar={() => setSeguir(false)}
       />
 
@@ -97,6 +132,13 @@ export function PanelGrabacion({
           valor={<Reloj inicio={estado.inicio} fin={estado.fin} activo={grabando} />}
         />
         <Metrica etiqueta="precisión GPS" valor={formatearPrecision(precision)} />
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-white p-3 text-sm shadow-sm">
+        <ChipSensores estado={sensores.estado} />
+        <span className="font-semibold text-gray-700" aria-label="impactos detectados">
+          {sensores.impactos} impacto(s)
+        </span>
       </div>
 
       {!grabando && (

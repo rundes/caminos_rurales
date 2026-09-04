@@ -18,6 +18,9 @@ vi.mock('@/hooks/useSincronizacion', () => ({ useSincronizacion: vi.fn() }))
 vi.mock('@/lib/local/db', () => ({
   recorridoEnCurso: vi.fn(async () => undefined),
   guardarObservacion: vi.fn(async () => {}),
+  // Los usa `useSensores`, que corre de verdad dentro de la vista.
+  guardarMuestra: vi.fn(async () => {}),
+  guardarImpacto: vi.fn(async () => {}),
 }))
 vi.mock('@/lib/local/cierre', () => ({ cerrarRecorrido: vi.fn(async () => ({ ok: true })) }))
 
@@ -38,6 +41,8 @@ const RESUMEN: Resumen = {
   puntos: 30,
   insignias: [],
   coberturaMunicipio: 0.2,
+  kmPorCalidad: { sin_dato: 0, bueno: 0, regular: 0, malo: 0, intransitable: 0 },
+  impactos: 0,
 }
 
 function punto(indice: number): PuntoGps {

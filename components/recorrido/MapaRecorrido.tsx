@@ -14,6 +14,8 @@ type Props = {
   posicion: Posicion | null
   capas?: CapasMunicipioTipo | null
   seguir?: boolean
+  /** Impactos recientes detectados por los sensores, para marcarlos en vivo. */
+  impactos?: readonly Posicion[]
   /** Se llama cuando la persona arrastra el mapa: corta el seguimiento. */
   onArrastrar?: () => void
 }
@@ -23,6 +25,8 @@ const COLOR_TRACK = '#166534'
 const PESO_TRACK = 5
 const COLOR_POSICION = '#2563eb'
 const RADIO_POSICION = 8
+const COLOR_IMPACTO = '#dc2626'
+const RADIO_IMPACTO = 4
 
 /** Recentra el mapa en la posición actual mientras el seguimiento esté activo. */
 function Seguidor({ posicion, seguir }: { posicion: Posicion | null; seguir: boolean }) {
@@ -45,7 +49,15 @@ function DetectorArrastre({ onArrastrar }: { onArrastrar?: () => void }) {
 }
 
 /** Mapa en vivo del recorrido: base IGN, capas del municipio, traza y posición. */
-export function MapaRecorrido({ centro, track, posicion, capas, seguir = true, onArrastrar }: Props) {
+export function MapaRecorrido({
+  centro,
+  track,
+  posicion,
+  capas,
+  seguir = true,
+  impactos = [],
+  onArrastrar,
+}: Props) {
   return (
     <MapContainer
       center={posicion ?? centro}
@@ -64,6 +76,14 @@ export function MapaRecorrido({ centro, track, posicion, capas, seguir = true, o
       {track.length > 1 && (
         <Polyline positions={track} pathOptions={{ color: COLOR_TRACK, weight: PESO_TRACK }} />
       )}
+      {impactos.map(([lat, lng]) => (
+        <CircleMarker
+          key={`${lat},${lng}`}
+          center={[lat, lng]}
+          radius={RADIO_IMPACTO}
+          pathOptions={{ color: COLOR_IMPACTO, fillColor: COLOR_IMPACTO, fillOpacity: 0.8 }}
+        />
+      ))}
       {posicion && (
         <CircleMarker
           center={posicion}

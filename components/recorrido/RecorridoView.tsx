@@ -1,13 +1,15 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useEnLinea } from '@/hooks/useEnLinea'
 import { useGrabadorGps } from '@/hooks/useGrabadorGps'
+import { useSensores, type ControlSensores } from '@/hooks/useSensores'
 import { useSincronizacion } from '@/hooks/useSincronizacion'
 import type { CapasMunicipio as CapasMunicipioTipo } from '@/lib/capas'
 import { cerrarRecorrido } from '@/lib/local/cierre'
 import { guardarObservacion, recorridoEnCurso } from '@/lib/local/db'
 import type { RecorridoLocal } from '@/lib/local/tipos'
+import type { Impacto } from '@/lib/sensores/tipos'
 import type { PuntoGps } from '@/lib/track'
 import { ModalObservacion } from './ModalObservacion'
 import { ObservacionForm, type NuevaObservacion } from './ObservacionForm'
@@ -30,6 +32,9 @@ type Cerrado = { recorridoId: string; km: number; puntosGps: number }
 const ERROR_LOCAL = 'No pudimos leer los recorridos guardados en este dispositivo.'
 const ERROR_ACCION = 'No pudimos completar la acción en este dispositivo.'
 
+/** Impactos que se dibujan en el mapa durante la grabación. */
+const MAX_MARCADORES_IMPACTO = 20
+
 /** Centro del municipio cuando hay límites; si no, el centro del partido. */
 function centroInicial(centro: [number, number], limites: LimitesBounds | null): [number, number] {
   if (!limites) return centro
@@ -38,7 +43,32 @@ function centroInicial(centro: [number, number], limites: LimitesBounds | null):
 }
 
 export function RecorridoView({ usuarioId, municipio, capas, limites, centro }: Props) {
-  const grabador = useGrabadorGps({ usuarioId, municipio })
+  const [marcadores, setMarcadores] = useState<readonly [number, number][]>([])
+
+  // El grabador y los sensores se necesitan mutuamente (el hook de sensores
+  // depende del recorrido que abre el grabador, y el grabador le pasa cada
+  // punto). El `ref` corta ese ciclo sin reabrir el `watchPosition`.
+  const registrarGps = useRef<ControlSensores['registrarGps'] | null>(null)
+  const alPunto = useCallback(
+    (punto: PuntoGps, posicion?: GeolocationPosition) => registrarGps.current?.(punto, posicion),
+    [],
+  )
+
+  const grabador = useGrabadorGps({ usuarioId, municipio, onPunto: alPunto })
+  const alImpacto = useCallback((impacto: Impacto) => {
+    setMarcadores((previos) =>
+      [...previos, [impacto.lat, impacto.lng] as [number, number]].slice(-MAX_MARCADORES_IMPACTO),
+    )
+  }, [])
+  const sensores = useSensores({
+    recorridoId: grabador.estado.recorridoId,
+    activo: grabador.estado.estado === 'grabando',
+    onImpacto: alImpacto,
+  })
+  useEffect(() => {
+    registrarGps.current = sensores.registrarGps
+  }, [sensores.registrarGps])
+
   const { pendientes, resumenes, sincronizar } = useSincronizacion(usuarioId)
   const enLinea = useEnLinea()
 
@@ -65,19 +95,29 @@ export function RecorridoView({ usuarioId, municipio, capas, limites, centro }: 
     })
   }, [])
 
+  const { solicitarPermiso } = sensores
+
   const iniciar = useCallback(async () => {
+    // iOS solo concede el permiso de movimiento si se pide dentro del gesto:
+    // va antes de cualquier `await`. Si lo rechazan, el recorrido sigue igual.
+    const permiso = solicitarPermiso()
     setCerrado(null)
     setErrorLocal(null)
     setSinTerminar(null)
+    setMarcadores([])
+    await permiso
     await grabador.iniciar()
-  }, [grabador])
+  }, [grabador, solicitarPermiso])
 
   const continuar = useCallback(async () => {
     if (!sinTerminar) return
+    const permiso = solicitarPermiso()
     const id = sinTerminar.id
     setSinTerminar(null)
+    setMarcadores([])
+    await permiso
     await grabador.retomar(id)
-  }, [grabador, sinTerminar])
+  }, [grabador, sinTerminar, solicitarPermiso])
 
   const cerrarPendiente = useCallback(async () => {
     if (!sinTerminar) return
@@ -161,6 +201,11 @@ export function RecorridoView({ usuarioId, municipio, capas, limites, centro }: 
             centro={centroInicial(centro, limites)}
             capas={capas}
             error={grabador.error ?? errorLocal}
+            sensores={{
+              estado: sensores.estado,
+              impactos: sensores.impactos,
+              posiciones: marcadores,
+            }}
             onObservacion={abrirObservacion}
             onPausar={grabador.pausar}
             onReanudar={grabador.reanudar}
