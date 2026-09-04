@@ -31,6 +31,23 @@ Next.js 16 (App Router), TypeScript, Tailwind CSS 4, Supabase (Auth, Postgres, S
 - Sin señal, el track y las observaciones quedan en IndexedDB y se suben cuando vuelve la conexión (reintentos con backoff).
 - El primer ingreso exige aceptar los términos (`perfiles.acepto_terminos_at`); sin aceptarlos no se accede al resto de la app.
 
+## Sensores del celular
+
+Durante el recorrido, además del GPS, la app usa el acelerómetro y giroscopio del celular (`DeviceMotionEvent`) para estimar el estado del camino:
+
+- **Qué se captura**: aceleración vertical (relativa al vehículo, independiente de cómo esté montado el celular gracias a la estimación del vector gravedad), velocidad, rumbo y altitud. Se agrega en segmentos de 5 s o 100 m (lo que ocurra primero), no se guardan datos crudos. Los impactos (picos de aceleración vertical) se registran como observaciones automáticas `tipo_falla = 'bache'`, `origen = 'sensor'`.
+- **Umbrales actuales** (calibrables en `lib/sensores/umbrales.ts`):
+  - Calidad del segmento por `rms_vertical` (a ≥ 15 km/h): `bueno` < 1.0 m/s², `regular` < 2.0 m/s², `malo` < 3.5 m/s², `intransitable` ≥ 3.5 m/s².
+  - Impacto: pico de `|az|` > 6 m/s² con debounce de 1.5 s; severidad baja < 9, media < 13, alta ≥ 13 m/s².
+  - Frenada brusca: aceleración longitudinal < -3 m/s². Maniobra lateral: > 3 m/s² en valor absoluto (por ahora estos dos no se agregan en el resumen ni en el mapa; quedan en 0 hasta que se sumen a la UI).
+- **Permiso iOS**: `DeviceMotionEvent.requestPermission()` se pide en el mismo toque de "Iniciar recorrido" (iOS 13+ lo exige). Sin permiso, sin sensor compatible o en escritorio, el recorrido sigue grabando GPS normalmente, sin muestras de sensor.
+- **Indicador en pantalla**: durante la grabación se muestra "Sensores activos" (verde) o "Sin sensores" (gris, con el motivo) según haya o no datos de movimiento llegando.
+- **Mapa "Estado estimado"**: toggle en `/dashboard/mapa` que colorea los tramos por calidad predominante (verde bueno, amarillo regular, naranja malo, rojo intransitable, gris sin datos), con tooltip de rugosidad media, velocidad media, impactos y segmentos. Las observaciones de origen sensor tienen un marcador con contorno punteado para distinguirlas de las manuales.
+- **Límites**:
+  - La estimación es **relativa al vehículo y al montaje** del celular, no un valor absoluto de rugosidad.
+  - Frenadas y maniobras laterales se calculan pero todavía no se muestran (quedan en 0 en el resumen y el mapa).
+  - Por debajo de 15 km/h el segmento se marca `sin_dato`: la vibración a esa velocidad no dice nada del estado del camino.
+
 ## Desarrollo
 
 ```bash
@@ -68,6 +85,8 @@ Las migraciones en `supabase/migrations/` se aplican en orden con `scripts/aplic
 4. `0003_recorridos.sql`: reemplaza el flujo de carga de viaje por recorridos GPS: crea `tramos`, `recorridos`, `cobertura_tramos`, `puntos_eventos`, `logros`; agrega `acepto_terminos_at` a `perfiles`; reapunta `fallas_deteccion` a `recorrido_id`; elimina `relevamientos`; agrega las funciones `cobertura_municipio` y `ranking_municipio`.
 5. `0004_recorridos_procesado.sql`: agrega `recorridos.procesado_at`, el sello que hace idempotente el post-procesado de un recorrido (cobertura, puntos, observaciones, logros).
 6. `0005_fallas_update.sql`: agrega la política de update propio sobre `fallas_deteccion` (corregir una observación después de creada).
+7. `0006a_enums_sensor.sql`: crea los enums `calidad_segmento` y `origen_observacion`. Debe aplicarse **antes** que `0006_muestras_sensor.sql`, de la que depende (mismo motivo que `0003a`: un `create type` y su primer uso no pueden ir en la misma transacción).
+8. `0006_muestras_sensor.sql`: crea `muestras_sensor` (segmentos agregados de sensores por recorrido); agrega `origen`, `magnitud` y `tramo_id` a `fallas_deteccion`; agrega la función `rugosidad_tramos`.
 
 ## Capas
 
@@ -122,9 +141,12 @@ Checklist para validar el flujo v2 completo en el proyecto Supabase real:
 - [ ] Login redirige a `/terminos`; aceptar términos habilita el resto de la app.
 - [ ] Se pide permiso de ubicación al iniciar el primer recorrido.
 - [ ] "Iniciar recorrido" graba el track en vivo (mapa, km, tiempo).
+- [ ] Montar el celular en el vehículo → al iniciar el recorrido se pide permiso de movimiento (iOS) y aparece "Sensores activos".
 - [ ] Registrar una observación con foto en ruta.
-- [ ] "Finalizar" muestra un resumen con puntos e insignias obtenidas.
+- [ ] Pasar por un bache → se ve el impacto en el mapa (marcador con contorno punteado) y luego en el resumen del recorrido.
+- [ ] "Finalizar" muestra un resumen con puntos e insignias obtenidas, y los km por calidad estimada.
 - [ ] El dashboard muestra el mapa con tramos cubiertos en verde y pendientes en gris.
+- [ ] Activar el toggle "Estado estimado" en `/dashboard/mapa` → tramos coloreados por calidad de rugosidad.
 - [ ] El ranking del municipio muestra al usuario con sus puntos.
 - [ ] **Probar sin señal**: activar modo avión durante un recorrido, verificar que la grabación local sigue funcionando, volver a conectar y ver el estado "Subiendo…" hasta que se sincroniza.
 

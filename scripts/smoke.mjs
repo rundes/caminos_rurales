@@ -83,6 +83,7 @@ const recorridoIds = []
 const coberturaIds = []
 const puntosIds = []
 const fallasIds = []
+const muestrasIds = []
 
 try {
   // 1. Crear usuario (autoconfirmado) con metadata municipio maipu → trigger crea perfil
@@ -242,6 +243,115 @@ try {
     ok(!obsUpd.error && obsUpd.data?.length === 1, 'update propio de observación (política 0005)', obsUpd.error?.message)
   }
 
+  // 8bis. muestras_sensor: insert propio OK; recorrido_id ajeno → RLS error; usuario_id ajeno → RLS error
+  const muestraBase = {
+    recorrido_id: recorridoId,
+    usuario_id: uid,
+    tramo_id: tramo?.id,
+    t: fin,
+    latitud: -36.99,
+    longitud: -57.9,
+    velocidad_kmh: 40,
+    rms_vertical: 4,
+    pico_vertical: 5,
+    muestras: 10,
+    calidad: 'malo',
+  }
+  const muestraPropia = await maipu.c.from('muestras_sensor').insert(muestraBase).select('id').single()
+  ok(!muestraPropia.error && muestraPropia.data?.id, 'insert muestras_sensor en recorrido propio', muestraPropia.error?.message)
+  if (muestraPropia.data?.id) muestrasIds.push(muestraPropia.data.id)
+
+  const muestraRecorridoAjeno = await maipu.c
+    .from('muestras_sensor')
+    .insert({ ...muestraBase, recorrido_id: recorridoAjeno.data?.id })
+  ok(
+    Boolean(muestraRecorridoAjeno.error),
+    'RLS bloquea insert de muestras_sensor con recorrido_id ajeno',
+    muestraRecorridoAjeno.error?.message,
+  )
+
+  const muestraUsuarioAjeno = await maipu.c.from('muestras_sensor').insert({ ...muestraBase, usuario_id: bahia.id })
+  ok(
+    Boolean(muestraUsuarioAjeno.error),
+    'RLS bloquea insert de muestras_sensor con usuario_id ajeno',
+    muestraUsuarioAjeno.error?.message,
+  )
+
+  // 8ter. rugosidad_tramos: agrega la muestra 'malo' insertada arriba, respeta el municipio del usuario
+  const rugMaipu = await maipu.c.rpc('rugosidad_tramos', { p_municipio: 'maipu' })
+  const filaTramo = rugMaipu.data?.find((f) => f.tramo_id === tramo?.id)
+  ok(
+    !rugMaipu.error && Array.isArray(rugMaipu.data) && rugMaipu.data.length >= 1,
+    'rugosidad_tramos(maipu) devuelve un array (≥ 0 filas)',
+    rugMaipu.error?.message ?? JSON.stringify(rugMaipu.data),
+  )
+  ok(
+    filaTramo?.calidad === 'malo' && filaTramo?.tramo_id === tramo?.id,
+    'rugosidad_tramos(maipu) incluye el tramo de prueba con calidad malo',
+    JSON.stringify(filaTramo),
+  )
+
+  const rugBahia = await bahia.c.rpc('rugosidad_tramos', { p_municipio: 'maipu' })
+  ok(
+    !rugBahia.error && rugBahia.data?.length === 0,
+    'rugosidad_tramos(maipu) devuelve 0 filas para usuario de otro municipio',
+    rugBahia.error?.message ?? JSON.stringify(rugBahia.data),
+  )
+
+  // 8quater. fallas_deteccion.origen: manual no se puede borrar (sin política), sensor sí (fallas_delete_sensor_propio)
+  const fallaManual = await maipu.c
+    .from('fallas_deteccion')
+    .insert({
+      recorrido_id: recorridoId,
+      tipo_falla: 'bache',
+      severidad: 'baja',
+      latitud: -36.99,
+      longitud: -57.9,
+      descripcion: 'smoke manual',
+      origen: 'manual',
+    })
+    .select('id')
+    .single()
+  ok(!fallaManual.error && fallaManual.data?.id, 'insert falla origen manual', fallaManual.error?.message)
+  if (fallaManual.data?.id) fallasIds.push(fallaManual.data.id)
+
+  if (fallaManual.data?.id) {
+    const delManual = await maipu.c.from('fallas_deteccion').delete().eq('id', fallaManual.data.id).select('id')
+    ok(
+      !delManual.error && delManual.data?.length === 0,
+      'usuario NO puede borrar observación origen manual (sin política de delete)',
+      delManual.error?.message ?? JSON.stringify(delManual.data),
+    )
+    const sigueManual = await sql(`select id from public.fallas_deteccion where id = '${fallaManual.data.id}'`)
+    ok(sigueManual.length === 1, 'la observación manual sigue existiendo tras el intento de borrado', JSON.stringify(sigueManual))
+  }
+
+  const fallaSensor = await admin
+    .from('fallas_deteccion')
+    .insert({
+      recorrido_id: recorridoId,
+      tipo_falla: 'bache',
+      severidad: 'media',
+      latitud: -36.99,
+      longitud: -57.9,
+      descripcion: 'smoke sensor',
+      origen: 'sensor',
+      magnitud: 8.2,
+    })
+    .select('id')
+    .single()
+  ok(!fallaSensor.error && fallaSensor.data?.id, 'clave secreta inserta falla origen sensor', fallaSensor.error?.message)
+  if (fallaSensor.data?.id) fallasIds.push(fallaSensor.data.id)
+
+  if (fallaSensor.data?.id) {
+    const delSensor = await maipu.c.from('fallas_deteccion').delete().eq('id', fallaSensor.data.id).select('id')
+    ok(
+      !delSensor.error && delSensor.data?.length === 1,
+      'usuario puede borrar su observación origen sensor (política fallas_delete_sensor_propio)',
+      delSensor.error?.message ?? JSON.stringify(delSensor.data),
+    )
+  }
+
   // 9. Storage: subida propia OK, carpeta ajena bloqueada, lectura limitada al municipio
   const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex')
   ruta = `${uid}/${recorridoId}/smoke.png`
@@ -273,6 +383,7 @@ try {
   // Limpieza: hijos antes que padres, aunque las FK son on delete cascade.
   try {
     if (ruta) await admin.storage.from('evidencia-vial').remove([ruta])
+    for (const id of muestrasIds) await sql(`delete from public.muestras_sensor where id = '${id}'`)
     for (const id of fallasIds) await sql(`delete from public.fallas_deteccion where id = '${id}'`)
     for (const id of puntosIds) await sql(`delete from public.puntos_eventos where id = '${id}'`)
     for (const id of coberturaIds) await sql(`delete from public.cobertura_tramos where id = '${id}'`)
