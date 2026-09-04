@@ -38,49 +38,131 @@ export type Database = {
         }
         Relationships: []
       }
-      fallas_deteccion: {
+      cobertura_tramos: {
         Row: {
-          created_at: string | null
+          created_at: string
           id: string
-          latitud: number
-          longitud: number
-          relevamiento_id: string | null
-          severidad: Database["public"]["Enums"]["nivel_severidad"]
-          tipo_falla: Database["public"]["Enums"]["tipo_falla"]
-          url_evidencia_imagen: string | null
+          recorrido_id: string
+          tramo_id: string
+          usuario_id: string | null
         }
         Insert: {
-          created_at?: string | null
+          created_at?: string
           id?: string
-          latitud: number
-          longitud: number
-          relevamiento_id?: string | null
-          severidad: Database["public"]["Enums"]["nivel_severidad"]
-          tipo_falla: Database["public"]["Enums"]["tipo_falla"]
-          url_evidencia_imagen?: string | null
+          recorrido_id: string
+          tramo_id: string
+          usuario_id?: string | null
         }
         Update: {
-          created_at?: string | null
+          created_at?: string
           id?: string
-          latitud?: number
-          longitud?: number
-          relevamiento_id?: string | null
-          severidad?: Database["public"]["Enums"]["nivel_severidad"]
-          tipo_falla?: Database["public"]["Enums"]["tipo_falla"]
-          url_evidencia_imagen?: string | null
+          recorrido_id?: string
+          tramo_id?: string
+          usuario_id?: string | null
         }
         Relationships: [
           {
-            foreignKeyName: "fallas_deteccion_relevamiento_id_fkey"
-            columns: ["relevamiento_id"]
+            foreignKeyName: "cobertura_tramos_recorrido_id_fkey"
+            columns: ["recorrido_id"]
             isOneToOne: false
-            referencedRelation: "relevamientos"
+            referencedRelation: "recorridos"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cobertura_tramos_tramo_id_fkey"
+            columns: ["tramo_id"]
+            isOneToOne: false
+            referencedRelation: "tramos"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cobertura_tramos_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "perfiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      fallas_deteccion: {
+        Row: {
+          created_at: string | null
+          descripcion: string | null
+          id: string
+          latitud: number
+          longitud: number
+          recorrido_id: string | null
+          severidad: Database["public"]["Enums"]["nivel_severidad"]
+          tipo_falla: Database["public"]["Enums"]["tipo_falla"]
+          url_evidencia_imagen: string | null
+          url_evidencia_video: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          descripcion?: string | null
+          id?: string
+          latitud: number
+          longitud: number
+          recorrido_id?: string | null
+          severidad: Database["public"]["Enums"]["nivel_severidad"]
+          tipo_falla: Database["public"]["Enums"]["tipo_falla"]
+          url_evidencia_imagen?: string | null
+          url_evidencia_video?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          descripcion?: string | null
+          id?: string
+          latitud?: number
+          longitud?: number
+          recorrido_id?: string | null
+          severidad?: Database["public"]["Enums"]["nivel_severidad"]
+          tipo_falla?: Database["public"]["Enums"]["tipo_falla"]
+          url_evidencia_imagen?: string | null
+          url_evidencia_video?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fallas_deteccion_recorrido_id_fkey"
+            columns: ["recorrido_id"]
+            isOneToOne: false
+            referencedRelation: "recorridos"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      logros: {
+        Row: {
+          codigo: string
+          id: string
+          otorgado_at: string
+          usuario_id: string
+        }
+        Insert: {
+          codigo: string
+          id?: string
+          otorgado_at?: string
+          usuario_id: string
+        }
+        Update: {
+          codigo?: string
+          id?: string
+          otorgado_at?: string
+          usuario_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "logros_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "perfiles"
             referencedColumns: ["id"]
           },
         ]
       }
       perfiles: {
         Row: {
+          acepto_terminos_at: string | null
           created_at: string
           id: string
           municipio_id: string
@@ -88,6 +170,7 @@ export type Database = {
           rol: Database["public"]["Enums"]["rol_usuario"] | null
         }
         Insert: {
+          acepto_terminos_at?: string | null
           created_at?: string
           id: string
           municipio_id: string
@@ -95,6 +178,7 @@ export type Database = {
           rol?: Database["public"]["Enums"]["rol_usuario"] | null
         }
         Update: {
+          acepto_terminos_at?: string | null
           created_at?: string
           id?: string
           municipio_id?: string
@@ -103,44 +187,44 @@ export type Database = {
         }
         Relationships: []
       }
-      relevamientos: {
+      puntos_eventos: {
         Row: {
-          camino_id: string | null
-          fecha: string
+          created_at: string
           id: string
-          metadata: Json | null
-          origen_datos: Database["public"]["Enums"]["origen_datos"]
-          procesado_ia: boolean | null
-          usuario_id: string | null
+          motivo: string
+          municipio: string
+          puntos: number
+          recorrido_id: string | null
+          usuario_id: string
         }
         Insert: {
-          camino_id?: string | null
-          fecha?: string
+          created_at?: string
           id?: string
-          metadata?: Json | null
-          origen_datos: Database["public"]["Enums"]["origen_datos"]
-          procesado_ia?: boolean | null
-          usuario_id?: string | null
+          motivo: string
+          municipio: string
+          puntos: number
+          recorrido_id?: string | null
+          usuario_id: string
         }
         Update: {
-          camino_id?: string | null
-          fecha?: string
+          created_at?: string
           id?: string
-          metadata?: Json | null
-          origen_datos?: Database["public"]["Enums"]["origen_datos"]
-          procesado_ia?: boolean | null
-          usuario_id?: string | null
+          motivo?: string
+          municipio?: string
+          puntos?: number
+          recorrido_id?: string | null
+          usuario_id?: string
         }
         Relationships: [
           {
-            foreignKeyName: "relevamientos_camino_id_fkey"
-            columns: ["camino_id"]
+            foreignKeyName: "puntos_eventos_recorrido_id_fkey"
+            columns: ["recorrido_id"]
             isOneToOne: false
-            referencedRelation: "caminos"
+            referencedRelation: "recorridos"
             referencedColumns: ["id"]
           },
           {
-            foreignKeyName: "relevamientos_usuario_id_fkey"
+            foreignKeyName: "puntos_eventos_usuario_id_fkey"
             columns: ["usuario_id"]
             isOneToOne: false
             referencedRelation: "perfiles"
@@ -148,12 +232,108 @@ export type Database = {
           },
         ]
       }
+      recorridos: {
+        Row: {
+          created_at: string
+          estado: Database["public"]["Enums"]["recorrido_estado"]
+          fin: string
+          id: string
+          inicio: string
+          km: number
+          municipio: string
+          procesado_at: string | null
+          puntos_gps: number
+          track: Json
+          usuario_id: string
+        }
+        Insert: {
+          created_at?: string
+          estado?: Database["public"]["Enums"]["recorrido_estado"]
+          fin: string
+          id?: string
+          inicio: string
+          km?: number
+          municipio: string
+          procesado_at?: string | null
+          puntos_gps?: number
+          track?: Json
+          usuario_id: string
+        }
+        Update: {
+          created_at?: string
+          estado?: Database["public"]["Enums"]["recorrido_estado"]
+          fin?: string
+          id?: string
+          inicio?: string
+          km?: number
+          municipio?: string
+          procesado_at?: string | null
+          puntos_gps?: number
+          track?: Json
+          usuario_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "recorridos_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "perfiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tramos: {
+        Row: {
+          geometria: Json
+          id: string
+          km: number
+          localidad: string
+          municipio: string
+          nombre_codigo: string
+        }
+        Insert: {
+          geometria: Json
+          id: string
+          km: number
+          localidad: string
+          municipio: string
+          nombre_codigo: string
+        }
+        Update: {
+          geometria?: Json
+          id?: string
+          km?: number
+          localidad?: string
+          municipio?: string
+          nombre_codigo?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
+      cobertura_municipio: {
+        Args: { p_municipio: string }
+        Returns: {
+          cubiertos: number
+          km: number
+          km_cubiertos: number
+          localidad: string
+          tramos: number
+        }[]
+      }
       municipio_actual: { Args: never; Returns: string }
+      ranking_municipio: {
+        Args: { p_municipio: string }
+        Returns: {
+          nombre: string
+          posicion: number
+          puntos: number
+          usuario_id: string
+        }[]
+      }
       rol_actual: {
         Args: never
         Returns: Database["public"]["Enums"]["rol_usuario"]
@@ -163,6 +343,7 @@ export type Database = {
       estado_camino: "bueno" | "regular" | "malo" | "intransitable"
       nivel_severidad: "baja" | "media" | "alta"
       origen_datos: "app_sensor" | "camara_dashcam" | "formulario"
+      recorrido_estado: "finalizado" | "descartado"
       rol_usuario: "productor" | "municipio" | "auditor"
       tipo_falla:
         | "bache"
@@ -170,6 +351,9 @@ export type Database = {
         | "acumulacion_agua"
         | "falta_alcantarilla"
         | "maleza_alta"
+        | "alcantarilla_rota"
+        | "senalizacion"
+        | "otro"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -300,6 +484,7 @@ export const Constants = {
       estado_camino: ["bueno", "regular", "malo", "intransitable"],
       nivel_severidad: ["baja", "media", "alta"],
       origen_datos: ["app_sensor", "camara_dashcam", "formulario"],
+      recorrido_estado: ["finalizado", "descartado"],
       rol_usuario: ["productor", "municipio", "auditor"],
       tipo_falla: [
         "bache",
@@ -307,6 +492,9 @@ export const Constants = {
         "acumulacion_agua",
         "falta_alcantarilla",
         "maleza_alta",
+        "alcantarilla_rota",
+        "senalizacion",
+        "otro",
       ],
     },
   },

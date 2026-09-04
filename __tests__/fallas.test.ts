@@ -9,8 +9,9 @@ const filas = [
     latitud: -35.1,
     longitud: -60.1,
     url_evidencia_imagen: null,
+    url_evidencia_video: 'u/r/a.webm',
     created_at: '2026-01-01T00:00:00Z',
-    relevamientos: { fecha: '2026-01-02T00:00:00Z', caminos: { municipio: 'carlos-tejedor' } },
+    recorridos: { inicio: '2026-01-02T00:00:00Z', municipio: 'carlos-tejedor' },
   },
   {
     id: 'f2',
@@ -19,8 +20,9 @@ const filas = [
     latitud: -35.2,
     longitud: -60.2,
     url_evidencia_imagen: 'u/r/a.jpg',
+    url_evidencia_video: null,
     created_at: '2026-01-01T00:00:00Z',
-    relevamientos: null,
+    recorridos: null,
   },
 ]
 
@@ -29,6 +31,12 @@ describe('aPuntos', () => {
     const puntos = aPuntos(filas)
     expect(puntos[0]).toMatchObject({ id: 'f1', municipio: 'carlos-tejedor', fecha: '2026-01-02T00:00:00Z' })
     expect(puntos[1].municipio).toBe('desconocido')
+  })
+
+  test('conserva la url de evidencia en video, null cuando no hay', () => {
+    const puntos = aPuntos(filas)
+    expect(puntos[0].url_evidencia_video).toBe('u/r/a.webm')
+    expect(puntos[1].url_evidencia_video).toBeNull()
   })
 })
 

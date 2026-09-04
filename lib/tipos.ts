@@ -10,6 +10,9 @@ export type TipoFalla =
   | 'acumulacion_agua'
   | 'falta_alcantarilla'
   | 'maleza_alta'
+  | 'alcantarilla_rota'
+  | 'senalizacion'
+  | 'otro'
 
 export type PuntoFalla = {
   id: string
@@ -19,6 +22,7 @@ export type PuntoFalla = {
   longitud: number
   fecha: string
   url_evidencia_imagen: string | null
+  url_evidencia_video: string | null
   municipio: string
 }
 
@@ -28,6 +32,9 @@ export const ETIQUETA_TIPO_FALLA: Record<TipoFalla, string> = {
   acumulacion_agua: 'Acumulación de agua',
   falta_alcantarilla: 'Falta de alcantarilla',
   maleza_alta: 'Maleza alta',
+  alcantarilla_rota: 'Alcantarilla rota',
+  senalizacion: 'Señalización',
+  otro: 'Otro',
 }
 
 export const ETIQUETA_SEVERIDAD: Record<Severidad, string> = {

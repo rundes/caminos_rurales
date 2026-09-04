@@ -1,7 +1,7 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
-const RUTAS_PROTEGIDAS = ['/dashboard']
+const RUTAS_PROTEGIDAS = ['/dashboard', '/terminos']
 
 export async function actualizarSesion(request: NextRequest) {
   let respuesta = NextResponse.next({ request })

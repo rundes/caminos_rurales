@@ -1,55 +1,49 @@
-import { KpiCard } from '@/components/KpiCard'
-import { formatearFecha } from '@/lib/fechas'
-import { formatearNumero, sumarKm } from '@/lib/kpis'
+import { RecorridoView } from '@/components/recorrido/RecorridoView'
+import { TarjetaCobertura } from '@/components/TarjetaCobertura'
+import { capasDe } from '@/lib/capas'
+import { limitesDe } from '@/lib/capas-servidor'
+import { obtenerCoberturaMunicipio } from '@/lib/cobertura-consultas'
+import { buscarPartido } from '@/lib/partidos'
 import { crearClienteServidor } from '@/lib/supabase/server'
 
-const CANTIDAD_ULTIMOS = 5
+const CENTRO_PROVINCIA: [number, number] = [-36.6, -60.0]
 
+/** Home: cobertura del municipio arriba y la pantalla de recorrido debajo. */
 export default async function DashboardPage() {
   const supabase = await crearClienteServidor()
 
-  const [relevamientos, fallas, ultimos] = await Promise.all([
-    supabase.from('relevamientos').select('metadata'),
-    supabase.from('fallas_deteccion').select('id', { count: 'exact', head: true }),
-    supabase
-      .from('relevamientos')
-      .select('id, fecha, procesado_ia, caminos(nombre_codigo)')
-      .order('fecha', { ascending: false })
-      .limit(CANTIDAD_ULTIMOS),
-  ])
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  const { data: perfil, error } = user
+    ? await supabase.from('perfiles').select('municipio_id').eq('id', user.id).maybeSingle()
+    : { data: null, error: null }
+  if (error) console.error('[dashboard]', error.message)
 
-  const error = relevamientos.error ?? fallas.error ?? ultimos.error
-  if (error) {
-    console.error('[dashboard]', error.message)
-    return <p className="rounded-xl bg-red-50 p-4 text-red-800">No se pudieron cargar los datos.</p>
+  const municipio = perfil?.municipio_id ?? null
+  if (!user || !municipio) {
+    return <p className="rounded-xl bg-red-50 p-4 text-red-800">Tu perfil no tiene un partido asignado.</p>
   }
 
-  const km = sumarKm(relevamientos.data ?? [])
+  const [cobertura, limites] = await Promise.all([
+    obtenerCoberturaMunicipio(supabase, municipio),
+    limitesDe(municipio),
+  ])
+
+  const partido = buscarPartido(municipio)
+  const centro: [number, number] = partido ? [partido.lat, partido.lng] : CENTRO_PROVINCIA
 
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="text-2xl font-bold">Resumen</h1>
-      <div className="grid grid-cols-2 gap-4">
-        <KpiCard etiqueta="Km relevados" valor={formatearNumero(km)} />
-        <KpiCard etiqueta="Fallas detectadas" valor={fallas.count ?? 0} />
-      </div>
-      <section>
-        <h2 className="mb-2 text-lg font-semibold">Últimos reportes</h2>
-        {ultimos.data && ultimos.data.length > 0 ? (
-          <ul className="divide-y rounded-2xl bg-white shadow-sm">
-            {ultimos.data.map((r) => (
-              <li key={r.id} className="flex justify-between px-4 py-3">
-                <span>{r.caminos?.nombre_codigo ?? 'Sin camino'}</span>
-                <span className="text-sm text-gray-500">
-                  {formatearFecha(r.fecha)} · {r.procesado_ia ? 'procesado' : 'pendiente'}
-                </span>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="text-gray-500">Todavía no hay relevamientos.</p>
-        )}
-      </section>
+      <h1 className="text-2xl font-bold">Recorrido</h1>
+      <TarjetaCobertura resumen={cobertura} />
+      <RecorridoView
+        usuarioId={user.id}
+        municipio={municipio}
+        capas={capasDe(municipio)}
+        limites={limites}
+        centro={centro}
+      />
     </div>
   )
 }

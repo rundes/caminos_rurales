@@ -1,7 +1,15 @@
-// Smoke test de integración contra Supabase real + dev server local.
+// Smoke test de integración v2: recorridos GPS, cobertura por tramo, puntos,
+// ranking y observaciones. Contra Supabase real + dev server local.
 // Uso: SUPABASE_ACCESS_TOKEN=sbp_... node scripts/smoke.mjs
 // Requiere .env.local con las claves del proyecto y `npm run dev` corriendo en :3000.
 // Crea usuarios y datos temporales con prefijo smoke+ y los borra al terminar.
+//
+// No ejecuta `finalizarRecorrido` (Server Action, no accesible desde este
+// script): las filas de recorridos, cobertura_tramos, puntos_eventos y
+// fallas_deteccion se insertan directamente (con el cliente del usuario o
+// con la clave secreta, según lo que exista RLS) y se verifica el resultado
+// contra las funciones `cobertura_municipio` y `ranking_municipio`.
+import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 
@@ -21,9 +29,9 @@ const SECRET = env.SUPABASE_SECRET_KEY
 const REF = 'gtuulbdxgtcqybbtocpz'
 const TOKEN = process.env.SUPABASE_ACCESS_TOKEN
 const DEV = 'http://localhost:3000'
+const PASSWORD = 'smoke-pass-12345'
 
 const admin = createClient(URL, SECRET, { auth: { persistSession: false, autoRefreshToken: false } })
-const user = createClient(URL, PUB, { auth: { persistSession: false, autoRefreshToken: false } })
 
 let fallos = 0
 function ok(cond, msg, extra = '') {
@@ -53,124 +61,222 @@ function cookieHeader(session) {
   return partes.join('; ')
 }
 
-const email = `smoke+${Date.now()}@example.com`
-const password = 'smoke-pass-12345'
-let uid, caminoId, relId, ruta
+/** Crea un usuario autoconfirmado en `municipio`, lo loguea y devuelve su cliente. */
+async function crearUsuario(municipio) {
+  const email = `smoke+${municipio}+${Date.now()}+${Math.random().toString(36).slice(2, 8)}@example.com`
+  const { data, error } = await admin.auth.admin.createUser({
+    email,
+    password: PASSWORD,
+    email_confirm: true,
+    user_metadata: { nombre: 'Smoke Test', municipio_id: municipio },
+  })
+  if (error || !data?.user) throw new Error(`crear usuario ${municipio}: ${error?.message}`)
+  const c = createClient(URL, PUB, { auth: { persistSession: false, autoRefreshToken: false } })
+  const { data: login, error: eLogin } = await c.auth.signInWithPassword({ email, password: PASSWORD })
+  if (eLogin || !login.session) throw new Error(`login ${municipio}: ${eLogin?.message}`)
+  return { id: data.user.id, municipio, c, session: login.session }
+}
+
+let uid, ruta
 const extraUids = []
+const recorridoIds = []
+const coberturaIds = []
+const puntosIds = []
+const fallasIds = []
 
 try {
-  // 1. Crear usuario (autoconfirmado) con metadata → trigger crea perfil
-  const { data: creado, error: eCrear } = await admin.auth.admin.createUser({
-    email, password, email_confirm: true,
-    user_metadata: { nombre: 'Smoke Test', municipio_id: 'carlos-tejedor' },
+  // 1. Crear usuario (autoconfirmado) con metadata municipio maipu → trigger crea perfil
+  const maipu = await crearUsuario('maipu')
+  uid = maipu.id
+  const cookie = cookieHeader(maipu.session)
+
+  const perfil = await sql(`select nombre, municipio_id, acepto_terminos_at from public.perfiles where id = '${uid}'`)
+  ok(
+    perfil[0]?.nombre === 'Smoke Test' && perfil[0]?.municipio_id === 'maipu' && perfil[0]?.acepto_terminos_at === null,
+    'trigger handle_new_user crea perfil con acepto_terminos_at null',
+    JSON.stringify(perfil[0]),
+  )
+
+  // 2. Sin términos aceptados: /dashboard redirige, /terminos se muestra
+  const rDash1 = await fetch(`${DEV}/dashboard`, { headers: { Cookie: cookie }, redirect: 'manual' })
+  ok(rDash1.status === 307, 'GET /dashboard sin términos → 307', String(rDash1.status))
+  const rTerminos = await fetch(`${DEV}/terminos`, { headers: { Cookie: cookie }, redirect: 'manual' })
+  ok(rTerminos.status === 200, 'GET /terminos con sesión → 200', String(rTerminos.status))
+
+  // 3. Aceptar términos (update propio, RLS perfiles_update_propio) habilita el dashboard
+  const aceptar = await maipu.c
+    .from('perfiles')
+    .update({ acepto_terminos_at: new Date().toISOString() })
+    .eq('id', uid)
+    .select('id')
+  ok(!aceptar.error && aceptar.data?.length === 1, 'aceptar términos vía update propio', aceptar.error?.message)
+
+  const rDash2 = await fetch(`${DEV}/dashboard`, { headers: { Cookie: cookie }, redirect: 'manual' })
+  ok(rDash2.status === 200, 'GET /dashboard con términos aceptados → 200', String(rDash2.status))
+  const rMapa = await fetch(`${DEV}/dashboard/mapa`, { headers: { Cookie: cookie }, redirect: 'manual' })
+  ok(rMapa.status === 200, 'GET /dashboard/mapa → 200', String(rMapa.status))
+  const rRanking = await fetch(`${DEV}/dashboard/ranking`, { headers: { Cookie: cookie }, redirect: 'manual' })
+  ok(rRanking.status === 200, 'GET /dashboard/ranking → 200', String(rRanking.status))
+
+  // 4. tramos: 165 filas para maipu (seed real), 0 para un municipio sin sembrar
+  const trMaipu = await maipu.c.from('tramos').select('id, km')
+  ok(!trMaipu.error && trMaipu.data?.length === 165, 'usuario de maipu ve 165 tramos', trMaipu.error?.message ?? String(trMaipu.data?.length))
+  const tramo = trMaipu.data?.[0]
+  ok(Boolean(tramo?.id), 'hay un tramo disponible para la prueba de cobertura', JSON.stringify(tramo))
+
+  const bahia = await crearUsuario('bahia-blanca')
+  extraUids.push(bahia.id)
+  const trBahia = await bahia.c.from('tramos').select('id')
+  ok(!trBahia.error && trBahia.data?.length === 0, 'usuario de otro municipio ve 0 tramos', trBahia.error?.message ?? String(trBahia.data?.length))
+
+  // 5. recorridos: insert propio OK; usuario_id ajeno → RLS error
+  const recorridoId = randomUUID()
+  const inicio = new Date(Date.now() - 3600_000).toISOString()
+  const fin = new Date().toISOString()
+  const insRecorrido = await maipu.c
+    .from('recorridos')
+    .insert({
+      id: recorridoId,
+      usuario_id: uid,
+      municipio: 'maipu',
+      inicio,
+      fin,
+      km: 5.2,
+      track: [
+        [-36.99, -57.9],
+        [-36.98, -57.89],
+      ],
+      estado: 'finalizado',
+    })
+    .select('id')
+    .single()
+  ok(!insRecorrido.error && insRecorrido.data?.id === recorridoId, 'insert recorrido propio', insRecorrido.error?.message)
+  recorridoIds.push(recorridoId)
+
+  const insAjeno = await maipu.c.from('recorridos').insert({
+    usuario_id: bahia.id,
+    municipio: 'maipu',
+    inicio,
+    fin,
+    km: 1,
+    track: [],
+    estado: 'finalizado',
   })
-  ok(!eCrear && creado?.user, 'crear usuario', eCrear?.message)
-  uid = creado.user.id
+  ok(Boolean(insAjeno.error), 'RLS bloquea insert de recorrido con usuario_id ajeno', insAjeno.error?.message)
 
-  const perfil = await sql(`select nombre, rol, municipio_id from public.perfiles where id = '${uid}'`)
-  ok(perfil[0]?.nombre === 'Smoke Test' && perfil[0]?.municipio_id === 'carlos-tejedor' && perfil[0]?.rol === 'productor',
-    'trigger handle_new_user creó perfil', JSON.stringify(perfil[0]))
+  // 6. cobertura_tramos: sin política de insert para el usuario; sí para la clave secreta.
+  // cobertura_municipio agrega por localidad y respeta el municipio del usuario.
+  const covUsuario = await maipu.c.from('cobertura_tramos').insert({ tramo_id: tramo?.id, recorrido_id: recorridoId, usuario_id: uid })
+  ok(Boolean(covUsuario.error), 'RLS bloquea insert de cobertura_tramos como usuario', covUsuario.error?.message)
 
-  // 2. Login
-  const { data: login, error: eLogin } = await user.auth.signInWithPassword({ email, password })
-  ok(!eLogin && login.session, 'signInWithPassword', eLogin?.message)
+  const covAdmin = await admin
+    .from('cobertura_tramos')
+    .insert({ tramo_id: tramo?.id, recorrido_id: recorridoId, usuario_id: uid })
+    .select('id')
+    .single()
+  ok(!covAdmin.error && covAdmin.data?.id, 'clave secreta inserta cobertura_tramos', covAdmin.error?.message)
+  if (covAdmin.data?.id) coberturaIds.push(covAdmin.data.id)
 
-  // 3. RLS: productor no puede crear camino
-  const ins1 = await user.from('caminos').insert({ nombre_codigo: 'SMOKE-01', municipio: 'carlos-tejedor' })
-  ok(ins1.error && (ins1.error.code === '42501' || /row-level security/.test(ins1.error.message)),
-    'RLS bloquea insert de camino como productor', ins1.error?.code)
+  const covMaipu = await maipu.c.rpc('cobertura_municipio', { p_municipio: 'maipu' })
+  const cubiertosTotal = covMaipu.data?.reduce((acc, f) => acc + f.cubiertos, 0) ?? -1
+  ok(
+    !covMaipu.error && covMaipu.data?.length === 5 && cubiertosTotal === 1,
+    'cobertura_municipio(maipu) devuelve 5 localidades con 1 tramo cubierto',
+    covMaipu.error?.message ?? JSON.stringify(covMaipu.data),
+  )
 
-  // 4. Promover y crear camino
-  await sql(`update public.perfiles set rol = 'municipio' where id = '${uid}'`)
-  const ins2 = await user.from('caminos').insert({ nombre_codigo: 'SMOKE-01', municipio: 'carlos-tejedor' }).select('id').single()
-  ok(!ins2.error && ins2.data?.id, 'municipio crea camino', ins2.error?.message)
-  caminoId = ins2.data?.id
+  const covBahia = await maipu.c.rpc('cobertura_municipio', { p_municipio: 'bahia-blanca' })
+  ok(
+    !covBahia.error && covBahia.data?.length === 0,
+    'cobertura_municipio(bahia-blanca) vacío para usuario de maipu',
+    covBahia.error?.message ?? JSON.stringify(covBahia.data),
+  )
 
-  // 5. Camino de otro municipio no visible
-  const otro = await sql(`insert into public.caminos (nombre_codigo, municipio) values ('SMOKE-OTRO', 'bahia-blanca') returning id`)
-  const vis = await user.from('caminos').select('id, municipio')
-  ok(vis.data?.every((c) => c.municipio === 'carlos-tejedor'), 'RLS oculta caminos de otro municipio', JSON.stringify(vis.data))
-  await sql(`delete from public.caminos where id = '${otro[0].id}'`)
+  // 7. puntos_eventos (solo servidor) y ranking_municipio
+  const puntoAdmin = await admin
+    .from('puntos_eventos')
+    .insert({ usuario_id: uid, municipio: 'maipu', recorrido_id: recorridoId, motivo: 'km_nuevo', puntos: 10 })
+    .select('id')
+    .single()
+  ok(!puntoAdmin.error && puntoAdmin.data?.id, 'clave secreta inserta puntos_eventos', puntoAdmin.error?.message)
+  if (puntoAdmin.data?.id) puntosIds.push(puntoAdmin.data.id)
 
-  // 6. Relevamiento
-  const rel = await user.from('relevamientos').insert({
-    usuario_id: uid, camino_id: caminoId, origen_datos: 'formulario', metadata: { km: 3.5, archivos: [] },
-  }).select('id').single()
-  ok(!rel.error && rel.data?.id, 'insert relevamiento propio', rel.error?.message)
-  relId = rel.data?.id
+  const ranking = await maipu.c.rpc('ranking_municipio', { p_municipio: 'maipu' })
+  const propio = ranking.data?.find((f) => f.usuario_id === uid)
+  ok(
+    !ranking.error && Number(propio?.posicion) === 1,
+    'ranking_municipio ubica al usuario en la posición 1',
+    ranking.error?.message ?? JSON.stringify(ranking.data),
+  )
 
-  // 7. Storage: subir bajo carpeta propia OK, bajo otra carpeta FAIL
-  const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex')
-  ruta = `${uid}/${relId}/smoke.png`
-  const up1 = await user.storage.from('evidencia-vial').upload(ruta, png, { contentType: 'image/png' })
-  ok(!up1.error, 'upload en carpeta propia', up1.error?.message)
-  const up2 = await user.storage.from('evidencia-vial').upload(`00000000-0000-0000-0000-000000000000/${relId}/x.png`, png, { contentType: 'image/png' })
-  ok(Boolean(up2.error), 'upload en carpeta ajena bloqueado', up2.error?.message)
-  const upd = await user.from('relevamientos').update({ metadata: { km: 3.5, archivos: [ruta] } }).eq('id', relId).select('id')
-  ok(!upd.error && upd.data?.length === 1, 'registrar archivos en metadata', upd.error?.message)
+  const rankingBahia = await bahia.c.rpc('ranking_municipio', { p_municipio: 'bahia-blanca' })
+  ok(
+    !rankingBahia.error && rankingBahia.data?.length === 0,
+    'ranking_municipio(bahia-blanca) sin eventos → 0 filas',
+    rankingBahia.error?.message ?? JSON.stringify(rankingBahia.data),
+  )
 
-  // 8. Endpoint IA vía dev server con cookie de sesión
-  const cookie = cookieHeader(login.session)
-  const r1 = await fetch(`${DEV}/api/procesar-ia`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookie },
-    body: JSON.stringify({ relevamiento_id: relId }),
-  })
-  const b1 = await r1.json().catch(() => ({}))
-  ok(r1.status === 200 && b1.ok && b1.fallas >= 2 && b1.fallas <= 6, 'POST /api/procesar-ia 200', `${r1.status} ${JSON.stringify(b1)}`)
-  const r2 = await fetch(`${DEV}/api/procesar-ia`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookie },
-    body: JSON.stringify({ relevamiento_id: relId }),
-  })
-  ok(r2.status === 409, 'segundo POST → 409', String(r2.status))
-  const r3 = await fetch(`${DEV}/api/procesar-ia`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ relevamiento_id: relId }),
-  })
-  ok(r3.status === 401, 'sin cookie → 401', String(r3.status))
+  // 8. Observaciones (fallas_deteccion): insert sobre recorrido propio OK, ajeno RLS error, update propio OK
+  const obsPropia = await maipu.c
+    .from('fallas_deteccion')
+    .insert({ recorrido_id: recorridoId, tipo_falla: 'bache', severidad: 'media', latitud: -36.99, longitud: -57.9, descripcion: 'smoke' })
+    .select('id')
+    .single()
+  ok(!obsPropia.error && obsPropia.data?.id, 'insert observación en recorrido propio', obsPropia.error?.message)
+  if (obsPropia.data?.id) fallasIds.push(obsPropia.data.id)
 
-  // 9. Verificar fallas y estado del camino
-  const fallas = await sql(`select count(*)::int as n, min(url_evidencia_imagen) as ruta from public.fallas_deteccion where relevamiento_id = '${relId}'`)
-  ok(fallas[0].n === b1.fallas && fallas[0].ruta === ruta, 'fallas insertadas con ruta de evidencia', JSON.stringify(fallas[0]))
-  const cam = await sql(`select estado_general, procesado from (select c.estado_general, r.procesado_ia as procesado from public.caminos c join public.relevamientos r on r.camino_id = c.id where r.id = '${relId}') t`)
-  ok(cam[0].procesado === true && ['bueno', 'regular', 'malo', 'intransitable'].includes(cam[0].estado_general), 'procesado_ia y estado_general actualizados', JSON.stringify(cam[0]))
+  const recorridoAjeno = await admin
+    .from('recorridos')
+    .insert({ usuario_id: bahia.id, municipio: 'bahia-blanca', inicio, fin, km: 1, track: [], estado: 'finalizado' })
+    .select('id')
+    .single()
+  if (recorridoAjeno.data?.id) recorridoIds.push(recorridoAjeno.data.id)
 
-  // 10. Lectura de fallas vía RLS y URL firmada
-  const fr = await user.from('fallas_deteccion').select('id, url_evidencia_imagen, relevamientos(fecha, caminos(municipio))')
-  ok(!fr.error && fr.data?.length === b1.fallas && fr.data[0].relevamientos?.caminos?.municipio === 'carlos-tejedor', 'select fallas anidado vía RLS', fr.error?.message ?? JSON.stringify(fr.data?.[0]))
-  const firmada = await user.storage.from('evidencia-vial').createSignedUrls([ruta], 60)
-  ok(!firmada.error && firmada.data?.[0]?.signedUrl, 'createSignedUrls', firmada.error?.message)
+  const obsAjena = await maipu.c
+    .from('fallas_deteccion')
+    .insert({ recorrido_id: recorridoAjeno.data?.id, tipo_falla: 'bache', severidad: 'baja', latitud: -36.99, longitud: -57.9 })
+  ok(Boolean(obsAjena.error), 'RLS bloquea insert de observación en recorrido ajeno', obsAjena.error?.message)
 
-  // 10b. Storage por municipio: mismo municipio lee, otro municipio no
-  const mkUser = async (municipio) => {
-    const e = `smoke+${municipio}+${Date.now()}@example.com`
-    const { data } = await admin.auth.admin.createUser({ email: e, password, email_confirm: true, user_metadata: { nombre: 'Vecino', municipio_id: municipio } })
-    const c = createClient(URL, PUB, { auth: { persistSession: false, autoRefreshToken: false } })
-    await c.auth.signInWithPassword({ email: e, password })
-    return { id: data.user.id, c }
+  if (obsPropia.data?.id) {
+    const obsUpd = await maipu.c.from('fallas_deteccion').update({ descripcion: 'smoke editado' }).eq('id', obsPropia.data.id).select('id')
+    ok(!obsUpd.error && obsUpd.data?.length === 1, 'update propio de observación (política 0005)', obsUpd.error?.message)
   }
-  const mismo = await mkUser('carlos-tejedor')
-  const otroMun = await mkUser('bahia-blanca')
-  extraUids.push(mismo.id, otroMun.id)
-  const dl1 = await mismo.c.storage.from('evidencia-vial').download(ruta)
-  ok(!dl1.error, 'usuario del mismo municipio descarga evidencia', dl1.error?.message)
-  const dl2 = await otroMun.c.storage.from('evidencia-vial').download(ruta)
-  ok(Boolean(dl2.error), 'usuario de otro municipio NO descarga evidencia', dl2.error?.message)
-  const ls2 = await otroMun.c.storage.from('evidencia-vial').list(uid)
-  ok(!ls2.error && (ls2.data?.length ?? 0) === 0, 'listado de carpeta ajena vacío para otro municipio', JSON.stringify(ls2.data))
 
-  // 11. Páginas protegidas
-  const pag = await fetch(`${DEV}/dashboard/mapa`, { headers: { Cookie: cookie }, redirect: 'manual' })
-  ok(pag.status === 200, 'GET /dashboard/mapa con sesión → 200', String(pag.status))
-  const pag2 = await fetch(`${DEV}/dashboard`, { redirect: 'manual' })
-  ok(pag2.status === 307, 'GET /dashboard sin sesión → 307', String(pag2.status))
+  // 9. Storage: subida propia OK, carpeta ajena bloqueada, lectura limitada al municipio
+  const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex')
+  ruta = `${uid}/${recorridoId}/smoke.png`
+  const up1 = await maipu.c.storage.from('evidencia-vial').upload(ruta, png, { contentType: 'image/png' })
+  ok(!up1.error, 'upload en carpeta propia', up1.error?.message)
+  const up2 = await maipu.c.storage.from('evidencia-vial').upload(`${bahia.id}/${recorridoId}/x.png`, png, { contentType: 'image/png' })
+  ok(Boolean(up2.error), 'upload en carpeta ajena bloqueado', up2.error?.message)
+
+  const otroMaipu = await crearUsuario('maipu')
+  extraUids.push(otroMaipu.id)
+  const dl1 = await otroMaipu.c.storage.from('evidencia-vial').download(ruta)
+  ok(!dl1.error, 'usuario del mismo municipio descarga evidencia', dl1.error?.message)
+  const dl2 = await bahia.c.storage.from('evidencia-vial').download(ruta)
+  ok(Boolean(dl2.error), 'usuario de otro municipio NO descarga evidencia', dl2.error?.message)
+
+  // 10. Rutas públicas y PWA
+  const sinCookie = await fetch(`${DEV}/dashboard`, { redirect: 'manual' })
+  ok(sinCookie.status === 307, 'GET /dashboard sin sesión → 307', String(sinCookie.status))
+  const manifest = await fetch(`${DEV}/manifest.json`)
+  ok(manifest.status === 200, 'GET /manifest.json → 200', String(manifest.status))
+  const sw = await fetch(`${DEV}/sw.js`)
+  ok(sw.status === 200, 'GET /sw.js → 200', String(sw.status))
+  const offline = await fetch(`${DEV}/offline`)
+  ok(offline.status === 200, 'GET /offline → 200', String(offline.status))
 } catch (e) {
   fallos++
   console.error('EXCEPCION', e)
 } finally {
-  // Limpieza
+  // Limpieza: hijos antes que padres, aunque las FK son on delete cascade.
   try {
     if (ruta) await admin.storage.from('evidencia-vial').remove([ruta])
-    if (caminoId) await sql(`delete from public.caminos where id = '${caminoId}'`)
+    for (const id of fallasIds) await sql(`delete from public.fallas_deteccion where id = '${id}'`)
+    for (const id of puntosIds) await sql(`delete from public.puntos_eventos where id = '${id}'`)
+    for (const id of coberturaIds) await sql(`delete from public.cobertura_tramos where id = '${id}'`)
+    for (const id of recorridoIds) await sql(`delete from public.recorridos where id = '${id}'`)
     if (uid) await admin.auth.admin.deleteUser(uid)
     for (const x of extraUids) await admin.auth.admin.deleteUser(x)
     console.log('limpieza OK')

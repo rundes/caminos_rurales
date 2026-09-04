@@ -1,17 +1,14 @@
-import type { Json } from './supabase/database.types'
+type FilaConKm = { km: number | string | null }
 
-type FilaConMetadata = { metadata: Json | null }
-
-function extraerKm(meta: Json | null): number {
-  if (!meta || typeof meta !== 'object' || Array.isArray(meta) || !('km' in meta)) return 0
-  const valor = meta.km
-  if (typeof valor !== 'number' && typeof valor !== 'string') return 0
+function aKm(valor: number | string | null): number {
+  if (valor === null) return 0
   const km = Number(valor)
   return Number.isFinite(km) && km >= 0 ? km : 0
 }
 
-export function sumarKm(filas: readonly FilaConMetadata[]): number {
-  const total = filas.reduce((acumulado, fila) => acumulado + extraerKm(fila.metadata), 0)
+/** Suma los km de un conjunto de recorridos (Postgres devuelve `numeric` como string). */
+export function sumarKm(filas: readonly FilaConKm[]): number {
+  const total = filas.reduce((acumulado, fila) => acumulado + aKm(fila.km), 0)
   return Number(total.toFixed(1))
 }
 

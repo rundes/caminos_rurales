@@ -1,18 +1,35 @@
 # Visiovial Rural
 
-Plataforma de relevamiento del estado de caminos rurales de la Provincia de Buenos Aires.
+Plataforma de relevamiento del estado de caminos rurales de la Provincia de Buenos Aires. Los vecinos y agentes municipales graban su recorrido en GPS con la app abierta, registran observaciones (baches, cárcavas, alcantarillas rotas, etc.) con foto o video, y el servidor calcula qué tramos quedaron cubiertos, otorga puntos e insignias y actualiza la cobertura del municipio. Piloto en el partido de Maipú.
 
 ## Documentación
 
-- `docs/superpowers/specs/2026-09-02-visiovial-rural-design.md`: diseño del MVP.
+- `docs/superpowers/specs/2026-09-02-visiovial-rural-design.md`: diseño del MVP (superseded parcialmente, ver nota al inicio del archivo).
+- `docs/superpowers/specs/2026-09-03-recorridos-cobertura-design.md`: diseño v2 (recorridos, cobertura, juego).
+- `docs/superpowers/specs/2026-09-03-maipu-piloto-design.md`: addendum del piloto Maipú (capas base, almacenamiento).
 - `docs/system-prompt.md`: reglas de desarrollo.
-- `docs/database-schema.sql`: esquema Supabase con RLS, trigger y storage.
+- `docs/database-schema.sql`: esquema Supabase final (RLS, funciones, trigger y storage).
 - `docs/step-by-step-guide.md`: fases de implementación.
-- `docs/fuentes-datos.md`: fuentes de datos de referencia (UBA, OSM, SENASA, MapBiomas, GSW).
+- `docs/fuentes-datos.md`: fuentes de datos de referencia (IGN, OSM, UBA, SENASA, MapBiomas, GSW, severo_data).
 
 ## Stack
 
-Next.js 16 (App Router), TypeScript, Tailwind CSS 4, Supabase (Auth, Postgres, Storage), react-leaflet.
+Next.js 16 (App Router), TypeScript, Tailwind CSS 4, Supabase (Auth, Postgres, Storage), react-leaflet, PWA (service worker manual, `idb`).
+
+## Funcionalidad
+
+- **Recorrido GPS en vivo**: el usuario toca "Iniciar recorrido" y la app graba su trayecto con `watchPosition` de alta precisión mientras la pantalla permanece encendida (wake lock). El track se guarda en IndexedDB durante el recorrido.
+- **Observaciones**: en ruta se puede pausar y registrar una observación (tipo, severidad, foto o video corto, nota) con la posición actual.
+- **Cobertura por tramo**: al finalizar, el servidor compara el track contra la geometría de los tramos del municipio (`tramos`) y marca como cubiertos los que tienen suficiente proximidad de puntos del track.
+- **Puntos, insignias y ranking**: kilómetros nuevos y repetidos y observaciones con evidencia otorgan puntos (`puntos_eventos`); ciertos hitos otorgan insignias (`logros`); el ranking agrega puntos por municipio.
+- **Dashboard**: cobertura % del municipio y por localidad, mapa de tramos cubiertos/pendientes, ranking, insignias propias, últimas observaciones.
+- **PWA instalable**: manifest, service worker con precache del shell y cache-first para capas/teselas/íconos, iconos generados desde un SVG.
+
+### Límites conocidos
+
+- La grabación **solo funciona con la app abierta en primer plano**; no hay grabación en segundo plano (requeriría una app nativa). Está documentado en la pantalla de términos.
+- Sin señal, el track y las observaciones quedan en IndexedDB y se suben cuando vuelve la conexión (reintentos con backoff).
+- El primer ingreso exige aceptar los términos (`perfiles.acepto_terminos_at`); sin aceptarlos no se accede al resto de la app.
 
 ## Desarrollo
 
@@ -22,13 +39,72 @@ cp .env.example .env.local   # completar con las claves del proyecto Supabase
 npm run dev
 ```
 
-Scripts:
+Variables de entorno relevantes (además de las de Supabase):
 
-- `npm test`: tests unitarios (Vitest).
-- `npm run test:coverage`: cobertura.
-- `npm run tipos`: regenera `lib/supabase/database.types.ts` ejecutando `npx --yes supabase gen types` (no requiere instalación local; requiere `SUPABASE_ACCESS_TOKEN`).
-- `node scripts/aplicar-sql.mjs <archivo.sql>`: aplica SQL al proyecto (requiere `SUPABASE_ACCESS_TOKEN`).
-- `node scripts/generar-partidos.mjs`: regenera `lib/partidos.ts` desde la API georef.
+- `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`: proyecto Supabase.
+- `ALMACENAMIENTO`: proveedor de subida de evidencia, `supabase` (por defecto) o `gcs`. Ver [Almacenamiento de evidencia](#almacenamiento-de-evidencia).
+- `GCS_BUCKET`, `GCS_SERVICE_ACCOUNT_KEY`: requeridas solo si `ALMACENAMIENTO=gcs`.
+
+## Scripts
+
+- `npm test` / `npm run test:coverage`: tests unitarios (Vitest) y cobertura.
+- `npm run lint`: ESLint.
+- `npm run tipos` (`node scripts/generar-tipos.mjs`): regenera `lib/supabase/database.types.ts` ejecutando `npx --yes supabase gen types` (requiere `SUPABASE_ACCESS_TOKEN`).
+- `node scripts/aplicar-sql.mjs <archivo.sql>`: aplica un archivo SQL al proyecto vía Management API (requiere `SUPABASE_ACCESS_TOKEN`).
+- `node scripts/generar-partidos.mjs`: regenera `lib/partidos.ts` desde la API georef de los partidos de la Provincia de Buenos Aires.
+- `node scripts/generar-capas-municipio.mjs <slug> [--osm]`: genera las capas GeoJSON de un municipio (límite administrativo vía Overpass, recorte de la red vial provincial IGN/DVP); con `--osm` además descarga los caminos rurales de OSM. `scripts/generar-capas-maipu.mjs` es un wrapper de compatibilidad que fija el slug `maipu`.
+- `node scripts/seed-caminos-maipu.mjs [--dry-run]`: asigna `nombre_codigo` a los tramos de `public/capas/maipu/caminos.geojson` y siembra `public.caminos` (un código por camino) vía Management API.
+- `node scripts/seed-tramos.mjs [--dry-run]`: siembra `public.tramos` (denominador de cobertura) desde el mismo GeoJSON, con geometría, km y localidad por tramo.
+- `node scripts/generar-iconos.mjs`: genera los íconos PWA (`public/icons/`) desde un SVG inline con `sharp`.
+- `node scripts/smoke.mjs`: smoke test de integración contra el proyecto Supabase real. Ver [Smoke test](#smoke-test-de-integración).
+
+## Migraciones
+
+Las migraciones en `supabase/migrations/` se aplican en orden con `scripts/aplicar-sql.mjs`. `docs/database-schema.sql` refleja el estado final (equivalente a aplicar todas en orden) y una instalación nueva puede correr solo ese archivo.
+
+1. `0001_schema.sql`: esquema inicial del MVP (perfiles, caminos, relevamientos, fallas_deteccion, storage).
+2. `0002_storage_por_municipio.sql`: restringe la lectura de evidencia a usuarios del mismo municipio de quien la subió.
+3. `0003a_tipos_falla.sql`: agrega valores al enum `tipo_falla` (`alcantarilla_rota`, `senalizacion`, `otro`). Debe aplicarse **antes** que `0003_recorridos.sql`, de la que depende (Postgres no permite usar un valor de enum agregado en la misma transacción que lo crea).
+4. `0003_recorridos.sql`: reemplaza el flujo de carga de viaje por recorridos GPS: crea `tramos`, `recorridos`, `cobertura_tramos`, `puntos_eventos`, `logros`; agrega `acepto_terminos_at` a `perfiles`; reapunta `fallas_deteccion` a `recorrido_id`; elimina `relevamientos`; agrega las funciones `cobertura_municipio` y `ranking_municipio`.
+5. `0004_recorridos_procesado.sql`: agrega `recorridos.procesado_at`, el sello que hace idempotente el post-procesado de un recorrido (cobertura, puntos, observaciones, logros).
+6. `0005_fallas_update.sql`: agrega la política de update propio sobre `fallas_deteccion` (corregir una observación después de creada).
+
+## Capas
+
+Archivos estáticos en `public/capas/<slug-de-municipio>/`, registrados por slug en `lib/capas.ts`:
+
+- `caminos.geojson`: red vial rural, origen OSM (Overpass) con nomenclatura de Vialidad BA para Maipú (partido 066); cada feature lleva `nombre_codigo` para vincular tramo ↔ camino.
+- `limite.geojson`: límite administrativo del partido, origen Overpass.
+- `red-provincial.geojson`: recorte de la red vial provincial IGN/DVP (ver `docs/fuentes-datos.md`).
+- `localidades.geojson`: polígonos de localidades y puntos de interés; para Maipú viene de `severo_data` (proyecto previo del mismo autor), copiado tal cual, no se genera con script.
+
+## Almacenamiento de evidencia
+
+Las fotos y videos de las observaciones se suben desde el navegador con un `PUT`
+a una URL firmada que devuelve la Server Action `prepararSubida`. El proveedor se
+elige con la variable `ALMACENAMIENTO`:
+
+- **Supabase Storage** (por defecto, `ALMACENAMIENTO=supabase` o sin definir):
+  usa `createSignedUploadUrl` sobre el bucket `evidencia-vial`. En la base se
+  guarda la **ruta** dentro del bucket y se firma una URL de lectura de 1 h cada
+  vez que hay que mostrarla.
+- **Google Cloud Storage** (`ALMACENAMIENTO=gcs`): usa una URL firmada V4 de
+  escritura válida 15 minutos. Requiere `GCS_BUCKET` (por ejemplo `maipu-pba`) y
+  `GCS_SERVICE_ACCOUNT_KEY` con el JSON de la cuenta de servicio **en una sola
+  línea**. En la base se guarda la URL pública
+  `https://storage.googleapis.com/<bucket>/<ruta>`.
+
+Para GCS el bucket debe ser de **lectura pública** (`allUsers` con rol
+`Storage Object Viewer`) y tener CORS que habilite `PUT` desde el dominio de la
+app:
+
+```json
+[{ "origin": ["https://tu-dominio"], "method": ["PUT", "GET"], "responseHeader": ["Content-Type"], "maxAgeSeconds": 3600 }]
+```
+
+Las fotos se comprimen en el teléfono antes de subirlas (`lib/imagenes.ts`:
+1600 px de lado mayor, JPEG calidad 0.8); los videos se suben sin transcodificar
+(hasta 15 s y 50 MB, validado en el cliente).
 
 ## Roles
 
@@ -40,16 +116,17 @@ update public.perfiles set rol = 'municipio' where id = '<uuid>';
 
 ## Verificación manual
 
-Checklist para validar el flujo completo en el proyecto Supabase real:
+Checklist para validar el flujo v2 completo en el proyecto Supabase real:
 
-- [ ] Registrar un usuario con partido → aparece en `perfiles`.
-- [ ] Promover ese usuario a rol `municipio` vía SQL (ver arriba).
-- [ ] Crear un camino.
-- [ ] Cargar un viaje con al menos una foto → la evidencia se sube a `evidencia-vial/{uid}/{relevamiento}/`.
-- [ ] El resumen del viaje muestra N fallas detectadas.
-- [ ] El dashboard se actualiza con los nuevos datos.
-- [ ] El mapa muestra marcadores y el filtro por tipo de falla funciona.
-- [ ] El popup "Ver evidencia" abre una URL firmada.
+- [ ] Registrar un usuario con partido (Maipú) → aparece en `perfiles` con `acepto_terminos_at` null.
+- [ ] Login redirige a `/terminos`; aceptar términos habilita el resto de la app.
+- [ ] Se pide permiso de ubicación al iniciar el primer recorrido.
+- [ ] "Iniciar recorrido" graba el track en vivo (mapa, km, tiempo).
+- [ ] Registrar una observación con foto en ruta.
+- [ ] "Finalizar" muestra un resumen con puntos e insignias obtenidas.
+- [ ] El dashboard muestra el mapa con tramos cubiertos en verde y pendientes en gris.
+- [ ] El ranking del municipio muestra al usuario con sus puntos.
+- [ ] **Probar sin señal**: activar modo avión durante un recorrido, verificar que la grabación local sigue funcionando, volver a conectar y ver el estado "Subiendo…" hasta que se sincroniza.
 
 ## Smoke test de integración
 
@@ -59,4 +136,4 @@ Con `npm run dev` corriendo y `SUPABASE_ACCESS_TOKEN` en el entorno:
 node scripts/smoke.mjs
 ```
 
-Verifica contra el proyecto Supabase real: trigger de perfil, RLS por municipio y rol, políticas de storage, endpoint `/api/procesar-ia` (200/409/401), URLs firmadas y rutas protegidas. Crea y borra sus propios datos de prueba.
+Verifica contra el proyecto Supabase real: trigger de perfil, gate de términos (`/terminos`, `/dashboard`), RLS de `tramos`/`recorridos`/`cobertura_tramos`/`puntos_eventos`/`fallas_deteccion` por municipio y por propietario, las funciones `cobertura_municipio` y `ranking_municipio`, políticas de storage por municipio, y las rutas públicas de la PWA (`/manifest.json`, `/sw.js`, `/offline`). Crea y borra sus propios datos de prueba (usuarios, recorridos, cobertura, puntos, observaciones, archivo de storage).

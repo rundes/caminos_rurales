@@ -7,8 +7,9 @@ export type FilaFalla = {
   latitud: number
   longitud: number
   url_evidencia_imagen: string | null
+  url_evidencia_video: string | null
   created_at: string | null
-  relevamientos: { fecha: string; caminos: { municipio: string } | null } | null
+  recorridos: { inicio: string; municipio: string } | null
 }
 
 export type FiltrosFallas = { tipo?: string; municipio?: string }
@@ -20,9 +21,10 @@ export function aPuntos(filas: readonly FilaFalla[]): PuntoFalla[] {
     severidad: f.severidad,
     latitud: Number(f.latitud),
     longitud: Number(f.longitud),
-    fecha: f.relevamientos?.fecha ?? f.created_at ?? '',
+    fecha: f.recorridos?.inicio ?? f.created_at ?? '',
     url_evidencia_imagen: f.url_evidencia_imagen,
-    municipio: f.relevamientos?.caminos?.municipio ?? 'desconocido',
+    url_evidencia_video: f.url_evidencia_video,
+    municipio: f.recorridos?.municipio ?? 'desconocido',
   }))
 }
 

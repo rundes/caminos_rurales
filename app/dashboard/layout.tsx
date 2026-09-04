@@ -2,13 +2,13 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { crearClienteServidor } from '@/lib/supabase/server'
 import { buscarPartido } from '@/lib/partidos'
-import { signOut } from '@/app/login/actions'
+import { BotonSalir } from '@/components/BotonSalir'
 
 const ENLACES = [
   { href: '/dashboard', etiqueta: 'Inicio' },
   { href: '/dashboard/caminos', etiqueta: 'Caminos' },
-  { href: '/dashboard/cargar-viaje', etiqueta: 'Cargar viaje' },
   { href: '/dashboard/mapa', etiqueta: 'Mapa' },
+  { href: '/dashboard/ranking', etiqueta: 'Ranking' },
 ]
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -20,11 +20,14 @@ export default async function DashboardLayout({ children }: { children: React.Re
 
   const { data: perfil, error } = await supabase
     .from('perfiles')
-    .select('nombre, rol, municipio_id')
+    .select('nombre, rol, municipio_id, acepto_terminos_at')
     .eq('id', user.id)
     .maybeSingle()
 
   if (error) console.error('[dashboard]', error.message)
+  // Sin términos aceptados no se entra al dashboard (ante un error de lectura
+  // se deja pasar y la cabecera muestra el aviso, para no encerrar al usuario).
+  if (!error && !perfil?.acepto_terminos_at) redirect('/terminos')
 
   const partido = perfil ? buscarPartido(perfil.municipio_id)?.nombre ?? perfil.municipio_id : ''
 
@@ -42,11 +45,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
             </p>
           </div>
         )}
-        <form action={signOut}>
-          <button type="submit" className="rounded-lg bg-green-700 px-3 py-2 text-sm">
-            Salir
-          </button>
-        </form>
+        <BotonSalir />
       </header>
       <main className="mx-auto max-w-3xl px-4 py-6">{children}</main>
       <nav

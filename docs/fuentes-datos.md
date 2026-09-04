@@ -29,4 +29,39 @@ Los datos crudos no se descargan desde la app. Hay que pedirlos al contacto.
 ## Uso en Visiovial Rural
 
 - OSM como mapa base (tiles) desde el MVP.
-- Segmentos y puntos de interés UBA como capas futuras (fase 6).
+- Segmentos y puntos de interés UBA como capas futuras (fase 6, ver `docs/step-by-step-guide.md`).
+
+## IGN - Red vial provincial
+
+Instituto Geográfico Nacional, capa "Red vial" filtrada a la Dirección de Vialidad
+de la Provincia de Buenos Aires (DVP). Se recorta por partido en
+`scripts/generar-capas-municipio.mjs` y se guarda como
+`public/capas/<municipio>/red-provincial.geojson`.
+
+Campos relevantes de cada feature:
+
+| Campo | Significado | Decodificación usada |
+|---|---|---|
+| `rtn` | Nombre/número de ruta | Se usa tal cual para el rótulo del tramo. |
+| `typ` | Tipo de vía | 40 = ruta provincial, 47 = autovía (RP 2). Otros códigos se muestran tal cual. |
+| `rst` | Superficie | 1 = pavimentado, 2 = consolidado, 3 = tierra. Define el color del tramo en la capa. |
+
+Esta capa es de referencia visual (fondo de mapa); el denominador de cobertura
+(`public.tramos`) se siembra desde la capa de OSM, no desde esta.
+
+## OpenStreetMap (Overpass) - Maipú (partido 066)
+
+Consulta Overpass sobre `highway=secondary|tertiary|unclassified|track` dentro
+del límite del partido, con nomenclatura de Vialidad BA: RP 62, caminos
+secundarios 066-01 a 066-05 y 039-08, más 112 tramos sin nombre asignados por
+localidad rural más cercana. Total 632 km en 207 tramos en el GeoJSON completo;
+165 tramos (610 km) quedan con `nombre_codigo` no nulo y son los que se siembran
+en `public.tramos` (`scripts/seed-tramos.mjs`), el denominador de cobertura.
+Los tramos excluidos son calles urbanas de Maipú ciudad.
+
+## severo_data - Localidades y puntos de interés
+
+Polígonos de localidades y puntos de interés (POIs) de Maipú, relevados
+manualmente en `rundes/severo_data` (tablero previo del mismo autor). Se
+reutilizan tal cual como `public/capas/maipu/localidades.geojson` — no se
+regeneran con script, se copian del proyecto original.

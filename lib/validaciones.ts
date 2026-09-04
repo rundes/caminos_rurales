@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { buscarPartido } from './partidos'
+import type { Severidad, TipoFalla } from './tipos'
 
 export const esquemaLogin = z.object({
   email: z.email({ message: 'Email inválido' }),
@@ -17,29 +18,95 @@ export const esquemaCamino = z.object({
   nombre_codigo: z.string().trim().min(2, { message: 'El nombre o código debe tener al menos 2 caracteres' }),
 })
 
-export const ORIGENES_DATOS = ['app_sensor', 'camara_dashcam', 'formulario'] as const
-
-export const esquemaRelevamiento = z.object({
-  camino_id: z.uuid({ message: 'Elegí un camino' }),
-  origen_datos: z.enum(ORIGENES_DATOS, { message: 'Origen de datos inválido' }),
-  km: z
-    .string({ message: 'Ingresá los km recorridos' })
-    .trim()
-    .min(1, { message: 'Ingresá los km recorridos' })
-    .transform(Number)
-    .pipe(
-      z
-        .number({ message: 'Los km deben ser un número' })
-        .min(0, { message: 'Los km no pueden ser negativos' })
-        .max(1000, { message: 'Km fuera de rango' }),
-    ),
-})
-
-export const esquemaProcesarIa = z.object({
-  relevamiento_id: z.uuid(),
-})
-
 export function primerError(error: z.ZodError): string {
   const issue = error.issues[0]
   return issue?.message ?? 'Datos inválidos'
 }
+
+const TIPOS_FALLA = [
+  'bache',
+  'carcava',
+  'acumulacion_agua',
+  'falta_alcantarilla',
+  'maleza_alta',
+  'alcantarilla_rota',
+  'senalizacion',
+  'otro',
+] as const satisfies readonly TipoFalla[]
+
+const SEVERIDADES = ['baja', 'media', 'alta'] as const satisfies readonly Severidad[]
+
+const MAX_OBSERVACIONES = 200
+const MAX_PUNTOS_TRACK = 20000
+
+export const esquemaObservacion = z.object({
+  id: z.uuid({ message: 'Observación sin identificador válido' }),
+  tipo_falla: z.enum(TIPOS_FALLA, { message: 'Elegí un tipo de observación' }),
+  severidad: z.enum(SEVERIDADES, { message: 'Elegí una severidad' }),
+  latitud: z
+    .number()
+    .min(-90, { message: 'Latitud fuera de rango' })
+    .max(90, { message: 'Latitud fuera de rango' }),
+  longitud: z
+    .number()
+    .min(-180, { message: 'Longitud fuera de rango' })
+    .max(180, { message: 'Longitud fuera de rango' }),
+  descripcion: z
+    .string()
+    .trim()
+    .max(500, { message: 'La descripción no puede superar los 500 caracteres' })
+    .optional(),
+  evidencia: z
+    .object({
+      ruta: z.string().min(1).max(300, { message: 'Ruta de evidencia inválida' }),
+      tipo: z.enum(['imagen', 'video'], { message: 'Tipo de evidencia inválido' }),
+    })
+    .optional(),
+})
+
+const coordenadaTrack = z.tuple([
+  z.number().min(-90).max(90),
+  z.number().min(-180).max(180),
+])
+
+/**
+ * Punto GPS crudo, opcional: lo manda el cliente además del `track`
+ * simplificado para que el servidor pueda evaluar la plausibilidad
+ * (velocidad entre muestras y precisión media).
+ */
+const puntoGpsTrack = z.object({
+  lat: z.number().min(-90, { message: 'Latitud fuera de rango' }).max(90, { message: 'Latitud fuera de rango' }),
+  lng: z
+    .number()
+    .min(-180, { message: 'Longitud fuera de rango' })
+    .max(180, { message: 'Longitud fuera de rango' }),
+  t: z.int().min(0, { message: 'Marca de tiempo inválida' }),
+  precision: z.number().min(0, { message: 'Precisión inválida' }),
+})
+
+export const esquemaRecorrido = z
+  .object({
+    id: z.uuid({ message: 'Recorrido sin identificador válido' }),
+    inicio: z.iso.datetime({ message: 'Fecha de inicio inválida' }),
+    fin: z.iso.datetime({ message: 'Fecha de fin inválida' }),
+    puntosGps: z.int().min(0, { message: 'Cantidad de puntos GPS inválida' }),
+    track: z
+      .array(coordenadaTrack, { message: 'El recorrido no tiene puntos' })
+      .min(2, { message: 'El recorrido necesita al menos 2 puntos' })
+      .max(MAX_PUNTOS_TRACK, { message: 'El recorrido tiene demasiados puntos' }),
+    puntos: z
+      .array(puntoGpsTrack)
+      .max(MAX_PUNTOS_TRACK, { message: 'El recorrido tiene demasiados puntos' })
+      .optional(),
+    observaciones: z
+      .array(esquemaObservacion)
+      .max(MAX_OBSERVACIONES, { message: 'Demasiadas observaciones en un recorrido' }),
+  })
+  .refine((datos) => Date.parse(datos.fin) >= Date.parse(datos.inicio), {
+    message: 'El fin del recorrido no puede ser anterior al inicio',
+    path: ['fin'],
+  })
+
+export type PuntoGpsPayload = z.infer<typeof puntoGpsTrack>
+export type Observacion = z.infer<typeof esquemaObservacion>
+export type RecorridoPayload = z.infer<typeof esquemaRecorrido>
