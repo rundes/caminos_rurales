@@ -84,6 +84,7 @@ const coberturaIds = []
 const puntosIds = []
 const fallasIds = []
 const muestrasIds = []
+const cuadrosIds = []
 
 try {
   // 1. Crear usuario (autoconfirmado) con metadata municipio maipu → trigger crea perfil
@@ -352,6 +353,55 @@ try {
     )
   }
 
+  // 9bis. Cuadros: insert propio OK; recorrido_id ajeno → RLS error; usuario_id ajeno → RLS error;
+  // cuadros_por_tramo respeta el municipio del usuario; update/delete propio OK.
+  const tCuadro = new Date(new Date(inicio).getTime() + 10_000).toISOString()
+  const cuadroBase = {
+    recorrido_id: recorridoId,
+    usuario_id: uid,
+    tramo_id: tramo?.id,
+    t: tCuadro,
+    latitud: -36.99,
+    longitud: -57.9,
+    ruta: `${uid}/${recorridoId}/cuadro-1.jpg`,
+  }
+  const cuadroPropio = await maipu.c.from('cuadros').insert(cuadroBase).select('id').single()
+  ok(!cuadroPropio.error && cuadroPropio.data?.id, 'insert cuadro en recorrido propio', cuadroPropio.error?.message)
+  if (cuadroPropio.data?.id) cuadrosIds.push(cuadroPropio.data.id)
+
+  const cuadroRecorridoAjeno = await maipu.c
+    .from('cuadros')
+    .insert({ ...cuadroBase, recorrido_id: recorridoAjeno.data?.id, t: new Date(new Date(tCuadro).getTime() + 1_000).toISOString() })
+  ok(Boolean(cuadroRecorridoAjeno.error), 'RLS bloquea insert de cuadro con recorrido_id ajeno', cuadroRecorridoAjeno.error?.message)
+
+  const cuadroUsuarioAjeno = await maipu.c
+    .from('cuadros')
+    .insert({ ...cuadroBase, usuario_id: bahia.id, t: new Date(new Date(tCuadro).getTime() + 2_000).toISOString() })
+  ok(Boolean(cuadroUsuarioAjeno.error), 'RLS bloquea insert de cuadro con usuario_id ajeno', cuadroUsuarioAjeno.error?.message)
+
+  const cuadrosPorTramoMaipu = await maipu.c.rpc('cuadros_por_tramo', { p_municipio: 'maipu' })
+  const filaCuadrosTramo = cuadrosPorTramoMaipu.data?.find((f) => f.tramo_id === tramo?.id)
+  ok(
+    !cuadrosPorTramoMaipu.error && filaCuadrosTramo?.cuadros === 1,
+    'cuadros_por_tramo(maipu) incluye el tramo de prueba con cuadros: 1',
+    cuadrosPorTramoMaipu.error?.message ?? JSON.stringify(cuadrosPorTramoMaipu.data),
+  )
+
+  const cuadrosPorTramoBahia = await bahia.c.rpc('cuadros_por_tramo', { p_municipio: 'maipu' })
+  ok(
+    !cuadrosPorTramoBahia.error && cuadrosPorTramoBahia.data?.length === 0,
+    'cuadros_por_tramo(maipu) devuelve 0 filas para usuario de otro municipio',
+    cuadrosPorTramoBahia.error?.message ?? JSON.stringify(cuadrosPorTramoBahia.data),
+  )
+
+  if (cuadroPropio.data?.id) {
+    const cuadroUpd = await maipu.c.from('cuadros').update({ velocidad_kmh: 42 }).eq('id', cuadroPropio.data.id).select('id')
+    ok(!cuadroUpd.error && cuadroUpd.data?.length === 1, 'update propio de cuadro (velocidad_kmh)', cuadroUpd.error?.message)
+
+    const cuadroDel = await maipu.c.from('cuadros').delete().eq('id', cuadroPropio.data.id).select('id')
+    ok(!cuadroDel.error && cuadroDel.data?.length === 1, 'delete propio de cuadro', cuadroDel.error?.message)
+  }
+
   // 9. Storage: subida propia OK, carpeta ajena bloqueada, lectura limitada al municipio
   const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex')
   ruta = `${uid}/${recorridoId}/smoke.png`
@@ -383,6 +433,7 @@ try {
   // Limpieza: hijos antes que padres, aunque las FK son on delete cascade.
   try {
     if (ruta) await admin.storage.from('evidencia-vial').remove([ruta])
+    for (const id of cuadrosIds) await sql(`delete from public.cuadros where id = '${id}'`)
     for (const id of muestrasIds) await sql(`delete from public.muestras_sensor where id = '${id}'`)
     for (const id of fallasIds) await sql(`delete from public.fallas_deteccion where id = '${id}'`)
     for (const id of puntosIds) await sql(`delete from public.puntos_eventos where id = '${id}'`)

@@ -1,27 +1,42 @@
 import 'fake-indexeddb/auto'
 import { beforeEach, describe, expect, test } from 'vitest'
 import {
+  borrarCuadrosSubidos,
   borrarItemCola,
+  borrarItemColaCuadros,
   cambiarEstadoRecorrido,
   cerrarDb,
+  contarCuadros,
   encolar,
+  encolarCuadros,
   guardarImpacto,
   guardarMuestra,
+  guardarCuadro,
   guardarObservacion,
   guardarPunto,
   guardarRecorrido,
   listarCola,
+  listarColaCuadros,
+  listarCuadros,
   limpiarLocal,
+  marcarCuadro,
   listarImpactos,
   listarMuestras,
   listarObservaciones,
   listarPuntos,
   listarRecorridos,
   obtenerItemCola,
+  obtenerItemColaCuadros,
   obtenerRecorrido,
   recorridoEnCurso,
 } from '@/lib/local/db'
-import type { ImpactoLocal, MuestraLocal, ObservacionLocal, RecorridoLocal } from '@/lib/local/tipos'
+import type {
+  CuadroLocal,
+  ImpactoLocal,
+  MuestraLocal,
+  ObservacionLocal,
+  RecorridoLocal,
+} from '@/lib/local/tipos'
 
 const ID = '11111111-1111-4111-8111-111111111111'
 const USUARIO = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa'
@@ -67,6 +82,19 @@ function muestra(t: number, recorridoId = ID): MuestraLocal {
 
 function impacto(t: number, recorridoId = ID): ImpactoLocal {
   return { recorridoId, t, lat: -36.85, lng: -57.88, pico: 8.5, velocidadKmh: 40 }
+}
+
+function cuadro(t: number, recorridoId = ID): CuadroLocal {
+  return {
+    recorridoId,
+    t,
+    lat: -36.85,
+    lng: -57.88,
+    rumbo: 90,
+    velocidadKmh: 40,
+    blob: new Blob([`cuadro-${t}`], { type: 'image/jpeg' }),
+    estadoSubida: 'pendiente',
+  }
 }
 
 beforeEach(async () => {
@@ -160,13 +188,63 @@ describe('base local', () => {
     expect(await listarImpactos('otro')).toHaveLength(1)
   })
 
+  test('guarda cuadros por recorrido, los cuenta y los filtra por estado', async () => {
+    const id = await guardarCuadro(cuadro(200))
+    await guardarCuadro(cuadro(100))
+    await guardarCuadro(cuadro(50, 'otro'))
+
+    const cuadros = await listarCuadros(ID)
+    expect(cuadros.map((c) => c.t)).toEqual([100, 200])
+    expect(cuadros[0].blob).toBeDefined()
+    expect(await contarCuadros(ID)).toBe(2)
+    expect(await contarCuadros('otro')).toBe(1)
+
+    await marcarCuadro(id, 'subida', 'uid/rec/cuadro-200-cuadro.jpg')
+
+    expect(await contarCuadros(ID, 'pendiente')).toBe(1)
+    const subido = (await listarCuadros(ID, 'subida'))[0]
+    expect(subido.t).toBe(200)
+    expect(subido.ruta).toBe('uid/rec/cuadro-200-cuadro.jpg')
+  })
+
+  test('borrarCuadrosSubidos libera solo los blobs de los ya subidos', async () => {
+    const subido = await guardarCuadro(cuadro(100))
+    await guardarCuadro(cuadro(200))
+    await marcarCuadro(subido, 'subida', 'ruta')
+
+    expect(await borrarCuadrosSubidos(ID)).toBe(1)
+
+    const cuadros = await listarCuadros(ID)
+    expect(cuadros.find((c) => c.t === 100)?.blob).toBeUndefined()
+    expect(cuadros.find((c) => c.t === 200)?.blob).toBeDefined()
+    // La fila queda: sigue contando como capturado.
+    expect(await contarCuadros(ID)).toBe(2)
+  })
+
+  test('la cola de cuadros no reinicia los intentos y se puede borrar', async () => {
+    await encolarCuadros(ID)
+    expect(await obtenerItemColaCuadros(ID)).toEqual({
+      recorridoId: ID,
+      intentos: 0,
+      proximoIntento: 0,
+    })
+
+    await encolarCuadros(ID)
+    expect(await listarColaCuadros()).toHaveLength(1)
+
+    await borrarItemColaCuadros(ID)
+    expect(await listarColaCuadros()).toEqual([])
+  })
+
   test('limpiarLocal vacía todos los stores', async () => {
     await guardarRecorrido(RECORRIDO)
     await guardarPunto({ recorridoId: ID, lat: -36.8, lng: -57.8, t: 1, precision: 8 })
     await guardarObservacion(OBSERVACION)
     await guardarMuestra(muestra(100))
     await guardarImpacto(impacto(100))
+    await guardarCuadro(cuadro(100))
     await encolar(ID)
+    await encolarCuadros(ID)
 
     await limpiarLocal()
 
@@ -175,6 +253,8 @@ describe('base local', () => {
     expect(await listarObservaciones(ID)).toEqual([])
     expect(await listarMuestras(ID)).toEqual([])
     expect(await listarImpactos(ID)).toEqual([])
+    expect(await listarCuadros(ID)).toEqual([])
     expect(await listarCola()).toEqual([])
+    expect(await listarColaCuadros()).toEqual([])
   })
 })

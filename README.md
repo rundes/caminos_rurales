@@ -48,6 +48,18 @@ Durante el recorrido, además del GPS, la app usa el acelerómetro y giroscopio 
   - Frenadas y maniobras laterales se calculan pero todavía no se muestran (quedan en 0 en el resumen y el mapa).
   - Por debajo de 15 km/h el segmento se marca `sin_dato`: la vibración a esa velocidad no dice nada del estado del camino.
 
+## Fase 12: cuadros de cámara
+
+Durante el recorrido, además del track y los sensores, la app puede capturar cuadros (fotos) de la cámara trasera del celular para tener evidencia visual continua del camino:
+
+- **Qué hace**: con la cámara activa, dispara una captura JPEG de 1280 px de ancho y calidad 0,7 (~120 KB) cada 100 m recorridos desde el último cuadro, o cada 10 s si la velocidad es ≥ 15 km/h y todavía no se llegó a los 100 m. Sin GPS válido no captura. Cada cuadro guarda posición, rumbo y velocidad del instante.
+- **Cámara**: encendida por defecto si el permiso fue concedido (se pide en el mismo gesto de "Iniciar recorrido", después del de sensores de movimiento). Botón "Cámara" en el panel de grabación para apagar/prender el stream sin cortar la grabación; sin permiso, el recorrido sigue grabando normalmente con el indicador en gris.
+- **Almacenamiento local**: los cuadros se guardan en IndexedDB con tope de 2000 por recorrido; si `navigator.storage.estimate()` reporta menos de 300 MB libres se muestra un aviso persistente y se pausa la captura.
+- **Subida**: diferida, por WiFi por defecto ("Subir cuadros solo con WiFi", configurable), después de que el recorrido ya se subió. También hay un botón "Subir ahora con datos" para forzar la subida usando datos móviles.
+- **Mapa**: capa "Cuadros" en `/dashboard/mapa` (toggle independiente), con marcadores y popup de miniatura, fecha, velocidad y navegación anterior/siguiente dentro del mismo tramo.
+- **Puntos**: +1 punto cada 10 cuadros registrados, con tope de 100 puntos por recorrido.
+- **Límites conocidos**: consume batería adicional (cámara + GPS + pantalla encendida); en iOS el stream se pausa con la pantalla bloqueada; sin difuminado de caras ni patentes en esta fase; las imágenes son visibles para los usuarios del mismo municipio.
+
 ## Desarrollo
 
 ```bash
@@ -87,6 +99,7 @@ Las migraciones en `supabase/migrations/` se aplican en orden con `scripts/aplic
 6. `0005_fallas_update.sql`: agrega la política de update propio sobre `fallas_deteccion` (corregir una observación después de creada).
 7. `0006a_enums_sensor.sql`: crea los enums `calidad_segmento` y `origen_observacion`. Debe aplicarse **antes** que `0006_muestras_sensor.sql`, de la que depende (mismo motivo que `0003a`: un `create type` y su primer uso no pueden ir en la misma transacción).
 8. `0006_muestras_sensor.sql`: crea `muestras_sensor` (segmentos agregados de sensores por recorrido); agrega `origen`, `magnitud` y `tramo_id` a `fallas_deteccion`; agrega la función `rugosidad_tramos`.
+9. `0007_cuadros.sql`: crea `cuadros` (cuadros georreferenciados de la cámara durante el recorrido, con `tramo_id` asignado y ruta al objeto en storage); agrega la función `cuadros_por_tramo`.
 
 ## Capas
 
@@ -149,6 +162,10 @@ Checklist para validar el flujo v2 completo en el proyecto Supabase real:
 - [ ] Activar el toggle "Estado estimado" en `/dashboard/mapa` → tramos coloreados por calidad de rugosidad.
 - [ ] El ranking del municipio muestra al usuario con sus puntos.
 - [ ] **Probar sin señal**: activar modo avión durante un recorrido, verificar que la grabación local sigue funcionando, volver a conectar y ver el estado "Subiendo…" hasta que se sincroniza.
+- [ ] Se pide permiso de cámara al iniciar el recorrido (después del de sensores de movimiento).
+- [ ] Durante la grabación se ve la vista previa chica de la cámara y el contador de cuadros capturados.
+- [ ] Después de "Finalizar" con WiFi disponible, el resumen pasa a mostrar "Cuadros subidos".
+- [ ] En `/dashboard/mapa`, el toggle "Cuadros" muestra los marcadores con miniatura en el popup y permite navegar anterior/siguiente dentro del tramo.
 
 ## Smoke test de integración
 

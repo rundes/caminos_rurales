@@ -84,6 +84,70 @@ export type Database = {
           },
         ]
       }
+      cuadros: {
+        Row: {
+          created_at: string
+          id: string
+          latitud: number
+          longitud: number
+          recorrido_id: string
+          rumbo: number | null
+          ruta: string
+          t: string
+          tramo_id: string | null
+          usuario_id: string
+          velocidad_kmh: number | null
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          latitud: number
+          longitud: number
+          recorrido_id: string
+          rumbo?: number | null
+          ruta: string
+          t: string
+          tramo_id?: string | null
+          usuario_id: string
+          velocidad_kmh?: number | null
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          latitud?: number
+          longitud?: number
+          recorrido_id?: string
+          rumbo?: number | null
+          ruta?: string
+          t?: string
+          tramo_id?: string | null
+          usuario_id?: string
+          velocidad_kmh?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cuadros_recorrido_id_fkey"
+            columns: ["recorrido_id"]
+            isOneToOne: false
+            referencedRelation: "recorridos"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cuadros_tramo_id_fkey"
+            columns: ["tramo_id"]
+            isOneToOne: false
+            referencedRelation: "tramos"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cuadros_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "perfiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       fallas_deteccion: {
         Row: {
           created_at: string | null
@@ -420,6 +484,13 @@ export type Database = {
           km_cubiertos: number
           localidad: string
           tramos: number
+        }[]
+      }
+      cuadros_por_tramo: {
+        Args: { p_municipio: string }
+        Returns: {
+          cuadros: number
+          tramo_id: string
         }[]
       }
       municipio_actual: { Args: never; Returns: string }

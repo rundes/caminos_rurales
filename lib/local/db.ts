@@ -1,9 +1,14 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
 import type {
+  BaseCuadros,
   BaseLocal,
+  CuadroGuardado,
+  CuadroLocal,
   EstadoRecorridoLocal,
+  EstadoSubida,
   ImpactoLocal,
   ItemCola,
+  ItemColaCuadros,
   MuestraLocal,
   ObservacionLocal,
   PuntoLocal,
@@ -17,8 +22,10 @@ export const NOMBRE_DB = 'visiovial'
  * ajenos (nunca se procesan ni se suben con la sesión actual).
  *
  * v3 agrega los stores `muestras` e `impactos` de la captura por sensores.
+ *
+ * v4 agrega `cuadros` (imágenes de la cámara) y su cola `colaCuadros`.
  */
-export const VERSION_DB = 3
+export const VERSION_DB = 4
 
 const ERROR_SIN_INDEXEDDB = 'Este navegador no puede guardar el recorrido en el dispositivo.'
 
@@ -29,12 +36,23 @@ interface EsquemaVisiovial extends DBSchema {
   cola: { key: string; value: ItemCola }
   muestras: { key: number; value: MuestraLocal; indexes: { recorridoId: string } }
   impactos: { key: number; value: ImpactoLocal; indexes: { recorridoId: string } }
+  cuadros: { key: number; value: CuadroLocal; indexes: { recorridoId: string } }
+  colaCuadros: { key: string; value: ItemColaCuadros }
 }
 
 export type DbVisiovial = IDBPDatabase<EsquemaVisiovial>
 
 /** Stores que se vacían al cerrar sesión. */
-const STORES = ['recorridos', 'puntos', 'observaciones', 'cola', 'muestras', 'impactos'] as const
+const STORES = [
+  'recorridos',
+  'puntos',
+  'observaciones',
+  'cola',
+  'muestras',
+  'impactos',
+  'cuadros',
+  'colaCuadros',
+] as const
 
 let conexion: Promise<DbVisiovial> | null = null
 
@@ -65,6 +83,15 @@ export function abrirDb(): Promise<DbVisiovial> {
         if (anterior < 3) {
           db.createObjectStore('muestras', { autoIncrement: true }).createIndex('recorridoId', 'recorridoId')
           db.createObjectStore('impactos', { autoIncrement: true }).createIndex('recorridoId', 'recorridoId')
+        }
+        if (anterior < 4) {
+          // La clave va adentro del valor (`keyPath`) porque la cola necesita
+          // marcar cuadro por cuadro después de subirlo.
+          db.createObjectStore('cuadros', { keyPath: 'id', autoIncrement: true }).createIndex(
+            'recorridoId',
+            'recorridoId',
+          )
+          db.createObjectStore('colaCuadros', { keyPath: 'recorridoId' })
         }
       },
       // Otra pestaña quiere migrar: cerramos para no bloquearla.
@@ -208,6 +235,94 @@ export async function borrarItemCola(recorridoId: string): Promise<void> {
   await db.delete('cola', recorridoId)
 }
 
+/** Guarda un cuadro de la cámara y devuelve la clave que le asignó IndexedDB. */
+export async function guardarCuadro(cuadro: CuadroLocal): Promise<number> {
+  const db = await abrirDb()
+  return db.add('cuadros', cuadro)
+}
+
+/** Cuadros de un recorrido, en orden cronológico y opcionalmente por estado. */
+export async function listarCuadros(
+  recorridoId: string,
+  estado?: EstadoSubida,
+): Promise<CuadroGuardado[]> {
+  const db = await abrirDb()
+  const cuadros = (await db.getAllFromIndex('cuadros', 'recorridoId', recorridoId)) as CuadroGuardado[]
+  const filtrados = estado ? cuadros.filter((c) => c.estadoSubida === estado) : cuadros
+  return filtrados.sort((a, b) => a.t - b.t)
+}
+
+export async function contarCuadros(recorridoId: string, estado?: EstadoSubida): Promise<number> {
+  const db = await abrirDb()
+  if (!estado) return db.countFromIndex('cuadros', 'recorridoId', recorridoId)
+  return (await listarCuadros(recorridoId, estado)).length
+}
+
+/** Deja el cuadro en el estado indicado, guardando la ruta del objeto subido. */
+export async function marcarCuadro(id: number, estado: EstadoSubida, ruta?: string): Promise<void> {
+  const db = await abrirDb()
+  const cuadro = await db.get('cuadros', id)
+  if (!cuadro) return
+  await db.put('cuadros', { ...cuadro, estadoSubida: estado, ...(ruta ? { ruta } : {}) })
+}
+
+/**
+ * Libera los blobs de los cuadros ya subidos: la fila queda (para el contador
+ * y la ruta) pero la imagen, que es lo que ocupa, se borra del dispositivo.
+ */
+export async function borrarCuadrosSubidos(recorridoId: string): Promise<number> {
+  const db = await abrirDb()
+  const subidos = (await listarCuadros(recorridoId, 'subida')).filter((c) => c.blob !== undefined)
+  for (const cuadro of subidos) {
+    await db.put('cuadros', { ...cuadro, blob: undefined })
+  }
+  return subidos.length
+}
+
+/**
+ * Da por perdidos los cuadros pendientes de un recorrido: quedan en `error` y
+ * sin blob. La fila se conserva para poder contarlos en el resumen; el blob se
+ * libera porque ya no se va a reintentar la subida.
+ */
+export async function marcarCuadrosEnError(recorridoId: string): Promise<number> {
+  const db = await abrirDb()
+  const pendientes = await listarCuadros(recorridoId, 'pendiente')
+  for (const cuadro of pendientes) {
+    await db.put('cuadros', { ...cuadro, estadoSubida: 'error', blob: undefined })
+  }
+  return pendientes.length
+}
+
+/** Encola los cuadros de un recorrido. Si ya estaba encolado no reinicia sus intentos. */
+export async function encolarCuadros(recorridoId: string): Promise<void> {
+  const db = await abrirDb()
+  const existente = await db.get('colaCuadros', recorridoId)
+  if (existente) return
+  await db.put('colaCuadros', { recorridoId, intentos: 0, proximoIntento: 0 })
+}
+
+export async function obtenerItemColaCuadros(
+  recorridoId: string,
+): Promise<ItemColaCuadros | undefined> {
+  const db = await abrirDb()
+  return db.get('colaCuadros', recorridoId)
+}
+
+export async function guardarItemColaCuadros(item: ItemColaCuadros): Promise<void> {
+  const db = await abrirDb()
+  await db.put('colaCuadros', item)
+}
+
+export async function listarColaCuadros(): Promise<ItemColaCuadros[]> {
+  const db = await abrirDb()
+  return db.getAll('colaCuadros')
+}
+
+export async function borrarItemColaCuadros(recorridoId: string): Promise<void> {
+  const db = await abrirDb()
+  await db.delete('colaCuadros', recorridoId)
+}
+
 /** Implementación de `BaseLocal` sobre IndexedDB, para inyectar en la sincronización. */
 export const baseLocal: BaseLocal = {
   guardarRecorrido,
@@ -227,4 +342,19 @@ export const baseLocal: BaseLocal = {
   guardarItemCola,
   listarCola,
   borrarItemCola,
+}
+
+/** Implementación de `BaseCuadros` sobre IndexedDB, para la cola de cuadros. */
+export const baseCuadros: BaseCuadros = {
+  listarRecorridos,
+  listarCuadros,
+  contarCuadros,
+  marcarCuadro,
+  borrarCuadrosSubidos,
+  marcarCuadrosEnError,
+  encolarCuadros,
+  obtenerItemColaCuadros,
+  guardarItemColaCuadros,
+  listarColaCuadros,
+  borrarItemColaCuadros,
 }

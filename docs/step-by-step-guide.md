@@ -76,5 +76,15 @@
 - [x] Resumen del recorrido: km por calidad, cantidad de impactos.
 - [x] Términos actualizados con el uso de sensores de movimiento.
 
-## Fase 12 (futura)
-- [ ] Cámara: registro de cuadros georreferenciados y clasificación de superficie.
+## Fase 12: cuadros de cámara
+- [x] Migración `0007_cuadros.sql`: tabla `cuadros` (posición, rumbo, velocidad, `tramo_id`, ruta al objeto) con RLS por municipio/propio y la función `cuadros_por_tramo`.
+- [x] `lib/juego.ts`: puntos por cuadros registrados (`PUNTOS_POR_CUADROS = 1` cada `CUADROS_POR_PUNTO = 10`, tope `PUNTOS_MAX_CUADROS = 100`), otorgados de forma idempotente por `registrarCuadros`.
+- [x] `registrarCuadros` (Server Action): valida sesión y payload (≤ 200 por llamada), verifica el recorrido propio, asigna `tramo_id` con el asignador de sensores (40 m), upsert por `(recorrido_id, t)`.
+- [x] Cliente: store `cuadros` en IndexedDB (v4), captura JPEG 1280 px / calidad 0,7 vía canvas cada 100 m o 10 s (≥ 15 km/h), tope 2000 cuadros y aviso de espacio (`navigator.storage.estimate()`), permiso de cámara pedido en el gesto de "Iniciar recorrido", botón "Cámara" para apagar/prender el stream sin cortar la grabación.
+- [x] Cola de subida separada (`colaCuadros`), diferida hasta que el recorrido está `subido`, en lotes de 20, con reintentos y backoff; "Subir cuadros solo con WiFi" por defecto y botón "Subir ahora con datos".
+- [x] Resumen del recorrido: cuadros capturados/pendientes de subir.
+- [x] Mapa: capa "Cuadros" (toggle independiente) con miniatura firmada y navegación anterior/siguiente por tramo; tooltip del tramo con cantidad de cuadros.
+- [x] Términos actualizados con el uso de la cámara.
+
+## Fase 12b (futura)
+- [ ] Clasificación de superficie y detección de baches con modelo entrenado sobre los cuadros; difuminado de caras/patentes.

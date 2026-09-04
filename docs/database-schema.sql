@@ -1,7 +1,8 @@
 -- Visiovial Rural - Esquema de base de datos (Supabase / PostgreSQL 17)
 -- Estado final: refleja 0001_schema.sql + 0002_storage_por_municipio.sql +
 -- 0003a_tipos_falla.sql + 0003_recorridos.sql + 0004_recorridos_procesado.sql +
--- 0005_fallas_update.sql + 0006a_enums_sensor.sql + 0006_muestras_sensor.sql.
+-- 0005_fallas_update.sql + 0006a_enums_sensor.sql + 0006_muestras_sensor.sql +
+-- 0007_cuadros.sql.
 -- Una instalación nueva puede
 -- correr solo este archivo. La tabla `relevamientos` ya no existe: el flujo
 -- es recorrido GPS -> cobertura de tramos -> puntos e insignias.
@@ -126,6 +127,27 @@ create table public.muestras_sensor (
   created_at timestamptz not null default now()
 );
 
+-- 7c. TABLA CUADROS (foto georreferenciada de la cámara durante el recorrido)
+create table public.cuadros (
+  id uuid primary key default gen_random_uuid(),
+  recorrido_id uuid not null references public.recorridos(id) on delete cascade,
+  -- Lo escribe la app con el usuario autenticado (la política lo exige).
+  usuario_id uuid not null references public.perfiles(id) on delete cascade,
+  -- Tramo más cercano a la captura; null si no hay ninguno a 40 m.
+  tramo_id text references public.tramos(id) on delete set null,
+  t timestamptz not null,
+  latitud numeric(10, 8) not null,
+  longitud numeric(11, 8) not null,
+  rumbo numeric,
+  velocidad_kmh numeric,
+  -- Ruta del objeto en el bucket de evidencia: {uid}/{recorridoId}/...
+  ruta text not null,
+  created_at timestamptz not null default now(),
+  -- La subida es diferida y con reintentos: el par (recorrido, instante)
+  -- identifica al cuadro y el upsert resuelve el reenvío.
+  unique (recorrido_id, t)
+);
+
 -- 8. PUNTOS Y LOGROS
 create table public.puntos_eventos (
   id uuid primary key default gen_random_uuid(),
@@ -158,6 +180,8 @@ create index fallas_tramo_idx on public.fallas_deteccion (tramo_id);
 create index fallas_origen_idx on public.fallas_deteccion (origen);
 create index muestras_recorrido_idx on public.muestras_sensor (recorrido_id);
 create index muestras_tramo_idx on public.muestras_sensor (tramo_id);
+create index cuadros_recorrido_idx on public.cuadros (recorrido_id);
+create index cuadros_tramo_idx on public.cuadros (tramo_id);
 create index puntos_usuario_idx on public.puntos_eventos (usuario_id);
 create index puntos_municipio_idx on public.puntos_eventos (municipio);
 
@@ -309,6 +333,31 @@ begin
 end;
 $$;
 
+-- Cuadros de cámara por tramo: alimenta el tooltip del tramo en el mapa.
+create or replace function public.cuadros_por_tramo(p_municipio text)
+returns table (
+  tramo_id text,
+  cuadros int
+)
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+#variable_conflict use_column
+begin
+  if p_municipio is distinct from public.municipio_actual() then return; end if;
+
+  return query
+  select c.tramo_id, count(*)::int as cuadros
+  from public.cuadros c
+  join public.tramos tr on tr.id = c.tramo_id
+  where tr.municipio = p_municipio and c.tramo_id is not null
+  group by c.tramo_id
+  order by c.tramo_id;
+end;
+$$;
+
 -- 12. TRIGGER: crear perfil al registrarse
 -- El formulario de registro envía nombre y municipio_id en options.data.
 create or replace function public.handle_new_user()
@@ -340,6 +389,7 @@ alter table public.recorridos enable row level security;
 alter table public.cobertura_tramos enable row level security;
 alter table public.fallas_deteccion enable row level security;
 alter table public.muestras_sensor enable row level security;
+alter table public.cuadros enable row level security;
 alter table public.puntos_eventos enable row level security;
 alter table public.logros enable row level security;
 
@@ -437,6 +487,42 @@ create policy "muestras_insert_propio" on public.muestras_sensor
   );
 
 create policy "muestras_delete_propio" on public.muestras_sensor
+  for delete to authenticated
+  using (
+    recorrido_id in (select id from public.recorridos where usuario_id = auth.uid())
+    and usuario_id = auth.uid()
+  );
+
+-- cuadros de cámara: lectura por municipio; escritura, actualización y borrado
+-- del propio (el upsert de la subida diferida necesita poder pisar la fila).
+create policy "cuadros_select" on public.cuadros
+  for select to authenticated
+  using (
+    recorrido_id in (
+      select r.id from public.recorridos r
+      where r.usuario_id = auth.uid() or r.municipio = public.municipio_actual()
+    )
+  );
+
+create policy "cuadros_insert_propio" on public.cuadros
+  for insert to authenticated
+  with check (
+    recorrido_id in (select id from public.recorridos where usuario_id = auth.uid())
+    and usuario_id = auth.uid()
+  );
+
+create policy "cuadros_update_propio" on public.cuadros
+  for update to authenticated
+  using (
+    recorrido_id in (select id from public.recorridos where usuario_id = auth.uid())
+    and usuario_id = auth.uid()
+  )
+  with check (
+    recorrido_id in (select id from public.recorridos where usuario_id = auth.uid())
+    and usuario_id = auth.uid()
+  );
+
+create policy "cuadros_delete_propio" on public.cuadros
   for delete to authenticated
   using (
     recorrido_id in (select id from public.recorridos where usuario_id = auth.uid())

@@ -1,13 +1,15 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCamara } from '@/hooks/useCamara'
 import { useEnLinea } from '@/hooks/useEnLinea'
 import { useGrabadorGps } from '@/hooks/useGrabadorGps'
 import { useSensores, type ControlSensores } from '@/hooks/useSensores'
 import { useSincronizacion } from '@/hooks/useSincronizacion'
+import { useSincronizacionCuadros } from '@/hooks/useSincronizacionCuadros'
 import type { CapasMunicipio as CapasMunicipioTipo } from '@/lib/capas'
 import { cerrarRecorrido } from '@/lib/local/cierre'
-import { guardarObservacion, recorridoEnCurso } from '@/lib/local/db'
+import { contarCuadros, guardarObservacion, recorridoEnCurso } from '@/lib/local/db'
 import type { RecorridoLocal } from '@/lib/local/tipos'
 import type { Impacto } from '@/lib/sensores/tipos'
 import type { PuntoGps } from '@/lib/track'
@@ -35,6 +37,12 @@ const ERROR_ACCION = 'No pudimos completar la acción en este dispositivo.'
 /** Impactos que se dibujan en el mapa durante la grabación. */
 const MAX_MARCADORES_IMPACTO = 20
 
+/** Velocidad informada por el navegador (m/s) en km/h, o `null` si no la trae. */
+function velocidadKmh(posicion?: GeolocationPosition): number | null {
+  const velocidad = posicion?.coords.speed
+  return velocidad === null || velocidad === undefined || velocidad < 0 ? null : velocidad * 3.6
+}
+
 /** Centro del municipio cuando hay límites; si no, el centro del partido. */
 function centroInicial(centro: [number, number], limites: LimitesBounds | null): [number, number] {
   if (!limites) return centro
@@ -49,12 +57,33 @@ export function RecorridoView({ usuarioId, municipio, capas, limites, centro }: 
   // depende del recorrido que abre el grabador, y el grabador le pasa cada
   // punto). El `ref` corta ese ciclo sin reabrir el `watchPosition`.
   const registrarGps = useRef<ControlSensores['registrarGps'] | null>(null)
-  const alPunto = useCallback(
-    (punto: PuntoGps, posicion?: GeolocationPosition) => registrarGps.current?.(punto, posicion),
-    [],
-  )
+  const camara = useCamara({ activaInicial: true })
+  const capturarSi = useRef(camara.capturarSi)
+  const recorridoEnGrabacion = useRef<string | null>(null)
+  const alPunto = useCallback((punto: PuntoGps, posicion?: GeolocationPosition) => {
+    registrarGps.current?.(punto, posicion)
+    const recorridoId = recorridoEnGrabacion.current
+    if (!recorridoId) return
+    // La captura no puede frenar la grabación: los fallos se avisan por consola.
+    void capturarSi.current(
+      {
+        lat: punto.lat,
+        lng: punto.lng,
+        t: punto.t,
+        velocidadKmh: velocidadKmh(posicion),
+        rumbo: posicion?.coords.heading ?? null,
+      },
+      recorridoId,
+    )
+  }, [])
 
   const grabador = useGrabadorGps({ usuarioId, municipio, onPunto: alPunto })
+  useEffect(() => {
+    capturarSi.current = camara.capturarSi
+  }, [camara.capturarSi])
+  useEffect(() => {
+    recorridoEnGrabacion.current = grabador.estado.recorridoId
+  }, [grabador.estado.recorridoId])
   const alImpacto = useCallback((impacto: Impacto) => {
     setMarcadores((previos) =>
       [...previos, [impacto.lat, impacto.lng] as [number, number]].slice(-MAX_MARCADORES_IMPACTO),
@@ -70,6 +99,7 @@ export function RecorridoView({ usuarioId, municipio, capas, limites, centro }: 
   }, [sensores.registrarGps])
 
   const { pendientes, resumenes, sincronizar } = useSincronizacion(usuarioId)
+  const cuadros = useSincronizacionCuadros(usuarioId)
   const enLinea = useEnLinea()
 
   const [sinTerminar, setSinTerminar] = useState<RecorridoLocal | null>(null)
@@ -77,6 +107,7 @@ export function RecorridoView({ usuarioId, municipio, capas, limites, centro }: 
   const [posicionObs, setPosicionObs] = useState<PuntoGps | null>(null)
   const [cerrado, setCerrado] = useState<Cerrado | null>(null)
   const [errorLocal, setErrorLocal] = useState<string | null>(null)
+  const [totalCuadros, setTotalCuadros] = useState({ capturados: 0, pendientes: 0 })
 
   useEffect(() => {
     recorridoEnCurso(usuarioId)
@@ -87,6 +118,17 @@ export function RecorridoView({ usuarioId, municipio, capas, limites, centro }: 
       })
   }, [usuarioId])
 
+  // Los cuadros del recorrido recién cerrado, refrescados cuando la cola sube.
+  useEffect(() => {
+    const recorridoId = cerrado?.recorridoId
+    if (!recorridoId) return
+    Promise.all([contarCuadros(recorridoId), contarCuadros(recorridoId, 'pendiente')])
+      .then(([capturados, pendientesDeSubir]) =>
+        setTotalCuadros({ capturados, pendientes: pendientesDeSubir }),
+      )
+      .catch((error) => console.error('[recorrido]', error))
+  }, [cerrado?.recorridoId, cuadros.subidos])
+
   /** Corre una acción asíncrona sin dejar que un rechazo quede sin mostrar. */
   const correr = useCallback((accion: () => Promise<void>) => {
     accion().catch((error) => {
@@ -96,31 +138,38 @@ export function RecorridoView({ usuarioId, municipio, capas, limites, centro }: 
   }, [])
 
   const { solicitarPermiso } = sensores
+  const { solicitarPermiso: solicitarCamara, detener: detenerCamara } = camara
 
   const iniciar = useCallback(async () => {
-    // iOS solo concede el permiso de movimiento si se pide dentro del gesto:
-    // va antes de cualquier `await`. Si lo rechazan, el recorrido sigue igual.
+    // iOS solo concede los permisos si se piden dentro del gesto: los dos se
+    // lanzan antes de cualquier `await`. Si los rechazan, el recorrido sigue.
     const permiso = solicitarPermiso()
+    const permisoCamara = solicitarCamara()
     setCerrado(null)
     setErrorLocal(null)
     setSinTerminar(null)
     setMarcadores([])
     await permiso
+    await permisoCamara
     await grabador.iniciar()
-  }, [grabador, solicitarPermiso])
+  }, [grabador, solicitarPermiso, solicitarCamara])
 
   const continuar = useCallback(async () => {
     if (!sinTerminar) return
     const permiso = solicitarPermiso()
+    const permisoCamara = solicitarCamara()
     const id = sinTerminar.id
     setSinTerminar(null)
     setMarcadores([])
     await permiso
+    await permisoCamara
     await grabador.retomar(id)
-  }, [grabador, sinTerminar, solicitarPermiso])
+  }, [grabador, sinTerminar, solicitarPermiso, solicitarCamara])
 
   const cerrarPendiente = useCallback(async () => {
     if (!sinTerminar) return
+    // Sale de la grabación: la cámara no tiene por qué seguir prendida.
+    detenerCamara()
     const resultado = await cerrarRecorrido(sinTerminar.id)
     setSinTerminar(null)
     if (!resultado.ok) {
@@ -128,10 +177,13 @@ export function RecorridoView({ usuarioId, municipio, capas, limites, centro }: 
       return
     }
     await sincronizar()
-  }, [sinTerminar, sincronizar])
+  }, [detenerCamara, sinTerminar, sincronizar])
 
   const finalizar = useCallback(async () => {
     const { recorridoId, km, cantidad } = grabador.estado
+    // Se libera antes de cerrar, y también cuando el recorrido se descarta:
+    // dejar el hardware prendido en el resumen quema batería y da mala espina.
+    detenerCamara()
     const resultado = await grabador.finalizar()
     if (resultado && !resultado.ok) {
       setErrorLocal(resultado.mensaje)
@@ -139,7 +191,7 @@ export function RecorridoView({ usuarioId, municipio, capas, limites, centro }: 
     }
     if (recorridoId) setCerrado({ recorridoId, km, puntosGps: cantidad })
     await sincronizar()
-  }, [grabador, sincronizar])
+  }, [detenerCamara, grabador, sincronizar])
 
   // Abrir el formulario pausa la grabación y congela la posición: la
   // observación queda donde estaba la persona al verla, no donde termina.
@@ -184,6 +236,11 @@ export function RecorridoView({ usuarioId, municipio, capas, limites, centro }: 
         puntosGps={cerrado.puntosGps}
         resumen={resumenes[cerrado.recorridoId] ?? null}
         sinConexion={!enLinea}
+        cuadros={totalCuadros.capturados}
+        cuadrosPendientes={totalCuadros.pendientes}
+        cuadrosError={cuadros.errorCuadros[cerrado.recorridoId] ?? 0}
+        redVerificada={cuadros.red.verificada}
+        onSubirCuadros={cuadros.forzarConDatos}
         onNuevo={() => correr(iniciar)}
       />
     )
@@ -205,6 +262,12 @@ export function RecorridoView({ usuarioId, municipio, capas, limites, centro }: 
               estado: sensores.estado,
               impactos: sensores.impactos,
               posiciones: marcadores,
+            }}
+            camara={{
+              estado: camara.estado,
+              cuadros: camara.cuadros,
+              videoRef: camara.videoRef,
+              onAlternar: camara.alternar,
             }}
             onObservacion={abrirObservacion}
             onPausar={grabador.pausar}
