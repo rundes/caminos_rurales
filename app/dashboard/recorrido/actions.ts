@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { obtenerProveedor } from '@/lib/almacenamiento'
 import type { DestinoSubida } from '@/lib/almacenamiento/tipos'
 import { TIPOS_PERMITIDOS, rutaEvidencia } from '@/lib/archivos'
+import { guardarCuadros, recalcularPuntosCuadros } from '@/lib/cuadros-servidor'
 import {
   ERROR_SESION,
   buscarRecorrido,
@@ -13,6 +14,7 @@ import {
   procesarRecorrido,
   resumenGuardado,
   sesionYMunicipio,
+  tramosDeMunicipio,
   type Contexto,
   type ResumenRecorrido,
 } from '@/lib/recorrido-servidor'
@@ -20,7 +22,7 @@ import { crearClienteAdmin } from '@/lib/supabase/admin'
 import { crearClienteServidor } from '@/lib/supabase/server'
 import { evaluarPlausibilidad, kmDeTrack } from '@/lib/track'
 import type { ResultadoAccion } from '@/lib/tipos'
-import { esquemaRecorrido, primerError } from '@/lib/validaciones'
+import { esquemaCuadros, esquemaRecorrido, primerError } from '@/lib/validaciones'
 
 export type { ResumenRecorrido } from '@/lib/recorrido-servidor'
 
@@ -127,6 +129,54 @@ export async function finalizarRecorrido(payload: unknown): Promise<ResultadoRec
   } catch (error) {
     console.error('[recorrido]', error)
     return { ok: false, error: ERROR_GENERICO }
+  }
+}
+
+/** Lo que devuelve `registrarCuadros`: cuántos se guardaron y los puntos del recorrido. */
+export type RegistroCuadros = { registrados: number; puntos: number }
+export type ResultadoCuadros = ResultadoAccion<RegistroCuadros>
+
+const ERROR_CUADROS = 'No se pudieron registrar los cuadros. Intentá de nuevo.'
+const ERROR_CUADROS_AJENOS = 'Ese recorrido es de otra persona.'
+
+/**
+ * Registra un lote de cuadros de cámara ya subidos al almacenamiento: los
+ * asigna al tramo más cercano, los guarda con el cliente del usuario y
+ * recalcula los puntos por cuadros del recorrido.
+ *
+ * Idempotente: el upsert por `(recorrido_id, t)` y el recálculo sobre el total
+ * guardado hacen que reenviar un lote no duplique filas ni puntos.
+ */
+export async function registrarCuadros(entrada: unknown): Promise<ResultadoCuadros> {
+  const parseo = esquemaCuadros.safeParse(entrada)
+  if (!parseo.success) return { ok: false, error: primerError(parseo.error) }
+  const datos = parseo.data
+
+  const supabase = await crearClienteServidor()
+  const sesion = await sesionYMunicipio(supabase)
+  if ('error' in sesion) return { ok: false, error: sesion.error }
+
+  const ctx: Contexto = { ...sesion, recorridoId: datos.recorridoId }
+
+  try {
+    const recorrido = await buscarRecorrido(supabase, ctx.recorridoId)
+    // Sin recorrido no hay nada que registrar: la cola sube los cuadros recién
+    // después de que el recorrido quedó guardado.
+    if (!recorrido) return { ok: false, error: ERROR_CUADROS }
+    if (recorrido.usuario_id !== ctx.usuarioId) {
+      return { ok: false, error: ERROR_CUADROS_AJENOS }
+    }
+
+    const admin = crearClienteAdmin()
+    const tramos = await tramosDeMunicipio(admin, ctx.municipio)
+    const registrados = await guardarCuadros(supabase, ctx, datos.cuadros, tramos)
+    const puntos = await recalcularPuntosCuadros(admin, ctx)
+
+    revalidatePath('/dashboard/mapa')
+    return { ok: true, data: { registrados, puntos } }
+  } catch (error) {
+    console.error('[cuadros]', error)
+    return { ok: false, error: ERROR_CUADROS }
   }
 }
 

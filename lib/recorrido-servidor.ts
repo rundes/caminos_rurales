@@ -227,7 +227,11 @@ export async function sesionYMunicipio(
   return { usuarioId: user.id, municipio: perfil.municipio_id }
 }
 
-async function tramosDeMunicipio(admin: ClienteAdmin, municipio: string): Promise<TramoMunicipio[]> {
+/** Tramos del municipio, cacheados por proceso (ver `TTL_TRAMOS_MS`). */
+export async function tramosDeMunicipio(
+  admin: ClienteAdmin,
+  municipio: string,
+): Promise<TramoMunicipio[]> {
   const enCache = cacheTramos.get(municipio)
   if (enCache && enCache.expira > Date.now()) return enCache.tramos
 

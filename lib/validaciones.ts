@@ -173,7 +173,38 @@ export const esquemaRecorrido = z
     path: ['fin'],
   })
 
+/** Techo de cuadros por llamada a `registrarCuadros`: la cola sube de a lotes. */
+const MAX_CUADROS_LOTE = 200
+
+/**
+ * Cuadro de cámara ya subido al almacenamiento: el servidor solo registra su
+ * posición y la ruta del objeto (el binario viajó por separado con un PUT).
+ */
+export const esquemaCuadro = z.object({
+  t: z.int().min(0, { message: 'Marca de tiempo inválida' }),
+  lat: latitud,
+  lng: longitud,
+  rumbo: z.number().min(0).max(360, { message: 'Rumbo fuera de rango' }).nullable().default(null),
+  velocidadKmh: z
+    .number()
+    .min(0)
+    .max(MAX_VELOCIDAD_KMH, { message: 'Velocidad fuera de rango' })
+    .nullable()
+    .default(null),
+  ruta: z.string().min(1).max(300, { message: 'Ruta de cuadro inválida' }),
+})
+
+export const esquemaCuadros = z.object({
+  recorridoId: z.uuid({ message: 'Recorrido sin identificador válido' }),
+  cuadros: z
+    .array(esquemaCuadro)
+    .min(1, { message: 'No hay cuadros para registrar' })
+    .max(MAX_CUADROS_LOTE, { message: 'Demasiados cuadros en una sola llamada' }),
+})
+
 export type PuntoGpsPayload = z.infer<typeof puntoGpsTrack>
+export type CuadroPayload = z.infer<typeof esquemaCuadro>
+export type CuadrosPayload = z.infer<typeof esquemaCuadros>
 export type MuestraPayload = z.infer<typeof esquemaMuestra>
 export type ImpactoPayload = z.infer<typeof esquemaImpacto>
 export type Observacion = z.infer<typeof esquemaObservacion>

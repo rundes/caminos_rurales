@@ -8,6 +8,11 @@ export const PUNTOS_OBSERVACION = 5
 /** Premio por recorrer con los sensores activos, además de los km del track. */
 export const PUNTOS_KM_SENSOR = 1
 
+/** Cuadros de cámara que hay que registrar para sumar un punto. */
+export const CUADROS_POR_PUNTO = 10
+/** Tope de puntos por cuadros en un mismo recorrido. */
+export const PUNTOS_MAX_CUADROS = 100
+
 /**
  * Antitrampa: techo de puntos que un usuario puede sumar en 24 h. El excedente
  * se trunca (los eventos se siguen registrando, con el puntaje recortado).
@@ -18,9 +23,19 @@ const KM_EXPLORADOR = 50
 const KM_CARTOGRAFO = 200
 
 export type EventoPuntos = {
-  motivo: 'km_nuevos' | 'km_repetidos' | 'observaciones' | 'km_sensor'
+  motivo: 'km_nuevos' | 'km_repetidos' | 'observaciones' | 'km_sensor' | 'cuadros'
   puntos: number
   detalle: string
+}
+
+/**
+ * Puntos que suman los cuadros de cámara de un recorrido: uno cada
+ * `CUADROS_POR_PUNTO`, con tope `PUNTOS_MAX_CUADROS`. Se calcula sobre el total
+ * del recorrido (no sobre el lote) para que la subida por partes sea idempotente.
+ */
+export function puntosPorCuadros(totalCuadros: number): number {
+  if (!Number.isFinite(totalCuadros) || totalCuadros <= 0) return 0
+  return Math.min(Math.floor(totalCuadros / CUADROS_POR_PUNTO), PUNTOS_MAX_CUADROS)
 }
 
 /** Lo mínimo que hace falta de una muestra para medir la cobertura de sensores. */
