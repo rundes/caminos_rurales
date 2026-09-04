@@ -23,3 +23,12 @@ export type Impacto = {
   pico: number // m/s²
   velocidadKmh: number
 }
+
+/** Rugosidad agregada de un tramo, vía la función SQL `rugosidad_tramos`. */
+export type RugosidadTramo = {
+  calidad: CalidadSegmento
+  rms: number // m/s²
+  velocidad: number // km/h
+  impactos: number
+  segmentos: number
+}

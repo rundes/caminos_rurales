@@ -5,9 +5,8 @@ import type { Database } from '@/lib/supabase/database.types'
 
 vi.mock('server-only', () => ({}))
 
-const { obtenerCoberturaMunicipio, obtenerLogrosPropios, obtenerRanking, obtenerTramosConEstado } = await import(
-  '@/lib/cobertura-consultas'
-)
+const { obtenerCoberturaMunicipio, obtenerLogrosPropios, obtenerRanking, obtenerRugosidadTramos, obtenerTramosConEstado } =
+  await import('@/lib/cobertura-consultas')
 
 type Cliente = SupabaseClient<Database>
 type Resultado = { data: unknown; error: { message: string } | null }
@@ -142,6 +141,33 @@ describe('obtenerTramosConEstado', () => {
     })
     expect(await obtenerTramosConEstado(cliente, 'maipu')).toEqual([])
     expect(spy).toHaveBeenCalledWith('[cobertura-consultas]', 'boom-cobertura')
+    spy.mockRestore()
+  })
+})
+
+describe('obtenerRugosidadTramos', () => {
+  test('indexa por tramo_id y coerciona los numeric que llegan como string', async () => {
+    const cliente = crearCliente({
+      rpc: {
+        data: [
+          { tramo_id: 't1', calidad: 'malo', rms_medio: '2.5', velocidad_media: '38.2', impactos: '3', segmentos: '10' },
+          { tramo_id: 't2', calidad: 'bueno', rms_medio: 0.4, velocidad_media: 45, impactos: 0, segmentos: 4 },
+        ],
+        error: null,
+      },
+    })
+    const rugosidad = await obtenerRugosidadTramos(cliente, 'maipu')
+    expect(rugosidad).toEqual({
+      t1: { calidad: 'malo', rms: 2.5, velocidad: 38.2, impactos: 3, segmentos: 10 },
+      t2: { calidad: 'bueno', rms: 0.4, velocidad: 45, impactos: 0, segmentos: 4 },
+    })
+  })
+
+  test('si el rpc falla, devuelve {} y loguea con el prefijo [rugosidad]', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const cliente = crearCliente({ rpc: { data: null, error: { message: 'boom' } } })
+    expect(await obtenerRugosidadTramos(cliente, 'maipu')).toEqual({})
+    expect(spy).toHaveBeenCalledWith('[rugosidad]', 'boom')
     spy.mockRestore()
   })
 })

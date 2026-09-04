@@ -2,7 +2,7 @@ import { Suspense } from 'react'
 import { MapaCliente } from '@/components/MapaCliente'
 import { capasDe } from '@/lib/capas'
 import { limitesDe } from '@/lib/capas-servidor'
-import { obtenerTramosConEstado } from '@/lib/cobertura-consultas'
+import { obtenerRugosidadTramos, obtenerTramosConEstado } from '@/lib/cobertura-consultas'
 import { aPuntos, filtrarPuntos, municipiosDe, type FilaFalla } from '@/lib/fallas'
 import { buscarPartido } from '@/lib/partidos'
 import { crearClienteServidor } from '@/lib/supabase/server'
@@ -31,7 +31,7 @@ export default async function MapaPage({ searchParams }: Props) {
   const { data, error } = await supabase
     .from('fallas_deteccion')
     .select(
-      'id, tipo_falla, severidad, latitud, longitud, url_evidencia_imagen, url_evidencia_video, created_at, recorridos(inicio, municipio)',
+      'id, tipo_falla, severidad, latitud, longitud, url_evidencia_imagen, url_evidencia_video, created_at, origen, magnitud, recorridos(inicio, municipio)',
     )
     .order('created_at', { ascending: false })
     .limit(LIMITE_FALLAS)
@@ -59,6 +59,7 @@ export default async function MapaPage({ searchParams }: Props) {
   }
 
   const tramos = municipioActual ? await obtenerTramosConEstado(supabase, municipioActual) : []
+  const rugosidad = municipioActual ? await obtenerRugosidadTramos(supabase, municipioActual) : {}
 
   const partidoFiltro = filtros.municipio ? buscarPartido(filtros.municipio) : undefined
   const partidoActual = !filtros.municipio && capas ? buscarPartido(municipioActual ?? '') : undefined
@@ -82,6 +83,9 @@ export default async function MapaPage({ searchParams }: Props) {
         {puntos.length} observación(es). Observaciones: rojo alta · amarillo media · verde baja.
       </p>
       <p className="text-sm text-gray-600">Tramos: verde cubierto · gris pendiente.</p>
+      <p className="text-sm text-gray-600">
+        Estado estimado: verde bueno · amarillo regular · naranja malo · rojo intransitable · gris sin datos.
+      </p>
       <MapaCliente
         puntos={puntos}
         centro={centro}
@@ -89,6 +93,7 @@ export default async function MapaPage({ searchParams }: Props) {
         capas={capas}
         limites={limites ?? undefined}
         tramos={tramos}
+        rugosidad={rugosidad}
       />
     </div>
   )
