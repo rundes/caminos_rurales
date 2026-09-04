@@ -38,6 +38,8 @@ const RESUMEN: Resumen = {
   puntos: 30,
   insignias: [],
   coberturaMunicipio: 0.2,
+  kmPorCalidad: { sin_dato: 0, bueno: 0, regular: 0, malo: 0, intransitable: 0 },
+  impactos: 0,
 }
 
 function punto(indice: number): PuntoGps {

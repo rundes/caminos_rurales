@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'vitest'
 import {
   esquemaCamino,
+  esquemaImpacto,
   esquemaLogin,
+  esquemaMuestra,
   esquemaObservacion,
   esquemaRecorrido,
   esquemaRegistro,
@@ -209,5 +211,107 @@ describe('esquemaRecorrido', () => {
   test('rechaza mas de 200 observaciones', () => {
     const observaciones = Array.from({ length: 201 }, () => observacion())
     expect(esquemaRecorrido.safeParse(recorrido({ observaciones })).success).toBe(false)
+  })
+})
+
+function muestraSensor(extra: Record<string, unknown> = {}) {
+  return {
+    t: 1_756_900_000_000,
+    lat: -37.1,
+    lng: -57.9,
+    velocidadKmh: 42,
+    rumbo: 180,
+    altitud: 25,
+    rmsVertical: 1.4,
+    picoVertical: 5.1,
+    frenadas: 1,
+    laterales: 0,
+    muestras: 210,
+    calidad: 'regular',
+    ...extra,
+  }
+}
+
+function impactoSensor(extra: Record<string, unknown> = {}) {
+  return { t: 1_756_900_000_000, lat: -37.1, lng: -57.9, pico: 8.5, velocidadKmh: 40, ...extra }
+}
+
+describe('esquemaMuestra', () => {
+  test('acepta un segmento completo', () => {
+    expect(esquemaMuestra.safeParse(muestraSensor()).success).toBe(true)
+  })
+
+  test('rumbo y altitud son opcionales y quedan en null', () => {
+    const parseo = esquemaMuestra.safeParse(muestraSensor({ rumbo: undefined, altitud: undefined }))
+    expect(parseo.success && parseo.data.rumbo).toBeNull()
+    expect(parseo.success && parseo.data.altitud).toBeNull()
+  })
+
+  test('acepta rumbo y altitud explícitamente nulos', () => {
+    expect(esquemaMuestra.safeParse(muestraSensor({ rumbo: null, altitud: null })).success).toBe(true)
+  })
+
+  test('rechaza una calidad desconocida', () => {
+    expect(esquemaMuestra.safeParse(muestraSensor({ calidad: 'espantoso' })).success).toBe(false)
+  })
+
+  test('rechaza coordenadas y magnitudes fuera de rango', () => {
+    expect(esquemaMuestra.safeParse(muestraSensor({ lat: 91 })).success).toBe(false)
+    expect(esquemaMuestra.safeParse(muestraSensor({ lng: -181 })).success).toBe(false)
+    expect(esquemaMuestra.safeParse(muestraSensor({ rmsVertical: -1 })).success).toBe(false)
+    expect(esquemaMuestra.safeParse(muestraSensor({ velocidadKmh: 5000 })).success).toBe(false)
+    expect(esquemaMuestra.safeParse(muestraSensor({ rumbo: 400 })).success).toBe(false)
+  })
+
+  test('rechaza contadores no enteros o negativos', () => {
+    expect(esquemaMuestra.safeParse(muestraSensor({ frenadas: 1.5 })).success).toBe(false)
+    expect(esquemaMuestra.safeParse(muestraSensor({ muestras: -1 })).success).toBe(false)
+  })
+})
+
+describe('esquemaImpacto', () => {
+  test('acepta un impacto válido', () => {
+    expect(esquemaImpacto.safeParse(impactoSensor()).success).toBe(true)
+  })
+
+  test('rechaza un pico negativo o una marca de tiempo inválida', () => {
+    expect(esquemaImpacto.safeParse(impactoSensor({ pico: -1 })).success).toBe(false)
+    expect(esquemaImpacto.safeParse(impactoSensor({ t: -5 })).success).toBe(false)
+  })
+})
+
+describe('esquemaRecorrido con sensores', () => {
+  test('las muestras y los impactos son opcionales', () => {
+    expect(esquemaRecorrido.safeParse(recorrido()).success).toBe(true)
+  })
+
+  test('acepta muestras e impactos válidos', () => {
+    const parseo = esquemaRecorrido.safeParse(
+      recorrido({ muestras: [muestraSensor()], impactos: [impactoSensor()] }),
+    )
+    expect(parseo.success && parseo.data.muestras).toHaveLength(1)
+    expect(parseo.success && parseo.data.impactos).toHaveLength(1)
+  })
+
+  test('rechaza más de 5000 muestras', () => {
+    const muestras = Array.from({ length: 5001 }, () => muestraSensor())
+    expect(esquemaRecorrido.safeParse(recorrido({ muestras })).success).toBe(false)
+  })
+
+  test('acepta exactamente 5000 muestras', () => {
+    const muestras = Array.from({ length: 5000 }, () => muestraSensor())
+    expect(esquemaRecorrido.safeParse(recorrido({ muestras })).success).toBe(true)
+  })
+
+  test('rechaza más de 500 impactos', () => {
+    const impactos = Array.from({ length: 501 }, () => impactoSensor())
+    expect(esquemaRecorrido.safeParse(recorrido({ impactos })).success).toBe(false)
+  })
+
+  test('una sola muestra inválida invalida el recorrido entero', () => {
+    const parseo = esquemaRecorrido.safeParse(
+      recorrido({ muestras: [muestraSensor(), muestraSensor({ calidad: 'ninguna' })] }),
+    )
+    expect(parseo.success).toBe(false)
   })
 })

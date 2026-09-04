@@ -1,6 +1,12 @@
+import { distanciaKm } from './geo'
+import type { MuestraSensor } from './sensores/tipos'
+import { FRACCION_SENSOR_MINIMA } from './sensores/umbrales'
+
 export const PUNTOS_KM_NUEVO = 10
 export const PUNTOS_KM_REPETIDO = 2
 export const PUNTOS_OBSERVACION = 5
+/** Premio por recorrer con los sensores activos, además de los km del track. */
+export const PUNTOS_KM_SENSOR = 1
 
 /**
  * Antitrampa: techo de puntos que un usuario puede sumar en 24 h. El excedente
@@ -12,9 +18,33 @@ const KM_EXPLORADOR = 50
 const KM_CARTOGRAFO = 200
 
 export type EventoPuntos = {
-  motivo: 'km_nuevos' | 'km_repetidos' | 'observaciones'
+  motivo: 'km_nuevos' | 'km_repetidos' | 'observaciones' | 'km_sensor'
   puntos: number
   detalle: string
+}
+
+/** Lo mínimo que hace falta de una muestra para medir la cobertura de sensores. */
+export type MuestraCobertura = Pick<MuestraSensor, 'lat' | 'lng' | 'calidad'>
+
+/**
+ * Km del recorrido que quedaron con datos de sensores. Cada muestra cierra un
+ * segmento, así que el tramo que aporta es el que va de la muestra anterior a
+ * ella; solo cuentan las muestras con calidad estimada. El resultado se recorta
+ * a los km del recorrido: las muestras y el track se miden por separado y el
+ * ruido del GPS no puede inventar kilómetros.
+ */
+export function kmConSensores(
+  muestras: readonly MuestraCobertura[],
+  kmRecorrido: number,
+): number {
+  if (muestras.length < 2 || kmRecorrido <= 0) return 0
+
+  let km = 0
+  for (let i = 1; i < muestras.length; i += 1) {
+    if (muestras[i].calidad === 'sin_dato') continue
+    km += distanciaKm(muestras[i - 1], muestras[i])
+  }
+  return Math.min(km, kmRecorrido)
 }
 
 /** Calcula los eventos de puntos de un recorrido. Omite motivos sin puntos. */
@@ -22,6 +52,10 @@ export function calcularPuntos(input: {
   kmNuevos: number
   kmRepetidos: number
   observacionesConEvidencia: number
+  /** Km del recorrido con datos de sensores (ver `kmConSensores`). */
+  kmSensor?: number
+  /** Km totales del recorrido; sin ellos no se puede evaluar la cobertura. */
+  kmRecorrido?: number
 }): EventoPuntos[] {
   const eventos: EventoPuntos[] = []
 
@@ -50,6 +84,21 @@ export function calcularPuntos(input: {
       puntos: puntosObservaciones,
       detalle: `${input.observacionesConEvidencia} observaciones con evidencia`,
     })
+  }
+
+  // Los sensores solo puntúan si cubrieron al menos la mitad del recorrido:
+  // media hora de grabación con el celular apoyado no vale como relevamiento.
+  const kmSensor = input.kmSensor ?? 0
+  const kmRecorrido = input.kmRecorrido ?? 0
+  if (kmRecorrido > 0 && kmSensor >= kmRecorrido * FRACCION_SENSOR_MINIMA) {
+    const puntosKmSensor = Math.round(kmSensor * PUNTOS_KM_SENSOR)
+    if (puntosKmSensor > 0) {
+      eventos.push({
+        motivo: 'km_sensor',
+        puntos: puntosKmSensor,
+        detalle: `${kmSensor.toFixed(1)} km con sensores`,
+      })
+    }
   }
 
   return eventos

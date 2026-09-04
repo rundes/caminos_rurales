@@ -19,6 +19,7 @@ interface Consulta extends PromiseLike<Resultado> {
   eq(...args: unknown[]): Consulta
   in(...args: unknown[]): Consulta
   gte(...args: unknown[]): Consulta
+  order(...args: unknown[]): Consulta
   limit(...args: unknown[]): Consulta
   delete(): Consulta
   update(valores: unknown): Consulta
@@ -41,6 +42,8 @@ const db = {
   recorridosDelUsuario: [] as Fila[],
   logrosDelUsuario: [] as Fila[],
   coberturaMunicipio: [] as Fila[],
+  muestrasDelRecorrido: [] as Fila[],
+  fallasSensorDelRecorrido: [] as Fila[],
 }
 
 const escrituras: Escritura[] = []
@@ -83,6 +86,8 @@ function resolver(tabla: string, ops: Operacion[]): Resultado {
   }
   if (tabla === 'puntos_eventos') return { data: db.puntosDelRecorrido, error: null }
   if (tabla === 'logros') return { data: db.logrosDelUsuario, error: null }
+  if (tabla === 'muestras_sensor') return { data: db.muestrasDelRecorrido, error: null }
+  if (tabla === 'fallas_deteccion') return { data: db.fallasSensorDelRecorrido, error: null }
   throw new Error(`Consulta no prevista: ${tabla} ${cols}`)
 }
 
@@ -113,6 +118,7 @@ function crearTabla(cliente: 'usuario' | 'admin', tabla: string): Consulta {
     eq: (...args) => registrar('eq', args),
     in: (...args) => registrar('in', args),
     gte: (...args) => registrar('gte', args),
+    order: (...args) => registrar('order', args),
     limit: (...args) => registrar('limit', args),
     delete: () => registrar('delete', []),
     update: (valores) => registrar('update', [valores]),
@@ -201,8 +207,37 @@ function payload(extra: Record<string, unknown> = {}): Record<string, unknown> {
   }
 }
 
+const SIN_SENSORES = { sin_dato: 0, bueno: 0, regular: 0, malo: 0, intransitable: 0 }
+
+/** Muestra sobre el tramo w1 (lat 0, lng 0..0.01), a `lng` del origen. */
+function muestra(lng: number, extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    t: 1_756_900_000_000,
+    lat: 0,
+    lng,
+    velocidadKmh: 40,
+    rumbo: 90,
+    altitud: 12,
+    rmsVertical: 0.5,
+    picoVertical: 2,
+    frenadas: 0,
+    laterales: 0,
+    muestras: 200,
+    calidad: 'bueno',
+    ...extra,
+  }
+}
+
 function escrituraDe(tabla: string): Escritura | undefined {
   return escrituras.find((e) => e.tabla === tabla)
+}
+
+function escriturasDe(tabla: string): Escritura[] {
+  return escrituras.filter((e) => e.tabla === tabla)
+}
+
+function mutacionesDe(tabla: string, tipo: 'delete' | 'update'): Mutacion[] {
+  return mutaciones.filter((m) => m.tabla === tabla && m.tipo === tipo)
 }
 
 function mutacionDe(tabla: string, tipo: 'delete' | 'update'): Mutacion | undefined {
@@ -229,6 +264,8 @@ beforeEach(() => {
   db.puntosDelDia = []
   db.recorridosDelUsuario = [{ km: 1.2 }]
   db.logrosDelUsuario = []
+  db.muestrasDelRecorrido = []
+  db.fallasSensorDelRecorrido = []
   db.coberturaMunicipio = [
     { localidad: 'Segurola', tramos: 2, cubiertos: 1, km: 5, km_cubiertos: 2 },
   ]
@@ -247,6 +284,8 @@ describe('finalizarRecorrido', () => {
         puntos: 20,
         insignias: ['primer_recorrido'],
         coberturaMunicipio: 0.4,
+        kmPorCalidad: SIN_SENSORES,
+        impactos: 0,
       },
     })
 
@@ -398,6 +437,8 @@ describe('finalizarRecorrido', () => {
         puntos: 25,
         insignias: [],
         coberturaMunicipio: 0.4,
+        kmPorCalidad: SIN_SENSORES,
+        impactos: 0,
       },
     })
     expect(escrituras).toEqual([])
@@ -588,6 +629,168 @@ describe('finalizarRecorrido', () => {
     const r = await finalizarRecorrido(payload())
     expect(r).toEqual({ ok: false, error: expect.stringMatching(/partido/i) })
     expect(escrituras).toEqual([])
+  })
+
+  test('guarda las muestras de sensores con el cliente del usuario y el tramo asignado', async () => {
+    const r = await finalizarRecorrido(
+      payload({
+        muestras: [0, 0.002, 0.004, 0.006, 0.008, 0.01].map((lng) => muestra(lng)),
+      }),
+    )
+
+    const filas = escrituraDe('muestras_sensor')
+    expect(filas?.cliente).toBe('usuario')
+    expect(filas?.filas).toHaveLength(6)
+    expect((filas?.filas as Fila[])[1]).toEqual({
+      recorrido_id: ID_RECORRIDO,
+      usuario_id: 'u1',
+      tramo_id: 'w1',
+      t: new Date(1_756_900_000_000).toISOString(),
+      latitud: 0,
+      longitud: 0.002,
+      velocidad_kmh: 40,
+      rumbo: 90,
+      altitud: 12,
+      rms_vertical: 0.5,
+      pico_vertical: 2,
+      frenadas: 0,
+      laterales: 0,
+      muestras: 200,
+      calidad: 'bueno',
+    })
+    // todas caen sobre el tramo w1, que corre por debajo del track
+    expect((filas?.filas as Fila[]).every((f) => f.tramo_id === 'w1')).toBe(true)
+    expect(r.ok && r.data.kmPorCalidad.bueno).toBeCloseTo(1.112, 3)
+    expect(r.ok && r.data.impactos).toBe(0)
+  })
+
+  test('una muestra lejos de todo tramo se guarda igual, con tramo_id null', async () => {
+    await finalizarRecorrido(
+      payload({ muestras: [muestra(0), muestra(5, { lat: 5, calidad: 'sin_dato' })] }),
+    )
+
+    const filas = escrituraDe('muestras_sensor')?.filas as Fila[]
+    expect(filas[0].tramo_id).toBe('w1')
+    expect(filas[1].tramo_id).toBeNull()
+  })
+
+  test('registra los impactos como observaciones de origen sensor', async () => {
+    const r = await finalizarRecorrido(
+      payload({
+        impactos: [
+          { t: 1_756_900_000_000, lat: 0, lng: 0.003, pico: 10, velocidadKmh: 40 },
+          { t: 1_756_900_010_000, lat: 0, lng: 0.006, pico: 14.2, velocidadKmh: 33.4 },
+        ],
+      }),
+    )
+
+    const fallas = escrituraDe('fallas_deteccion')
+    expect(fallas?.cliente).toBe('usuario')
+    expect(fallas?.filas).toEqual([
+      {
+        recorrido_id: ID_RECORRIDO,
+        tipo_falla: 'bache',
+        severidad: 'media',
+        latitud: 0,
+        longitud: 0.003,
+        descripcion: 'Impacto detectado: 10.0 m/s² a 40 km/h',
+        origen: 'sensor',
+        magnitud: 10,
+        tramo_id: 'w1',
+      },
+      {
+        recorrido_id: ID_RECORRIDO,
+        tipo_falla: 'bache',
+        severidad: 'alta',
+        latitud: 0,
+        longitud: 0.006,
+        descripcion: 'Impacto detectado: 14.2 m/s² a 33 km/h',
+        origen: 'sensor',
+        magnitud: 14.2,
+        tramo_id: 'w1',
+      },
+    ])
+    expect(r.ok && r.data.impactos).toBe(2)
+  })
+
+  test('km_sensor: suma puntos cuando los sensores cubren al menos la mitad del recorrido', async () => {
+    const r = await finalizarRecorrido(
+      payload({ muestras: [0, 0.002, 0.004, 0.006, 0.008, 0.01].map((lng) => muestra(lng)) }),
+    )
+
+    // 20 por km nuevos + 1 por el km recorrido con sensores
+    expect(r.ok && r.data.puntos).toBe(21)
+    expect(escrituraDe('puntos_eventos')?.filas).toEqual([
+      expect.objectContaining({ motivo: 'km_nuevos', puntos: 20 }),
+      expect.objectContaining({ motivo: 'km_sensor', puntos: 1 }),
+    ])
+  })
+
+  test('km_sensor: no suma puntos si los sensores cubren menos de la mitad del recorrido', async () => {
+    const r = await finalizarRecorrido(payload({ muestras: [muestra(0), muestra(0.002)] }))
+
+    expect(r.ok && r.data.puntos).toBe(20)
+    expect(escrituraDe('puntos_eventos')?.filas).toEqual([
+      expect.objectContaining({ motivo: 'km_nuevos' }),
+    ])
+  })
+
+  test('los segmentos sin calidad estimada no cuentan para el premio por sensores', async () => {
+    const r = await finalizarRecorrido(
+      payload({
+        muestras: [0, 0.002, 0.004, 0.006, 0.008, 0.01].map((lng) =>
+          muestra(lng, { calidad: 'sin_dato', velocidadKmh: 5 }),
+        ),
+      }),
+    )
+
+    expect(r.ok && r.data.puntos).toBe(20)
+    // los km se registran igual, pero como "sin datos"
+    expect(r.ok && r.data.kmPorCalidad.bueno).toBe(0)
+    expect(r.ok && r.data.kmPorCalidad.sin_dato).toBeCloseTo(1.112, 3)
+  })
+
+  test('reprocesar borra las muestras y las observaciones de sensor previas antes de reinsertar', async () => {
+    db.recorridoExistente = { id: ID_RECORRIDO, usuario_id: 'u1', km: 4.2, procesado_at: null }
+
+    await finalizarRecorrido(
+      payload({
+        muestras: [muestra(0), muestra(0.002)],
+        impactos: [{ t: 1_756_900_000_000, lat: 0, lng: 0.003, pico: 7, velocidadKmh: 30 }],
+      }),
+    )
+
+    expect(mutacionDe('muestras_sensor', 'delete')).toMatchObject({
+      cliente: 'usuario',
+      filtros: [['recorrido_id', ID_RECORRIDO]],
+    })
+    expect(mutacionesDe('fallas_deteccion', 'delete')).toMatchObject([
+      { cliente: 'usuario', filtros: [['recorrido_id', ID_RECORRIDO], ['origen', 'sensor']] },
+    ])
+    // y después reinserta lo que llegó en el payload
+    expect(escrituraDe('muestras_sensor')?.filas).toHaveLength(2)
+    expect(escriturasDe('fallas_deteccion')).toHaveLength(1)
+  })
+
+  test('reentrega procesada: el resumen de sensores se recalcula desde la base', async () => {
+    db.recorridoExistente = {
+      id: ID_RECORRIDO,
+      usuario_id: 'u1',
+      km: 4.2,
+      procesado_at: '2026-09-03T11:05:00Z',
+    }
+    db.muestrasDelRecorrido = [
+      { latitud: 0, longitud: 0, calidad: 'bueno' },
+      { latitud: 0, longitud: 0.002, calidad: 'bueno' },
+    ]
+    db.fallasSensorDelRecorrido = [{ id: 'i1' }, { id: 'i2' }, { id: 'i3' }]
+
+    const r = await finalizarRecorrido(payload())
+
+    expect(r.ok && r.data.impactos).toBe(3)
+    expect(r.ok && r.data.kmPorCalidad.bueno).toBeCloseTo(0.222, 3)
+    expect(escrituras).toEqual([])
+    expect(mutaciones).toEqual([])
   })
 })
 
