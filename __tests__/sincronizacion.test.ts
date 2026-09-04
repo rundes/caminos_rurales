@@ -4,11 +4,21 @@ import type { DestinoSubida } from '@/lib/almacenamiento/tipos'
 import { procesarCola } from '@/lib/local/cola'
 import {
   BACKOFF_MS,
+  MAX_IMPACTOS_PAYLOAD,
   MAX_INTENTOS,
+  MAX_MUESTRAS_PAYLOAD,
   sincronizarRecorrido,
   type DepsSincronizacion,
 } from '@/lib/local/sincronizacion'
-import type { BaseLocal, ItemCola, ObservacionLocal, PuntoLocal, RecorridoLocal } from '@/lib/local/tipos'
+import type {
+  BaseLocal,
+  ImpactoLocal,
+  ItemCola,
+  MuestraLocal,
+  ObservacionLocal,
+  PuntoLocal,
+  RecorridoLocal,
+} from '@/lib/local/tipos'
 import type { ResultadoAccion } from '@/lib/tipos'
 
 const ID = '11111111-1111-4111-8111-111111111111'
@@ -41,6 +51,8 @@ type Inicial = {
   puntos?: PuntoLocal[]
   observaciones?: ObservacionLocal[]
   cola?: ItemCola[]
+  muestras?: MuestraLocal[]
+  impactos?: ImpactoLocal[]
 }
 
 /** Doble en memoria de `BaseLocal`, suficiente para toda la sincronización. */
@@ -49,6 +61,8 @@ function crearBase(inicial: Inicial) {
   const observaciones = new Map((inicial.observaciones ?? []).map((o) => [o.id, o]))
   const cola = new Map((inicial.cola ?? []).map((c) => [c.recorridoId, c]))
   const puntos = [...(inicial.puntos ?? [])]
+  const muestras = [...(inicial.muestras ?? [])]
+  const impactos = [...(inicial.impactos ?? [])]
 
   const db: BaseLocal = {
     guardarRecorrido: async (r) => void recorridos.set(r.id, r),
@@ -61,6 +75,10 @@ function crearBase(inicial: Inicial) {
     listarPuntos: async (id) => puntos.filter((p) => p.recorridoId === id),
     guardarObservacion: async (o) => void observaciones.set(o.id, o),
     listarObservaciones: async (id) => [...observaciones.values()].filter((o) => o.recorridoId === id),
+    guardarMuestra: async (m) => void muestras.push(m),
+    listarMuestras: async (id) => muestras.filter((m) => m.recorridoId === id),
+    guardarImpacto: async (i) => void impactos.push(i),
+    listarImpactos: async (id) => impactos.filter((i) => i.recorridoId === id),
     encolar: async (id) => {
       if (!cola.has(id)) cola.set(id, { recorridoId: id, intentos: 0, proximoIntento: 0 })
     },
@@ -96,6 +114,28 @@ function puntosDe(recorridoId = ID): PuntoLocal[] {
     t: AHORA + i * 1000,
     precision: 8,
   }))
+}
+
+function muestraDe(indice: number, recorridoId = ID): MuestraLocal {
+  return {
+    recorridoId,
+    t: AHORA + indice,
+    lat: -36.85,
+    lng: -57.88,
+    velocidadKmh: 40,
+    rumbo: 90,
+    altitud: 12,
+    rmsVertical: 1.5,
+    picoVertical: 4,
+    frenadas: 0,
+    laterales: 0,
+    muestras: 120,
+    calidad: 'regular',
+  }
+}
+
+function impactoDe(indice: number, recorridoId = ID): ImpactoLocal {
+  return { recorridoId, t: AHORA + indice, lat: -36.85, lng: -57.88, pico: 8.5, velocidadKmh: 40 }
 }
 
 function observacionConFoto(): ObservacionLocal {
@@ -191,6 +231,8 @@ describe('sincronizarRecorrido', () => {
       track: [number, number][]
       puntos: { lat: number; lng: number; t: number; precision: number }[]
       observaciones: { evidencia?: { ruta: string; tipo: string } }[]
+      muestras?: unknown[]
+      impactos?: unknown[]
     }
     expect(payload.id).toBe(ID)
     expect(payload.puntosGps).toBe(3)
@@ -200,6 +242,70 @@ describe('sincronizarRecorrido', () => {
     expect(payload.puntos[0]).toEqual({ lat: -36.85, lng: -57.88, t: AHORA, precision: 8 })
     expect(payload.puntos.every((p) => typeof p.t === 'number' && typeof p.precision === 'number')).toBe(true)
     expect(payload.observaciones[0].evidencia).toEqual({ ruta: DESTINO.ruta, tipo: 'imagen' })
+    // Sin sensores el payload no lleva las claves nuevas.
+    expect(payload.muestras).toBeUndefined()
+    expect(payload.impactos).toBeUndefined()
+  })
+
+  test('manda las muestras de sensores y los impactos sin el recorridoId local', async () => {
+    const base = crearBase({
+      recorridos: [recorrido()],
+      puntos: puntosDe(),
+      observaciones: [],
+      muestras: [muestraDe(0), muestraDe(1)],
+      impactos: [impactoDe(0)],
+      cola: [{ recorridoId: ID, intentos: 0, proximoIntento: 0 }],
+    })
+    const deps = crearDeps(base)
+
+    await sincronizarRecorrido(ID, deps)
+
+    const payload = deps.finalizarRecorrido.mock.calls[0][0] as {
+      muestras: Record<string, unknown>[]
+      impactos: Record<string, unknown>[]
+    }
+    expect(payload.muestras).toHaveLength(2)
+    expect(payload.muestras[0]).toEqual({
+      t: AHORA,
+      lat: -36.85,
+      lng: -57.88,
+      velocidadKmh: 40,
+      rumbo: 90,
+      altitud: 12,
+      rmsVertical: 1.5,
+      picoVertical: 4,
+      frenadas: 0,
+      laterales: 0,
+      muestras: 120,
+      calidad: 'regular',
+    })
+    expect(payload.impactos).toEqual([
+      { t: AHORA, lat: -36.85, lng: -57.88, pico: 8.5, velocidadKmh: 40 },
+    ])
+  })
+
+  test('recorta las muestras y los impactos que superan el tope del payload', async () => {
+    const base = crearBase({
+      recorridos: [recorrido()],
+      puntos: puntosDe(),
+      observaciones: [],
+      muestras: Array.from({ length: MAX_MUESTRAS_PAYLOAD + 1000 }, (_, i) => muestraDe(i)),
+      impactos: Array.from({ length: MAX_IMPACTOS_PAYLOAD + 100 }, (_, i) => impactoDe(i)),
+      cola: [{ recorridoId: ID, intentos: 0, proximoIntento: 0 }],
+    })
+    const deps = crearDeps(base)
+
+    await sincronizarRecorrido(ID, deps)
+
+    const payload = deps.finalizarRecorrido.mock.calls[0][0] as {
+      muestras: { t: number }[]
+      impactos: { t: number }[]
+    }
+    expect(payload.muestras.length).toBeLessThanOrEqual(MAX_MUESTRAS_PAYLOAD)
+    expect(payload.impactos.length).toBeLessThanOrEqual(MAX_IMPACTOS_PAYLOAD)
+    // El downsampleo conserva las puntas del recorrido.
+    expect(payload.muestras[0].t).toBe(AHORA)
+    expect(payload.muestras[payload.muestras.length - 1].t).toBe(AHORA + MAX_MUESTRAS_PAYLOAD + 999)
   })
 
   test('no vuelve a subir una evidencia ya subida', async () => {

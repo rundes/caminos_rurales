@@ -18,6 +18,9 @@ vi.mock('@/hooks/useSincronizacion', () => ({ useSincronizacion: vi.fn() }))
 vi.mock('@/lib/local/db', () => ({
   recorridoEnCurso: vi.fn(async () => undefined),
   guardarObservacion: vi.fn(async () => {}),
+  // Los usa `useSensores`, que corre de verdad dentro de la vista.
+  guardarMuestra: vi.fn(async () => {}),
+  guardarImpacto: vi.fn(async () => {}),
 }))
 vi.mock('@/lib/local/cierre', () => ({ cerrarRecorrido: vi.fn(async () => ({ ok: true })) }))
 

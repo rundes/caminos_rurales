@@ -17,7 +17,12 @@ export {
   type DepsSincronizacion,
   type ResultadoSincronizacion,
 } from './deps'
-export { MAX_PUNTOS_PAYLOAD, TOLERANCIA_SIMPLIFICADO_M } from './payload'
+export {
+  MAX_IMPACTOS_PAYLOAD,
+  MAX_MUESTRAS_PAYLOAD,
+  MAX_PUNTOS_PAYLOAD,
+  TOLERANCIA_SIMPLIFICADO_M,
+} from './payload'
 
 const ERROR_SIN_RECORRIDO = 'No se encontró el recorrido guardado en el dispositivo.'
 
