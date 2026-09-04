@@ -543,8 +543,18 @@ export async function resumenGuardado(
   }
 }
 
-/** Fila mínima de `recorridos` que necesita el flujo de finalización. */
-export type RecorridoExistente = { usuario_id: string; km: number; procesado_at: string | null }
+/**
+ * Fila mínima de `recorridos` que necesita el flujo de finalización.
+ * `inicio`/`fin` (ISO string) los usa `registrarCuadros` para validar que los
+ * cuadros de cámara caigan dentro de la ventana temporal del recorrido.
+ */
+export type RecorridoExistente = {
+  usuario_id: string
+  km: number
+  procesado_at: string | null
+  inicio: string
+  fin: string
+}
 
 export async function buscarRecorrido(
   supabase: ClienteServidor,
@@ -552,7 +562,7 @@ export async function buscarRecorrido(
 ): Promise<RecorridoExistente | null> {
   const { data, error } = await supabase
     .from('recorridos')
-    .select('id, usuario_id, km, procesado_at')
+    .select('id, usuario_id, km, procesado_at, inicio, fin')
     .eq('id', id)
     .maybeSingle()
   if (error) throw new Error(error.message)
@@ -561,6 +571,8 @@ export async function buscarRecorrido(
     usuario_id: data.usuario_id,
     km: Number(data.km),
     procesado_at: data.procesado_at ?? null,
+    inicio: data.inicio,
+    fin: data.fin,
   }
 }
 

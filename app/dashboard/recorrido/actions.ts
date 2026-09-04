@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { obtenerProveedor } from '@/lib/almacenamiento'
 import type { DestinoSubida } from '@/lib/almacenamiento/tipos'
 import { TIPOS_PERMITIDOS, rutaEvidencia } from '@/lib/archivos'
-import { guardarCuadros, recalcularPuntosCuadros } from '@/lib/cuadros-servidor'
+import { ErrorPlausibilidadCuadros, guardarCuadros, recalcularPuntosCuadros } from '@/lib/cuadros-servidor'
 import {
   ERROR_SESION,
   buscarRecorrido,
@@ -138,6 +138,7 @@ export type ResultadoCuadros = ResultadoAccion<RegistroCuadros>
 
 const ERROR_CUADROS = 'No se pudieron registrar los cuadros. Intentá de nuevo.'
 const ERROR_CUADROS_AJENOS = 'Ese recorrido es de otra persona.'
+const ERROR_CUADROS_IMPLAUSIBLES = 'Los cuadros no pudieron validarse.'
 
 /**
  * Registra un lote de cuadros de cámara ya subidos al almacenamiento: los
@@ -169,13 +170,19 @@ export async function registrarCuadros(entrada: unknown): Promise<ResultadoCuadr
 
     const admin = crearClienteAdmin()
     const tramos = await tramosDeMunicipio(admin, ctx.municipio)
-    const registrados = await guardarCuadros(supabase, ctx, datos.cuadros, tramos)
+    const registrados = await guardarCuadros(supabase, ctx, datos.cuadros, tramos, {
+      inicio: recorrido.inicio,
+      fin: recorrido.fin,
+    })
     const puntos = await recalcularPuntosCuadros(admin, ctx)
 
     revalidatePath('/dashboard/mapa')
     return { ok: true, data: { registrados, puntos } }
   } catch (error) {
     console.error('[cuadros]', error)
+    if (error instanceof ErrorPlausibilidadCuadros) {
+      return { ok: false, error: ERROR_CUADROS_IMPLAUSIBLES }
+    }
     return { ok: false, error: ERROR_CUADROS }
   }
 }

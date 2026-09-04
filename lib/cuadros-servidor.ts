@@ -23,6 +23,85 @@ export const MOTIVO_CUADROS = 'cuadros'
 export const ERROR_RUTA_AJENA = 'Ruta de cuadro fuera del recorrido'
 
 /**
+ * Ventana temporal del recorrido contra la que se valida cada cuadro
+ * (inicio/fin como ISO string, tal como los devuelve `buscarRecorrido`).
+ */
+export type VentanaRecorrido = { inicio: string; fin: string }
+
+/** Espaciado mínimo entre cuadros consecutivos (lote y ya guardados). Antitrampa: farmeo por ráfaga. */
+export const ESPACIADO_MINIMO_CUADRO_MS = 5000
+
+/** Margen fuera de [inicio, fin] tolerado por deriva de reloj entre cliente y servidor. */
+const MARGEN_VENTANA_RECORRIDO_MS = 60 * 1000
+
+/** Techo defensivo de cuadros ya guardados que se leen para chequear espaciado. */
+const LIMITE_CUADROS_EXISTENTES = 2000
+
+/** Lanzado cuando un lote de cuadros no es físicamente plausible; el mensaje es el motivo técnico. */
+export class ErrorPlausibilidadCuadros extends Error {
+  constructor(motivo: string) {
+    super(motivo)
+    this.name = 'ErrorPlausibilidadCuadros'
+  }
+}
+
+export type ResultadoPlausibilidad = { ok: true } | { ok: false; motivo: string }
+
+/** Cantidad máxima de cuadros plausible para un recorrido de esta duración (uno cada `ESPACIADO_MINIMO_CUADRO_MS`). */
+export function maxCuadrosPorDuracion(duracionMs: number): number {
+  return Math.floor(duracionMs / ESPACIADO_MINIMO_CUADRO_MS) + 1
+}
+
+/**
+ * Plausibilidad barata de un lote de cuadros, antes de escribirlo:
+ * - cada `t` debe caer dentro de la ventana del recorrido (+/- margen de reloj);
+ * - el espaciado entre cuadros consecutivos (lote + ya guardados, sin duplicados
+ *   exactos para no romper el reintento idempotente) debe ser >= al mínimo;
+ * - la cantidad total no puede superar la que la duración del recorrido admite.
+ * Es pura: no toca la base, así se puede testear y reusar sin mocks.
+ */
+export function validarPlausibilidadCuadros(
+  cuadros: readonly CuadroPayload[],
+  recorrido: VentanaRecorrido,
+  existentesT: readonly string[],
+): ResultadoPlausibilidad {
+  const inicioMs = Date.parse(recorrido.inicio)
+  const finMs = Date.parse(recorrido.fin)
+  const desde = inicioMs - MARGEN_VENTANA_RECORRIDO_MS
+  const hasta = finMs + MARGEN_VENTANA_RECORRIDO_MS
+
+  for (const c of cuadros) {
+    if (c.t < desde || c.t > hasta) {
+      return { ok: false, motivo: `cuadro fuera de la ventana del recorrido (t=${c.t})` }
+    }
+  }
+
+  const existentesMs = existentesT.map((t) => Date.parse(t))
+  // Set: un reintento del mismo lote trae los mismos `t` que ya están guardados
+  // (el upsert es idempotente); no cuenta como un cuadro nuevo pegado al anterior.
+  const combinados = [...new Set([...existentesMs, ...cuadros.map((c) => c.t)])].sort((a, b) => a - b)
+
+  for (let i = 1; i < combinados.length; i++) {
+    if (combinados[i] - combinados[i - 1] < ESPACIADO_MINIMO_CUADRO_MS) {
+      return {
+        ok: false,
+        motivo: `espaciado insuficiente entre cuadros (${combinados[i - 1]} y ${combinados[i]})`,
+      }
+    }
+  }
+
+  const maxCuadros = maxCuadrosPorDuracion(finMs - inicioMs)
+  if (combinados.length > maxCuadros) {
+    return {
+      ok: false,
+      motivo: `tope de cuadros por duración del recorrido superado (${combinados.length} > ${maxCuadros})`,
+    }
+  }
+
+  return { ok: true }
+}
+
+/**
  * La ruta la elige el cliente al pedir la URL firmada, así que el servidor la
  * vuelve a verificar antes de guardarla: un payload modificado no puede
  * apuntar a un objeto de otra persona o de otro recorrido.
@@ -62,15 +141,31 @@ export function filasCuadros(
  * Guarda el lote con el cliente del usuario (las políticas exigen que el
  * recorrido sea suyo). El upsert por `(recorrido_id, t)` hace que un reintento
  * de la cola de subida no duplique cuadros.
+ *
+ * Antitrampa: antes de escribir se valida la plausibilidad del lote contra la
+ * ventana del recorrido y el espaciado mínimo (ver `validarPlausibilidadCuadros`).
+ * Un lote implausible se rechaza entero, sin escribir nada.
  */
 export async function guardarCuadros(
   supabase: ClienteServidor,
   ctx: Contexto,
   cuadros: readonly CuadroPayload[],
   tramos: readonly TramoGeometria[],
+  ventana: VentanaRecorrido,
 ): Promise<number> {
   const filas = filasCuadros(ctx, cuadros, crearAsignadorTramos(tramos))
   if (filas.length === 0) return 0
+
+  const { data: existentes, error: errorExistentes } = await supabase
+    .from('cuadros')
+    .select('t')
+    .eq('recorrido_id', ctx.recorridoId)
+    .limit(LIMITE_CUADROS_EXISTENTES)
+  if (errorExistentes) throw new Error(errorExistentes.message)
+  const existentesT = ((existentes ?? []) as { t: string }[]).map((f) => f.t)
+
+  const plausibilidad = validarPlausibilidadCuadros(cuadros, ventana, existentesT)
+  if (!plausibilidad.ok) throw new ErrorPlausibilidadCuadros(plausibilidad.motivo)
 
   const { error } = await supabase
     .from('cuadros')

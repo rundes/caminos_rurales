@@ -2,10 +2,15 @@ import { describe, expect, test } from 'vitest'
 import type { TramoGeometria } from '@/lib/cobertura'
 import {
   ERROR_RUTA_AJENA,
+  ESPACIADO_MINIMO_CUADRO_MS,
+  ErrorPlausibilidadCuadros,
   filasCuadros,
   guardarCuadros,
+  maxCuadrosPorDuracion,
   prefijoRuta,
   recalcularPuntosCuadros,
+  validarPlausibilidadCuadros,
+  type VentanaRecorrido,
 } from '@/lib/cuadros-servidor'
 import type { ClienteAdmin, ClienteServidor, Contexto } from '@/lib/recorrido-servidor'
 import { crearAsignadorTramos } from '@/lib/sensores/asignacion'
@@ -19,6 +24,12 @@ const TRAMOS: TramoGeometria[] = [{ id: 'w1', km: 1.1, geometria: [[0, 0], [0.01
 const asignador = crearAsignadorTramos(TRAMOS)
 
 const T_BASE = 1_756_900_000_000
+
+/** Ventana amplia (2 h) para que el tope por duración no interfiera en tests ajenos a él. */
+const VENTANA: VentanaRecorrido = {
+  inicio: new Date(T_BASE - 3_600_000).toISOString(),
+  fin: new Date(T_BASE + 3_600_000).toISOString(),
+}
 
 function cuadro(extra: Partial<CuadroPayload> = {}): CuadroPayload {
   return {
@@ -35,10 +46,19 @@ function cuadro(extra: Partial<CuadroPayload> = {}): CuadroPayload {
 type Escritura = { tabla: string; filas: unknown; opciones?: unknown }
 type Borrado = { tabla: string; filtros: unknown[][] }
 
-/** Cliente de usuario: registra los upserts y los inserts que recibe. */
-function clienteFake(escrituras: Escritura[]): ClienteServidor {
+/**
+ * Cliente de usuario: registra los upserts y los inserts que recibe, y
+ * responde `select('t').eq(...).limit(...)` sobre `cuadros` con los
+ * `existentes` configurados (t como ISO string, igual que la columna real).
+ */
+function clienteFake(escrituras: Escritura[], existentes: string[] = []): ClienteServidor {
   return {
     from: (tabla: string) => ({
+      select: () => ({
+        eq: () => ({
+          limit: () => Promise.resolve({ data: existentes.map((t) => ({ t })), error: null }),
+        }),
+      }),
       upsert: (filas: unknown, opciones?: unknown) => {
         escrituras.push({ tabla, filas, opciones })
         return Promise.resolve({ error: null })
@@ -150,8 +170,9 @@ describe('guardarCuadros', () => {
     const registrados = await guardarCuadros(
       clienteFake(escrituras),
       CTX,
-      [cuadro(), cuadro({ t: T_BASE + 1000, ruta: 'u1/r1/otro.jpg' })],
+      [cuadro(), cuadro({ t: T_BASE + ESPACIADO_MINIMO_CUADRO_MS, ruta: 'u1/r1/otro.jpg' })],
       TRAMOS,
+      VENTANA,
     )
 
     expect(registrados).toBe(2)
@@ -163,16 +184,170 @@ describe('guardarCuadros', () => {
 
   test('no escribe nada si el lote llega vacío', async () => {
     const escrituras: Escritura[] = []
-    expect(await guardarCuadros(clienteFake(escrituras), CTX, [], TRAMOS)).toBe(0)
+    expect(await guardarCuadros(clienteFake(escrituras), CTX, [], TRAMOS, VENTANA)).toBe(0)
     expect(escrituras).toEqual([])
   })
 
   test('una ruta ajena no llega a la base', async () => {
     const escrituras: Escritura[] = []
     await expect(
-      guardarCuadros(clienteFake(escrituras), CTX, [cuadro({ ruta: 'u2/r1/foto.jpg' })], TRAMOS),
+      guardarCuadros(clienteFake(escrituras), CTX, [cuadro({ ruta: 'u2/r1/foto.jpg' })], TRAMOS, VENTANA),
     ).rejects.toThrow(ERROR_RUTA_AJENA)
     expect(escrituras).toEqual([])
+  })
+
+  test('un cuadro antes del inicio del recorrido (fuera del margen) se rechaza sin escribir', async () => {
+    const escrituras: Escritura[] = []
+    const antes = Date.parse(VENTANA.inicio) - 61_000
+    await expect(
+      guardarCuadros(clienteFake(escrituras), CTX, [cuadro({ t: antes })], TRAMOS, VENTANA),
+    ).rejects.toThrow(ErrorPlausibilidadCuadros)
+    expect(escrituras).toEqual([])
+  })
+
+  test('espaciado de 3 s dentro del lote se rechaza entero', async () => {
+    const escrituras: Escritura[] = []
+    await expect(
+      guardarCuadros(
+        clienteFake(escrituras),
+        CTX,
+        [cuadro(), cuadro({ t: T_BASE + 3000, ruta: 'u1/r1/otro.jpg' })],
+        TRAMOS,
+        VENTANA,
+      ),
+    ).rejects.toThrow(ErrorPlausibilidadCuadros)
+    expect(escrituras).toEqual([])
+  })
+
+  test('espaciado de exactamente 5 s se acepta', async () => {
+    const escrituras: Escritura[] = []
+    const registrados = await guardarCuadros(
+      clienteFake(escrituras),
+      CTX,
+      [cuadro(), cuadro({ t: T_BASE + ESPACIADO_MINIMO_CUADRO_MS, ruta: 'u1/r1/otro.jpg' })],
+      TRAMOS,
+      VENTANA,
+    )
+    expect(registrados).toBe(2)
+  })
+
+  test('considera los cuadros ya guardados del recorrido al chequear el espaciado', async () => {
+    const escrituras: Escritura[] = []
+    const existentes = [new Date(T_BASE).toISOString()]
+    await expect(
+      guardarCuadros(
+        clienteFake(escrituras, existentes),
+        CTX,
+        [cuadro({ t: T_BASE + 3000, ruta: 'u1/r1/otro.jpg' })],
+        TRAMOS,
+        VENTANA,
+      ),
+    ).rejects.toThrow(ErrorPlausibilidadCuadros)
+    expect(escrituras).toEqual([])
+  })
+
+  test('un lote que supera el tope de cuadros por duración se rechaza entero', async () => {
+    const escrituras: Escritura[] = []
+    // Ventana de 15 s: tope = floor(15000/5000)+1 = 4 cuadros como máximo.
+    const ventanaCorta: VentanaRecorrido = {
+      inicio: new Date(T_BASE).toISOString(),
+      fin: new Date(T_BASE + 15_000).toISOString(),
+    }
+    const cuadros = Array.from({ length: 5 }, (_, i) =>
+      cuadro({ t: T_BASE + i * ESPACIADO_MINIMO_CUADRO_MS, ruta: `u1/r1/c${i}.jpg` }),
+    )
+    await expect(
+      guardarCuadros(clienteFake(escrituras), CTX, cuadros, TRAMOS, ventanaCorta),
+    ).rejects.toThrow(ErrorPlausibilidadCuadros)
+    expect(escrituras).toEqual([])
+  })
+})
+
+describe('validarPlausibilidadCuadros', () => {
+  test('acepta un lote plausible (caso feliz)', () => {
+    const r = validarPlausibilidadCuadros([cuadro()], VENTANA, [])
+    expect(r).toEqual({ ok: true })
+  })
+
+  test('rechaza un t anterior a inicio - 60 s', () => {
+    const r = validarPlausibilidadCuadros(
+      [cuadro({ t: Date.parse(VENTANA.inicio) - 61_000 })],
+      VENTANA,
+      [],
+    )
+    expect(r.ok).toBe(false)
+  })
+
+  test('rechaza un t posterior a fin + 60 s', () => {
+    const r = validarPlausibilidadCuadros(
+      [cuadro({ t: Date.parse(VENTANA.fin) + 61_000 })],
+      VENTANA,
+      [],
+    )
+    expect(r.ok).toBe(false)
+  })
+
+  test('acepta un t justo en el borde del margen (inicio - 60 s)', () => {
+    const r = validarPlausibilidadCuadros(
+      [cuadro({ t: Date.parse(VENTANA.inicio) - 60_000 })],
+      VENTANA,
+      [],
+    )
+    expect(r.ok).toBe(true)
+  })
+
+  test('rechaza espaciado de 3 s entre dos cuadros del lote', () => {
+    const r = validarPlausibilidadCuadros(
+      [cuadro({ t: T_BASE }), cuadro({ t: T_BASE + 3000 })],
+      VENTANA,
+      [],
+    )
+    expect(r.ok).toBe(false)
+  })
+
+  test('acepta espaciado de exactamente 5 s', () => {
+    const r = validarPlausibilidadCuadros(
+      [cuadro({ t: T_BASE }), cuadro({ t: T_BASE + ESPACIADO_MINIMO_CUADRO_MS })],
+      VENTANA,
+      [],
+    )
+    expect(r.ok).toBe(true)
+  })
+
+  test('un reintento idempotente (mismos t que los ya guardados) no viola el espaciado', () => {
+    const existentes = [T_BASE, T_BASE + ESPACIADO_MINIMO_CUADRO_MS].map((t) =>
+      new Date(t).toISOString(),
+    )
+    const r = validarPlausibilidadCuadros(
+      [cuadro({ t: T_BASE }), cuadro({ t: T_BASE + ESPACIADO_MINIMO_CUADRO_MS })],
+      VENTANA,
+      existentes,
+    )
+    expect(r.ok).toBe(true)
+  })
+
+  test('maxCuadrosPorDuracion: uno cada espaciado mínimo, más el primero', () => {
+    expect(maxCuadrosPorDuracion(0)).toBe(1)
+    expect(maxCuadrosPorDuracion(ESPACIADO_MINIMO_CUADRO_MS)).toBe(2)
+    expect(maxCuadrosPorDuracion(10 * ESPACIADO_MINIMO_CUADRO_MS)).toBe(11)
+  })
+
+  test('rechaza cuando existentes + lote superan el tope por duración', () => {
+    const ventanaCorta: VentanaRecorrido = {
+      inicio: new Date(T_BASE).toISOString(),
+      fin: new Date(T_BASE + 15_000).toISOString(),
+    }
+    // tope = floor(15000/5000)+1 = 4
+    const existentes = [T_BASE, T_BASE + ESPACIADO_MINIMO_CUADRO_MS].map((t) =>
+      new Date(t).toISOString(),
+    )
+    const nuevos = [
+      cuadro({ t: T_BASE + 2 * ESPACIADO_MINIMO_CUADRO_MS }),
+      cuadro({ t: T_BASE + 3 * ESPACIADO_MINIMO_CUADRO_MS }),
+      cuadro({ t: T_BASE + 4 * ESPACIADO_MINIMO_CUADRO_MS }),
+    ]
+    const r = validarPlausibilidadCuadros(nuevos, ventanaCorta, existentes)
+    expect(r.ok).toBe(false)
   })
 })
 

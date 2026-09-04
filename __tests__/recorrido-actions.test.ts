@@ -46,6 +46,8 @@ const db = {
   fallasSensorDelRecorrido: [] as Fila[],
   /** Cuadros ya guardados del recorrido (los cuenta `select ... head: true`). */
   cuadrosDelRecorrido: 0,
+  /** `t` de los cuadros ya guardados, para el chequeo de plausibilidad (`select t`). */
+  cuadrosExistentesT: [] as string[],
 }
 
 const escrituras: Escritura[] = []
@@ -90,7 +92,11 @@ function resolver(tabla: string, ops: Operacion[]): Resultado {
   if (tabla === 'logros') return { data: db.logrosDelUsuario, error: null }
   if (tabla === 'muestras_sensor') return { data: db.muestrasDelRecorrido, error: null }
   if (tabla === 'fallas_deteccion') return { data: db.fallasSensorDelRecorrido, error: null }
-  // `cuadros` solo se lee con `head: true` para contar.
+  // `guardarCuadros` lee `select('t')` para el chequeo de plausibilidad...
+  if (tabla === 'cuadros' && cols === 't') {
+    return { data: db.cuadrosExistentesT.map((t) => ({ t })), error: null }
+  }
+  // ...y `recalcularPuntosCuadros` los cuenta con `head: true`.
   if (tabla === 'cuadros') return { data: null, count: db.cuadrosDelRecorrido, error: null }
   throw new Error(`Consulta no prevista: ${tabla} ${cols}`)
 }
@@ -273,6 +279,7 @@ beforeEach(() => {
   db.muestrasDelRecorrido = []
   db.fallasSensorDelRecorrido = []
   db.cuadrosDelRecorrido = 0
+  db.cuadrosExistentesT = []
   db.coberturaMunicipio = [
     { localidad: 'Segurola', tramos: 2, cubiertos: 1, km: 5, km_cubiertos: 2 },
   ]
@@ -874,6 +881,10 @@ describe('registrarCuadros', () => {
       usuario_id: 'u1',
       km: 4.2,
       procesado_at: '2026-09-03T11:05:00Z',
+      // Ventana amplia (2 h) para que el margen y el tope por duración no
+      // interfieran con los tests que no apuntan a esas reglas.
+      inicio: new Date(T_BASE - 3_600_000).toISOString(),
+      fin: new Date(T_BASE + 3_600_000).toISOString(),
     }
   }
 
@@ -973,6 +984,65 @@ describe('registrarCuadros', () => {
     expect(escrituraDe('cuadros')).toBeUndefined()
     expect(escrituraDe('puntos_eventos')).toBeUndefined()
     expect(spy).toHaveBeenCalledWith('[cuadros]', expect.any(Error))
+    spy.mockRestore()
+  })
+
+  test('un cuadro fuera de la ventana del recorrido se rechaza sin escribir', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    recorridoPropio()
+
+    const antes = T_BASE - 3_600_000 - 61_000 // antes de inicio - 60 s
+    const r = await registrarCuadros(lote({ cuadros: [cuadro({ t: antes })] }))
+
+    expect(r).toEqual({ ok: false, error: expect.stringMatching(/no pudieron validarse/i) })
+    expect(escrituraDe('cuadros')).toBeUndefined()
+    expect(escrituraDe('puntos_eventos')).toBeUndefined()
+    expect(spy).toHaveBeenCalledWith('[cuadros]', expect.any(Error))
+    spy.mockRestore()
+  })
+
+  test('espaciado menor al mínimo dentro del lote se rechaza sin escribir', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    recorridoPropio()
+
+    const r = await registrarCuadros(
+      lote({ cuadros: [cuadro(), cuadro({ t: T_BASE + 3000, lng: 0.006 })] }),
+    )
+
+    expect(r).toEqual({ ok: false, error: expect.stringMatching(/no pudieron validarse/i) })
+    expect(escrituraDe('cuadros')).toBeUndefined()
+    spy.mockRestore()
+  })
+
+  test('el espaciado se chequea también contra los cuadros ya guardados del recorrido', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    recorridoPropio()
+    db.cuadrosExistentesT = [new Date(T_BASE).toISOString()]
+
+    const r = await registrarCuadros(lote({ cuadros: [cuadro({ t: T_BASE + 3000 })] }))
+
+    expect(r).toEqual({ ok: false, error: expect.stringMatching(/no pudieron validarse/i) })
+    expect(escrituraDe('cuadros')).toBeUndefined()
+    spy.mockRestore()
+  })
+
+  test('un lote que supera el tope de cuadros por duración se rechaza sin escribir', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    // Recorrido de 15 s: tope = floor(15000/5000)+1 = 4 cuadros como máximo.
+    db.recorridoExistente = {
+      id: ID_RECORRIDO,
+      usuario_id: 'u1',
+      km: 4.2,
+      procesado_at: '2026-09-03T11:05:00Z',
+      inicio: new Date(T_BASE).toISOString(),
+      fin: new Date(T_BASE + 15_000).toISOString(),
+    }
+    const cuadros = Array.from({ length: 5 }, (_, i) => cuadro({ t: T_BASE + i * 5000, lng: 0.001 * i }))
+
+    const r = await registrarCuadros(lote({ cuadros }))
+
+    expect(r).toEqual({ ok: false, error: expect.stringMatching(/no pudieron validarse/i) })
+    expect(escrituraDe('cuadros')).toBeUndefined()
     spy.mockRestore()
   })
 
