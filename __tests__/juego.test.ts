@@ -4,6 +4,9 @@ import {
   ETIQUETA_INSIGNIA,
   evaluarInsignias,
   kmConSensores,
+  puntosPorCuadros,
+  CUADROS_POR_PUNTO,
+  PUNTOS_MAX_CUADROS,
   PUNTOS_KM_NUEVO,
   PUNTOS_KM_REPETIDO,
   PUNTOS_KM_SENSOR,
@@ -217,5 +220,31 @@ describe('calcularPuntos con sensores', () => {
       kmRecorrido: 0.5,
     })
     expect(eventos).toEqual([])
+  })
+})
+
+describe('puntosPorCuadros', () => {
+  test('sin cuadros no hay puntos', () => {
+    expect(puntosPorCuadros(0)).toBe(0)
+  })
+
+  test('por debajo del umbral no hay puntos', () => {
+    expect(puntosPorCuadros(9)).toBe(0)
+  })
+
+  test('un punto cada diez cuadros', () => {
+    expect(puntosPorCuadros(CUADROS_POR_PUNTO)).toBe(1)
+    expect(puntosPorCuadros(19)).toBe(1)
+    expect(puntosPorCuadros(250)).toBe(25)
+  })
+
+  test('el tope son 100 puntos por recorrido', () => {
+    expect(puntosPorCuadros(1000)).toBe(PUNTOS_MAX_CUADROS)
+    expect(puntosPorCuadros(5000)).toBe(PUNTOS_MAX_CUADROS)
+  })
+
+  test('un total inválido o negativo no otorga puntos', () => {
+    expect(puntosPorCuadros(-10)).toBe(0)
+    expect(puntosPorCuadros(Number.NaN)).toBe(0)
   })
 })

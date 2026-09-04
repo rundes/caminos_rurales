@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'vitest'
 import {
   esquemaCamino,
+  esquemaCuadro,
+  esquemaCuadros,
   esquemaImpacto,
   esquemaLogin,
   esquemaMuestra,
@@ -334,5 +336,107 @@ describe('esquemaRecorrido con sensores', () => {
       recorrido({ muestras: [muestraSensor(), muestraSensor({ calidad: 'ninguna' })] }),
     )
     expect(parseo.success).toBe(false)
+  })
+})
+
+const ID_RECORRIDO = 'aaaaaaaa-0000-4000-8000-000000000001'
+
+function cuadro(extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    t: 1_756_900_000_000,
+    lat: -35.1,
+    lng: -60.2,
+    rumbo: 90,
+    velocidadKmh: 42,
+    ruta: `u1/${ID_RECORRIDO}/cuadro-1756900000000-cuadro.jpg`,
+    ...extra,
+  }
+}
+
+function lote(extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return { recorridoId: ID_RECORRIDO, cuadros: [cuadro()], ...extra }
+}
+
+describe('esquemaCuadro', () => {
+  test('acepta un cuadro completo', () => {
+    expect(esquemaCuadro.safeParse(cuadro()).success).toBe(true)
+  })
+
+  test('rumbo y velocidad pueden faltar y quedan en null', () => {
+    const parseo = esquemaCuadro.safeParse({
+      t: 1,
+      lat: 0,
+      lng: 0,
+      ruta: 'u1/r1/foto.jpg',
+    })
+    expect(parseo.success && parseo.data.rumbo).toBeNull()
+    expect(parseo.success && parseo.data.velocidadKmh).toBeNull()
+  })
+
+  test('rechaza una marca de tiempo negativa', () => {
+    expect(esquemaCuadro.safeParse(cuadro({ t: -1 })).success).toBe(false)
+  })
+
+  test('rechaza una marca de tiempo con decimales', () => {
+    expect(esquemaCuadro.safeParse(cuadro({ t: 1.5 })).success).toBe(false)
+  })
+
+  test('rechaza coordenadas fuera de rango', () => {
+    expect(esquemaCuadro.safeParse(cuadro({ lat: 91 })).success).toBe(false)
+    expect(esquemaCuadro.safeParse(cuadro({ lng: -181 })).success).toBe(false)
+  })
+
+  test('rechaza un rumbo fuera de 0..360', () => {
+    expect(esquemaCuadro.safeParse(cuadro({ rumbo: 361 })).success).toBe(false)
+    expect(esquemaCuadro.safeParse(cuadro({ rumbo: -1 })).success).toBe(false)
+  })
+
+  test('rechaza una velocidad negativa', () => {
+    expect(esquemaCuadro.safeParse(cuadro({ velocidadKmh: -1 })).success).toBe(false)
+  })
+
+  test('rechaza una ruta vacía o demasiado larga', () => {
+    expect(esquemaCuadro.safeParse(cuadro({ ruta: '' })).success).toBe(false)
+    expect(esquemaCuadro.safeParse(cuadro({ ruta: 'a'.repeat(301) })).success).toBe(false)
+  })
+
+  test('acepta una ruta de 300 caracteres', () => {
+    expect(esquemaCuadro.safeParse(cuadro({ ruta: 'a'.repeat(300) })).success).toBe(true)
+  })
+})
+
+describe('esquemaCuadros', () => {
+  test('acepta un lote válido', () => {
+    expect(esquemaCuadros.safeParse(lote()).success).toBe(true)
+  })
+
+  test('rechaza un recorrido que no es uuid', () => {
+    const r = esquemaCuadros.safeParse(lote({ recorridoId: 'no-uuid' }))
+    expect(r.success).toBe(false)
+    expect(!r.success && primerError(r.error)).toMatch(/identificador/i)
+  })
+
+  test('rechaza un lote vacío', () => {
+    const r = esquemaCuadros.safeParse(lote({ cuadros: [] }))
+    expect(r.success).toBe(false)
+    expect(!r.success && primerError(r.error)).toMatch(/no hay cuadros/i)
+  })
+
+  test('acepta exactamente 200 cuadros', () => {
+    const cuadros = Array.from({ length: 200 }, (_, i) => cuadro({ t: 1_756_900_000_000 + i }))
+    expect(esquemaCuadros.safeParse(lote({ cuadros })).success).toBe(true)
+  })
+
+  test('rechaza más de 200 cuadros', () => {
+    const cuadros = Array.from({ length: 201 }, (_, i) => cuadro({ t: 1_756_900_000_000 + i }))
+    const r = esquemaCuadros.safeParse(lote({ cuadros }))
+    expect(r.success).toBe(false)
+    expect(!r.success && primerError(r.error)).toMatch(/demasiados cuadros/i)
+  })
+
+  test('un solo cuadro inválido invalida el lote entero', () => {
+    expect(esquemaCuadros.safeParse(lote({ cuadros: [cuadro(), cuadro({ lat: 91 })] })).success).toBe(
+      false,
+    )
   })
 })

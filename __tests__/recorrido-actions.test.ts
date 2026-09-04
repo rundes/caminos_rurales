@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, test, vi } from 'vitest'
 
 type Fila = Record<string, unknown>
 type ErrorSupabase = { message: string; code?: string }
-type Resultado = { data: Fila[] | Fila | null; error: ErrorSupabase | null }
+type Resultado = { data: Fila[] | Fila | null; count?: number; error: ErrorSupabase | null }
 type Operacion = { metodo: string; args: unknown[] }
 type Escritura = { cliente: 'usuario' | 'admin'; tabla: string; filas: unknown; opciones?: unknown }
 type Mutacion = {
@@ -44,6 +44,8 @@ const db = {
   coberturaMunicipio: [] as Fila[],
   muestrasDelRecorrido: [] as Fila[],
   fallasSensorDelRecorrido: [] as Fila[],
+  /** Cuadros ya guardados del recorrido (los cuenta `select ... head: true`). */
+  cuadrosDelRecorrido: 0,
 }
 
 const escrituras: Escritura[] = []
@@ -88,6 +90,8 @@ function resolver(tabla: string, ops: Operacion[]): Resultado {
   if (tabla === 'logros') return { data: db.logrosDelUsuario, error: null }
   if (tabla === 'muestras_sensor') return { data: db.muestrasDelRecorrido, error: null }
   if (tabla === 'fallas_deteccion') return { data: db.fallasSensorDelRecorrido, error: null }
+  // `cuadros` solo se lee con `head: true` para contar.
+  if (tabla === 'cuadros') return { data: null, count: db.cuadrosDelRecorrido, error: null }
   throw new Error(`Consulta no prevista: ${tabla} ${cols}`)
 }
 
@@ -166,7 +170,9 @@ vi.mock('@/lib/almacenamiento', () => ({
   obtenerProveedor: () => ({ prepararSubida: prepararSubidaProveedor, urlLectura: vi.fn() }),
 }))
 
-const { finalizarRecorrido, prepararSubida } = await import('@/app/dashboard/recorrido/actions')
+const { finalizarRecorrido, prepararSubida, registrarCuadros } = await import(
+  '@/app/dashboard/recorrido/actions',
+)
 
 const ID_RECORRIDO = 'aaaaaaaa-0000-4000-8000-000000000001'
 const ID_OBSERVACION = 'bbbbbbbb-0000-4000-8000-000000000002'
@@ -266,6 +272,7 @@ beforeEach(() => {
   db.logrosDelUsuario = []
   db.muestrasDelRecorrido = []
   db.fallasSensorDelRecorrido = []
+  db.cuadrosDelRecorrido = 0
   db.coberturaMunicipio = [
     { localidad: 'Segurola', tramos: 2, cubiertos: 1, km: 5, km_cubiertos: 2 },
   ]
@@ -838,5 +845,163 @@ describe('prepararSubida', () => {
     expect(r).toEqual({ ok: false, error: 'No se pudo preparar la subida de la evidencia.' })
     expect(spy).toHaveBeenCalledWith('[recorrido]', expect.any(Error))
     spy.mockRestore()
+  })
+})
+
+describe('registrarCuadros', () => {
+  const T_BASE = 1_756_900_000_000
+
+  function cuadro(extra: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      t: T_BASE,
+      lat: 0,
+      lng: 0.004,
+      rumbo: 90,
+      velocidadKmh: 42,
+      ruta: `u1/${ID_RECORRIDO}/cuadro-${T_BASE}-cuadro.jpg`,
+      ...extra,
+    }
+  }
+
+  function lote(extra: Record<string, unknown> = {}): Record<string, unknown> {
+    return { recorridoId: ID_RECORRIDO, cuadros: [cuadro()], ...extra }
+  }
+
+  /** El recorrido ya está guardado: la cola de cuadros arranca después. */
+  function recorridoPropio(): void {
+    db.recorridoExistente = {
+      id: ID_RECORRIDO,
+      usuario_id: 'u1',
+      km: 4.2,
+      procesado_at: '2026-09-03T11:05:00Z',
+    }
+  }
+
+  test('guarda los cuadros con el cliente del usuario, asignados al tramo', async () => {
+    recorridoPropio()
+    db.cuadrosDelRecorrido = 30
+
+    const r = await registrarCuadros(
+      lote({ cuadros: [cuadro(), cuadro({ t: T_BASE + 5000, lng: 0.008 })] }),
+    )
+
+    expect(r).toEqual({ ok: true, data: { registrados: 2, puntos: 3 } })
+
+    const cuadros = escrituraDe('cuadros')
+    expect(cuadros?.cliente).toBe('usuario')
+    expect(cuadros?.opciones).toEqual({ onConflict: 'recorrido_id,t' })
+    expect((cuadros?.filas as Fila[])[0]).toEqual({
+      recorrido_id: ID_RECORRIDO,
+      usuario_id: 'u1',
+      tramo_id: 'w1',
+      t: new Date(T_BASE).toISOString(),
+      latitud: 0,
+      longitud: 0.004,
+      rumbo: 90,
+      velocidad_kmh: 42,
+      ruta: `u1/${ID_RECORRIDO}/cuadro-${T_BASE}-cuadro.jpg`,
+    })
+  })
+
+  test('los puntos por cuadros los escribe el admin y reemplazan a los previos', async () => {
+    recorridoPropio()
+    db.cuadrosDelRecorrido = 30
+
+    await registrarCuadros(lote())
+
+    expect(mutacionDe('puntos_eventos', 'delete')).toMatchObject({
+      cliente: 'admin',
+      filtros: [['recorrido_id', ID_RECORRIDO], ['motivo', 'cuadros']],
+    })
+    expect(escrituraDe('puntos_eventos')).toMatchObject({
+      cliente: 'admin',
+      filas: {
+        usuario_id: 'u1',
+        municipio: 'maipu',
+        recorrido_id: ID_RECORRIDO,
+        motivo: 'cuadros',
+        puntos: 3,
+      },
+    })
+    expect(tablasUsuario).not.toContain('puntos_eventos')
+  })
+
+  test('con menos de diez cuadros guardados no inserta puntos', async () => {
+    recorridoPropio()
+    db.cuadrosDelRecorrido = 9
+
+    const r = await registrarCuadros(lote())
+
+    expect(r).toEqual({ ok: true, data: { registrados: 1, puntos: 0 } })
+    expect(escrituraDe('puntos_eventos')).toBeUndefined()
+    // igual borra el evento previo: si el total bajó, los puntos bajan
+    expect(mutacionDe('puntos_eventos', 'delete')).toBeDefined()
+  })
+
+  test('el recorrido de otra persona no registra nada', async () => {
+    db.recorridoExistente = {
+      id: ID_RECORRIDO,
+      usuario_id: 'u2',
+      km: 4.2,
+      procesado_at: '2026-09-03T11:05:00Z',
+    }
+
+    const r = await registrarCuadros(lote())
+
+    expect(r).toEqual({ ok: false, error: expect.stringMatching(/otra persona/i) })
+    expect(escrituras).toEqual([])
+    expect(mutaciones).toEqual([])
+    expect(crearClienteAdmin).not.toHaveBeenCalled()
+  })
+
+  test('un recorrido que no existe devuelve el error generico sin escribir', async () => {
+    db.recorridoExistente = null
+
+    const r = await registrarCuadros(lote())
+
+    expect(r).toEqual({ ok: false, error: expect.stringMatching(/no se pudieron registrar/i) })
+    expect(escrituras).toEqual([])
+  })
+
+  test('una ruta que no cuelga del usuario y el recorrido no llega a la base', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    recorridoPropio()
+
+    const r = await registrarCuadros(lote({ cuadros: [cuadro({ ruta: 'u2/otro/foto.jpg' })] }))
+
+    expect(r).toEqual({ ok: false, error: expect.stringMatching(/no se pudieron registrar/i) })
+    expect(escrituraDe('cuadros')).toBeUndefined()
+    expect(escrituraDe('puntos_eventos')).toBeUndefined()
+    expect(spy).toHaveBeenCalledWith('[cuadros]', expect.any(Error))
+    spy.mockRestore()
+  })
+
+  test('datos inválidos: no crea el cliente admin ni consulta nada', async () => {
+    const r = await registrarCuadros(lote({ recorridoId: 'no-uuid' }))
+    expect(r).toEqual({ ok: false, error: expect.stringMatching(/identificador/i) })
+    expect(crearClienteAdmin).not.toHaveBeenCalled()
+    expect(tablasUsuario).toEqual([])
+    expect(escrituras).toEqual([])
+  })
+
+  test('un lote vacío se rechaza sin tocar la base', async () => {
+    const r = await registrarCuadros(lote({ cuadros: [] }))
+    expect(r).toEqual({ ok: false, error: expect.stringMatching(/no hay cuadros/i) })
+    expect(tablasUsuario).toEqual([])
+  })
+
+  test('más de 200 cuadros en una llamada se rechazan', async () => {
+    const cuadros = Array.from({ length: 201 }, (_, i) => cuadro({ t: T_BASE + i }))
+    const r = await registrarCuadros(lote({ cuadros }))
+    expect(r).toEqual({ ok: false, error: expect.stringMatching(/demasiados cuadros/i) })
+    expect(tablasUsuario).toEqual([])
+  })
+
+  test('sin sesión no escribe nada', async () => {
+    getUser.mockResolvedValue({ data: { user: null } })
+    const r = await registrarCuadros(lote())
+    expect(r).toEqual({ ok: false, error: expect.stringMatching(/sesión/i) })
+    expect(crearClienteAdmin).not.toHaveBeenCalled()
+    expect(escrituras).toEqual([])
   })
 })
