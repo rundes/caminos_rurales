@@ -3,6 +3,7 @@ import { MapaCliente } from '@/components/MapaCliente'
 import { capasDe } from '@/lib/capas'
 import { limitesDe } from '@/lib/capas-servidor'
 import { obtenerRugosidadTramos, obtenerTramosConEstado } from '@/lib/cobertura-consultas'
+import { obtenerCuadros, obtenerCuadrosPorTramo } from '@/lib/cuadros-consultas'
 import { aPuntos, filtrarPuntos, municipiosDe, type FilaFalla } from '@/lib/fallas'
 import { buscarPartido } from '@/lib/partidos'
 import { crearClienteServidor } from '@/lib/supabase/server'
@@ -13,6 +14,7 @@ type Props = { searchParams: Promise<{ tipo?: string; municipio?: string }> }
 const CENTRO_PROVINCIA: [number, number] = [-36.6, -60.0]
 const SEGUNDOS_URL_FIRMADA = 60 * 60
 const LIMITE_FALLAS = 2000
+const LOTE_FIRMA_CUADROS = 100
 
 export default async function MapaPage({ searchParams }: Props) {
   const filtros = await searchParams
@@ -60,6 +62,22 @@ export default async function MapaPage({ searchParams }: Props) {
 
   const tramos = municipioActual ? await obtenerTramosConEstado(supabase, municipioActual) : []
   const rugosidad = municipioActual ? await obtenerRugosidadTramos(supabase, municipioActual) : {}
+  const cuadros = municipioActual ? await obtenerCuadros(supabase, municipioActual) : []
+  const cuadrosPorTramo = municipioActual ? await obtenerCuadrosPorTramo(supabase, municipioActual) : {}
+
+  const rutasCuadros = [...new Set(cuadros.map((c) => c.ruta))]
+  const urlsCuadros: Record<string, string> = {}
+  for (const ruta of rutasCuadros) {
+    if (ruta.startsWith('https://')) urlsCuadros[ruta] = ruta
+  }
+  const rutasCuadrosASignar = rutasCuadros.filter((r) => !r.startsWith('https://'))
+  for (let i = 0; i < rutasCuadrosASignar.length; i += LOTE_FIRMA_CUADROS) {
+    const lote = rutasCuadrosASignar.slice(i, i + LOTE_FIRMA_CUADROS)
+    const { data: firmadasCuadros } = await supabase.storage.from('evidencia-vial').createSignedUrls(lote, SEGUNDOS_URL_FIRMADA)
+    for (const f of firmadasCuadros ?? []) {
+      if (f.path && f.signedUrl) urlsCuadros[f.path] = f.signedUrl
+    }
+  }
 
   const partidoFiltro = filtros.municipio ? buscarPartido(filtros.municipio) : undefined
   const partidoActual = !filtros.municipio && capas ? buscarPartido(municipioActual ?? '') : undefined
@@ -86,6 +104,7 @@ export default async function MapaPage({ searchParams }: Props) {
       <p className="text-sm text-gray-600">
         Estado estimado: verde bueno · amarillo regular · naranja malo · rojo intransitable · gris sin datos.
       </p>
+      <p className="text-sm text-gray-600">Cuadros: puntos azules.</p>
       <MapaCliente
         puntos={puntos}
         centro={centro}
@@ -94,6 +113,9 @@ export default async function MapaPage({ searchParams }: Props) {
         limites={limites ?? undefined}
         tramos={tramos}
         rugosidad={rugosidad}
+        cuadros={cuadros}
+        urlsCuadros={urlsCuadros}
+        cuadrosPorTramo={cuadrosPorTramo}
       />
     </div>
   )

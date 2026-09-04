@@ -3,9 +3,11 @@
 import 'leaflet/dist/leaflet.css'
 import { useEffect, useState } from 'react'
 import { CircleMarker, LayersControl, MapContainer, Popup, TileLayer, useMap } from 'react-leaflet'
+import { CapaCuadros } from '@/components/CapaCuadros'
 import { CapaTramos, type ModoMapa, type TramoEstado } from '@/components/CapaTramos'
 import { CapasMunicipio } from '@/components/CapasMunicipio'
 import { TESELAS_IGN, type CapasMunicipio as CapasMunicipioTipo } from '@/lib/capas'
+import type { Cuadro } from '@/lib/cuadros'
 import { colorSeveridad } from '@/lib/severidad'
 import type { RugosidadTramo } from '@/lib/sensores/tipos'
 import { ETIQUETA_SEVERIDAD, ETIQUETA_TIPO_FALLA, type PuntoFalla } from '@/lib/tipos'
@@ -22,6 +24,9 @@ type Props = {
   limites?: LimitesBounds
   tramos?: TramoEstado[]
   rugosidad?: Record<string, RugosidadTramo>
+  cuadros?: Cuadro[]
+  urlsCuadros?: Record<string, string>
+  cuadrosPorTramo?: Record<string, number>
 }
 
 const ZOOM_INICIAL = 10
@@ -49,8 +54,18 @@ function EnfoqueLimites({ limites }: { limites: LimitesBounds }) {
   return null
 }
 
-/** Toggle "Cobertura" / "Estado estimado" del mapa, arriba a la derecha. */
-function ControlModo({ modo, onCambiar }: { modo: ModoMapa; onCambiar: (modo: ModoMapa) => void }) {
+/** Toggle "Cobertura" / "Estado estimado" del mapa, más el toggle independiente "Cuadros", arriba a la derecha. */
+function ControlModo({
+  modo,
+  onCambiar,
+  mostrarCuadros,
+  onCambiarCuadros,
+}: {
+  modo: ModoMapa
+  onCambiar: (modo: ModoMapa) => void
+  mostrarCuadros: boolean
+  onCambiarCuadros: (mostrar: boolean) => void
+}) {
   const base = 'px-3 py-1.5 text-sm font-medium'
   const activo = 'bg-blue-600 text-white'
   const inactivo = 'bg-white text-gray-700 hover:bg-gray-50'
@@ -77,16 +92,36 @@ function ControlModo({ modo, onCambiar }: { modo: ModoMapa; onCambiar: (modo: Mo
       >
         Estado estimado
       </button>
+      <button
+        type="button"
+        aria-pressed={mostrarCuadros}
+        onClick={() => onCambiarCuadros(!mostrarCuadros)}
+        className={`${base} ${mostrarCuadros ? activo : inactivo}`}
+      >
+        Cuadros
+      </button>
     </div>
   )
 }
 
-export function MapaRelevamiento({ puntos, centro, urlsEvidencia, capas, limites, tramos, rugosidad }: Props) {
+export function MapaRelevamiento({
+  puntos,
+  centro,
+  urlsEvidencia,
+  capas,
+  limites,
+  tramos,
+  rugosidad,
+  cuadros,
+  urlsCuadros,
+  cuadrosPorTramo,
+}: Props) {
   const [modo, setModo] = useState<ModoMapa>('cobertura')
+  const [mostrarCuadros, setMostrarCuadros] = useState(false)
 
   return (
     <div className="relative">
-      <ControlModo modo={modo} onCambiar={setModo} />
+      <ControlModo modo={modo} onCambiar={setModo} mostrarCuadros={mostrarCuadros} onCambiarCuadros={setMostrarCuadros} />
       <MapContainer center={centro} zoom={ZOOM_INICIAL} className="h-[60dvh] w-full rounded-2xl" scrollWheelZoom>
         <LayersControl position="topright">
           <LayersControl.BaseLayer checked name="IGN">
@@ -104,7 +139,8 @@ export function MapaRelevamiento({ puntos, centro, urlsEvidencia, capas, limites
         </LayersControl>
         {limites && <EnfoqueLimites limites={limites} />}
         {capas && <CapasMunicipio capas={capas} />}
-        {tramos && <CapaTramos tramos={tramos} modo={modo} rugosidad={rugosidad} />}
+        {tramos && <CapaTramos tramos={tramos} modo={modo} rugosidad={rugosidad} cuadrosPorTramo={cuadrosPorTramo} />}
+        {mostrarCuadros && cuadros && <CapaCuadros cuadros={cuadros} urls={urlsCuadros ?? {}} />}
         {puntos.map((p) => {
           const hrefVideo = p.url_evidencia_video ? urlVideo(p.url_evidencia_video, urlsEvidencia) : null
           const esSensor = p.origen === 'sensor'

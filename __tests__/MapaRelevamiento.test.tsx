@@ -124,6 +124,58 @@ const PUNTO_SENSOR = {
 
 const PUNTO_MANUAL = { ...PUNTO_SENSOR, id: 'f2', origen: 'manual' as const, magnitud: null }
 
+const CUADRO_EJEMPLO = {
+  id: 'c1',
+  recorrido_id: 'r1',
+  tramo_id: 't1',
+  t: '2026-09-01T10:00:00Z',
+  lat: -36.6,
+  lng: -60.1,
+  rumbo: 90,
+  velocidadKmh: 20,
+  ruta: 'u1/r1/cuadros/1.jpg',
+}
+
+test('el botón "Cuadros" arranca apagado y, al activarse, muestra la capa de cuadros', () => {
+  render(
+    <MapaRelevamiento
+      puntos={[]}
+      centro={[-36.6, -60.0]}
+      urlsEvidencia={{}}
+      cuadros={[CUADRO_EJEMPLO]}
+      urlsCuadros={{}}
+    />,
+  )
+
+  const boton = screen.getByRole('button', { name: 'Cuadros' })
+  expect(boton).toHaveAttribute('aria-pressed', 'false')
+  expect(screen.queryByTestId('circle-marker')).not.toBeInTheDocument()
+
+  fireEvent.click(boton)
+
+  expect(boton).toHaveAttribute('aria-pressed', 'true')
+  expect(screen.getAllByTestId('circle-marker').length).toBeGreaterThan(0)
+})
+
+test('el toggle "Cuadros" es independiente del modo Cobertura/Estado', () => {
+  render(
+    <MapaRelevamiento
+      puntos={[]}
+      centro={[-36.6, -60.0]}
+      urlsEvidencia={{}}
+      tramos={TRAMOS}
+      cuadros={[CUADRO_EJEMPLO]}
+      urlsCuadros={{}}
+    />,
+  )
+
+  fireEvent.click(screen.getByRole('button', { name: 'Cuadros' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Estado estimado' }))
+
+  expect(screen.getByRole('button', { name: 'Cuadros' })).toHaveAttribute('aria-pressed', 'true')
+  expect(screen.getByRole('button', { name: 'Estado estimado' })).toHaveAttribute('aria-pressed', 'true')
+})
+
 test('las observaciones origen sensor tienen contorno punteado, radio distinto y aviso en el popup', () => {
   render(<MapaRelevamiento puntos={[PUNTO_SENSOR, PUNTO_MANUAL]} centro={[-36.6, -60.0]} urlsEvidencia={{}} />)
 

@@ -17,6 +17,7 @@ type Props = {
   tramos: TramoEstado[]
   modo: ModoMapa
   rugosidad?: Record<string, RugosidadTramo>
+  cuadrosPorTramo?: Record<string, number>
 }
 
 const COLOR_TRAMO_CUBIERTO = '#16a34a'
@@ -39,12 +40,19 @@ function tooltipEstado(nombreCodigo: string, rugosidad: RugosidadTramo | undefin
   return `${nombreCodigo} · Estado: ${ETIQUETA_CALIDAD[calidad]} · rugosidad ${numero(rms)} m/s² · ${numero(velocidad)} km/h · ${impactos} impactos (${segmentos} seg.)`
 }
 
+/** Sufijo " · N cuadros" cuando hay cuadros de cámara registrados para el tramo. */
+function sufijoCuadros(id: string, cuadrosPorTramo?: Record<string, number>): string {
+  const n = cuadrosPorTramo?.[id]
+  return n ? ` · ${n} cuadros` : ''
+}
+
 /** Capa de tramos del mapa de relevamiento: cobertura (cubierto/pendiente) o estado estimado por calidad. */
-export function CapaTramos({ tramos, modo, rugosidad }: Props) {
+export function CapaTramos({ tramos, modo, rugosidad, cuadrosPorTramo }: Props) {
   return (
     <>
       {tramos.map((t) => {
         const posiciones: [number, number][] = t.geometria.map(([lng, lat]) => [lat, lng])
+        const cuadros = sufijoCuadros(t.id, cuadrosPorTramo)
 
         if (modo === 'estado') {
           const r = rugosidad?.[t.id]
@@ -55,7 +63,7 @@ export function CapaTramos({ tramos, modo, rugosidad }: Props) {
               positions={posiciones}
               pathOptions={{ color: colorCalidad(calidad), weight: PESO_TRAMO_ESTADO }}
             >
-              <Tooltip>{tooltipEstado(t.nombre_codigo, r)}</Tooltip>
+              <Tooltip>{tooltipEstado(t.nombre_codigo, r) + cuadros}</Tooltip>
             </Polyline>
           )
         }
@@ -70,7 +78,9 @@ export function CapaTramos({ tramos, modo, rugosidad }: Props) {
               weight: cubierto ? PESO_TRAMO_CUBIERTO : PESO_TRAMO_PENDIENTE,
             }}
           >
-            <Tooltip>{cubierto ? `${t.nombre_codigo} · cubierto ${t.veces} veces` : `${t.nombre_codigo} · pendiente`}</Tooltip>
+            <Tooltip>
+              {(cubierto ? `${t.nombre_codigo} · cubierto ${t.veces} veces` : `${t.nombre_codigo} · pendiente`) + cuadros}
+            </Tooltip>
           </Polyline>
         )
       })}
