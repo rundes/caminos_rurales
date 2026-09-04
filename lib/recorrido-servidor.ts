@@ -9,6 +9,7 @@ import {
   type CoberturaLocalidad,
 } from './juego'
 import { guardarSensores, sensoresGuardados } from './recorrido-sensores-servidor'
+import { normalizarMuestra } from './sensores/calidad'
 import type { CalidadSegmento } from './sensores/tipos'
 import type { crearClienteAdmin } from './supabase/admin'
 import type { crearClienteServidor } from './supabase/server'
@@ -454,7 +455,8 @@ export async function procesarRecorrido(
     ctx,
     particion,
     contarConEvidencia(datos.observaciones),
-    { kmSensor: kmConSensores(datos.muestras ?? [], km), kmRecorrido: km },
+    // Muestras normalizadas por el servidor: la calidad declarada por el cliente no cuenta.
+    { kmSensor: kmConSensores((datos.muestras ?? []).map(normalizarMuestra), km), kmRecorrido: km },
   )
   const filas = await coberturaPorLocalidad(supabase, ctx.municipio)
   const insignias = await guardarInsignias(admin, ctx, filas)

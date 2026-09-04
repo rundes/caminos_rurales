@@ -56,7 +56,11 @@ function ControlModo({ modo, onCambiar }: { modo: ModoMapa; onCambiar: (modo: Mo
   const inactivo = 'bg-white text-gray-700 hover:bg-gray-50'
 
   return (
-    <div className="absolute right-3 top-3 z-[1000] flex overflow-hidden rounded-lg border border-gray-300 bg-white shadow-sm">
+    <div
+      role="group"
+      aria-label="Modo del mapa"
+      className="absolute right-3 top-3 z-[1000] flex overflow-hidden rounded-lg border border-gray-300 bg-white shadow-sm"
+    >
       <button
         type="button"
         aria-pressed={modo === 'cobertura'}
