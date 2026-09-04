@@ -3,18 +3,25 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { Boton } from '@/components/Boton'
 import type { CapasMunicipio as CapasMunicipioTipo } from '@/lib/capas'
+import type { ControlCamara } from '@/hooks/useCamara'
 import type { EstadoSensores } from '@/hooks/useSensores'
 import type { Grabador } from '@/lib/local/grabador'
 import { simplificar, type PuntoGps } from '@/lib/track'
 import { formatearKm, formatearPrecision } from './formato'
 import { MapaRecorridoCliente } from './MapaRecorridoCliente'
 import { Reloj } from './Reloj'
+import { VistaCamara } from './VistaCamara'
 
 export type EstadoPanelSensores = {
   estado: EstadoSensores
   impactos: number
   /** Impactos recientes, para los marcadores efímeros del mapa. */
   posiciones: readonly [number, number][]
+}
+
+/** Lo que el panel necesita de la cámara: estado, contador y el `<video>`. */
+export type EstadoPanelCamara = Pick<ControlCamara, 'estado' | 'cuadros' | 'videoRef'> & {
+  onAlternar: () => void
 }
 
 type Props = {
@@ -25,6 +32,7 @@ type Props = {
   capas: CapasMunicipioTipo | null
   error: string | null
   sensores: EstadoPanelSensores
+  camara: EstadoPanelCamara
   onObservacion: () => void
   onPausar: () => void
   onReanudar: () => void
@@ -82,6 +90,7 @@ export function PanelGrabacion({
   capas,
   error,
   sensores,
+  camara,
   onObservacion,
   onPausar,
   onReanudar,
@@ -140,6 +149,13 @@ export function PanelGrabacion({
           {sensores.impactos} impacto(s)
         </span>
       </div>
+
+      <VistaCamara
+        estado={camara.estado}
+        cuadros={camara.cuadros}
+        videoRef={camara.videoRef}
+        onAlternar={camara.onAlternar}
+      />
 
       {!grabando && (
         <p role="status" className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">

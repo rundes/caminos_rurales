@@ -57,6 +57,44 @@ describe('ResumenRecorrido', () => {
     expect(screen.queryByText(/impacto\(s\) detectado\(s\)/i)).not.toBeInTheDocument()
   })
 
+  test('muestra los cuadros capturados y ofrece subirlos con datos', async () => {
+    const onSubirCuadros = vi.fn()
+    render(
+      <ResumenRecorrido
+        km={4.5}
+        puntosGps={120}
+        resumen={null}
+        sinConexion={false}
+        cuadros={40}
+        cuadrosPendientes={12}
+        onSubirCuadros={onSubirCuadros}
+        onNuevo={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText(/40 capturados · 12 pendientes de subir \(WiFi\)/i)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /subir ahora con datos/i }))
+    expect(onSubirCuadros).toHaveBeenCalledTimes(1)
+  })
+
+  test('sin cuadros pendientes no ofrece subirlos con datos', () => {
+    render(
+      <ResumenRecorrido
+        km={4.5}
+        puntosGps={120}
+        resumen={null}
+        sinConexion={false}
+        cuadros={40}
+        cuadrosPendientes={0}
+        onSubirCuadros={vi.fn()}
+        onNuevo={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText(/40 capturados/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /subir ahora con datos/i })).not.toBeInTheDocument()
+  })
+
   test('sin resumen del servidor avisa que se está subiendo', async () => {
     const onNuevo = vi.fn()
     render(

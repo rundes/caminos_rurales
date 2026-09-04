@@ -1,6 +1,14 @@
 'use client'
 
+import { useSyncExternalStore } from 'react'
 import { Boton } from '@/components/Boton'
+import {
+  guardarPreferenciaRed,
+  leerPreferenciaRed,
+  PREFERENCIA_RED_DEFECTO,
+  suscribirPreferenciaRed,
+  type PreferenciaRed,
+} from '@/lib/camara/red'
 import type { RecorridoLocal } from '@/lib/local/tipos'
 
 type Props = {
@@ -21,6 +29,19 @@ export function PantallaInicio({
   onContinuar,
   onCerrarPendiente,
 }: Props) {
+  // `localStorage` no existe en el render del servidor: se lee como sistema
+  // externo, con el valor por defecto hasta que hidrata.
+  const red = useSyncExternalStore(
+    suscribirPreferenciaRed,
+    leerPreferenciaRed,
+    () => PREFERENCIA_RED_DEFECTO,
+  )
+
+  const cambiarRed = (soloWifi: boolean) => {
+    const preferencia: PreferenciaRed = soloWifi ? 'wifi' : 'siempre'
+    guardarPreferenciaRed(preferencia)
+  }
+
   return (
     <section className="flex flex-col gap-4">
       {sinTerminar && (
@@ -43,6 +64,15 @@ export function PantallaInicio({
         </p>
       )}
       {!sinTerminar && <Boton onClick={onIniciar}>Iniciar recorrido</Boton>}
+      <label className="flex items-center gap-3 rounded-xl bg-white p-3 text-sm text-gray-700 shadow-sm">
+        <input
+          type="checkbox"
+          checked={red === 'wifi'}
+          onChange={(evento) => cambiarRed(evento.target.checked)}
+          className="size-6 shrink-0 accent-green-700"
+        />
+        Subir cuadros solo con WiFi
+      </label>
     </section>
   )
 }

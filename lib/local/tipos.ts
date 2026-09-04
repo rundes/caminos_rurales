@@ -62,6 +62,27 @@ export type ObservacionLocal = {
   estadoSubida: EstadoSubida
 }
 
+/**
+ * Cuadro de la cámara georreferenciado. El `id` lo pone IndexedDB al guardarlo.
+ * El `blob` viaja hasta que se sube; después queda solo la `ruta` y el blob se
+ * borra para liberar espacio en el dispositivo.
+ */
+export type CuadroLocal = {
+  id?: number
+  recorridoId: string
+  t: number
+  lat: number
+  lng: number
+  rumbo: number | null
+  velocidadKmh: number | null
+  blob?: Blob
+  estadoSubida: EstadoSubida
+  ruta?: string
+}
+
+/** Cuadro ya guardado: tiene la clave que asignó IndexedDB. */
+export type CuadroGuardado = CuadroLocal & { id: number }
+
 /** Entrada de la cola de subida: un recorrido finalizado esperando sincronizarse. */
 export type ItemCola = {
   recorridoId: string
@@ -69,6 +90,9 @@ export type ItemCola = {
   proximoIntento: number
   ultimoError?: string
 }
+
+/** Entrada de la cola de cuadros: mismos campos y mismo backoff que `ItemCola`. */
+export type ItemColaCuadros = ItemCola
 
 /**
  * Operaciones que la sincronización necesita del almacenamiento local.
@@ -96,4 +120,22 @@ export interface BaseLocal {
   guardarItemCola(item: ItemCola): Promise<void>
   listarCola(): Promise<ItemCola[]>
   borrarItemCola(recorridoId: string): Promise<void>
+}
+
+/**
+ * Operaciones que la cola de cuadros necesita del almacenamiento local. Va
+ * aparte de `BaseLocal` porque un dispositivo sin cámara sincroniza igual.
+ */
+export interface BaseCuadros {
+  listarRecorridos(usuarioId: string): Promise<RecorridoLocal[]>
+  listarCuadros(recorridoId: string, estado?: EstadoSubida): Promise<CuadroGuardado[]>
+  contarCuadros(recorridoId: string, estado?: EstadoSubida): Promise<number>
+  marcarCuadro(id: number, estado: EstadoSubida, ruta?: string): Promise<void>
+  /** Libera los blobs de los cuadros ya subidos. Devuelve cuántos liberó. */
+  borrarCuadrosSubidos(recorridoId: string): Promise<number>
+  encolarCuadros(recorridoId: string): Promise<void>
+  obtenerItemColaCuadros(recorridoId: string): Promise<ItemColaCuadros | undefined>
+  guardarItemColaCuadros(item: ItemColaCuadros): Promise<void>
+  listarColaCuadros(): Promise<ItemColaCuadros[]>
+  borrarItemColaCuadros(recorridoId: string): Promise<void>
 }

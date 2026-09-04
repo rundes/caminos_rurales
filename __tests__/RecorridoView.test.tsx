@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { beforeEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import type { ResumenRecorrido as Resumen } from '@/app/dashboard/recorrido/actions'
 import type { ControlGrabador } from '@/hooks/useGrabadorGps'
 import type { ResultadoCierre } from '@/lib/local/cierre'
@@ -15,18 +15,23 @@ vi.mock('next/dynamic', () => ({
 
 vi.mock('@/hooks/useGrabadorGps', () => ({ useGrabadorGps: vi.fn() }))
 vi.mock('@/hooks/useSincronizacion', () => ({ useSincronizacion: vi.fn() }))
+vi.mock('@/hooks/useSincronizacionCuadros', () => ({ useSincronizacionCuadros: vi.fn() }))
 vi.mock('@/lib/local/db', () => ({
   recorridoEnCurso: vi.fn(async () => undefined),
   guardarObservacion: vi.fn(async () => {}),
-  // Los usa `useSensores`, que corre de verdad dentro de la vista.
+  // Los usan `useSensores` y `useCamara`, que corren de verdad dentro de la vista.
   guardarMuestra: vi.fn(async () => {}),
   guardarImpacto: vi.fn(async () => {}),
+  guardarCuadro: vi.fn(async () => 1),
+  encolarCuadros: vi.fn(async () => {}),
+  contarCuadros: vi.fn(async () => 0),
 }))
 vi.mock('@/lib/local/cierre', () => ({ cerrarRecorrido: vi.fn(async () => ({ ok: true })) }))
 
 const { RecorridoView } = await import('@/components/recorrido/RecorridoView')
 const { useGrabadorGps } = await import('@/hooks/useGrabadorGps')
 const { useSincronizacion } = await import('@/hooks/useSincronizacion')
+const { useSincronizacionCuadros } = await import('@/hooks/useSincronizacionCuadros')
 const { recorridoEnCurso } = await import('@/lib/local/db')
 
 const CENTRO: [number, number] = [-36.85, -57.88]
@@ -89,6 +94,17 @@ function sincronizacion(pendientes = 0, resumenes: Record<string, Resumen> = {})
   return { pendientes, resumenes, sincronizar: vi.fn(async () => {}) }
 }
 
+/** `getUserMedia` falso: jsdom no trae `mediaDevices`. */
+function stubCamara(implementacion: () => Promise<MediaStream> = async () => STREAM) {
+  const getUserMedia = vi.fn<(restricciones: MediaStreamConstraints) => Promise<MediaStream>>(
+    implementacion,
+  )
+  vi.stubGlobal('navigator', { ...navigator, mediaDevices: { getUserMedia } })
+  return getUserMedia
+}
+
+const STREAM = { getTracks: () => [{ stop: vi.fn() }] } as unknown as MediaStream
+
 function renderVista() {
   return render(
     <RecorridoView usuarioId={USUARIO} municipio="maipu" capas={null} limites={null} centro={CENTRO} />,
@@ -99,6 +115,15 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(recorridoEnCurso).mockResolvedValue(undefined)
   vi.mocked(useSincronizacion).mockReturnValue(sincronizacion())
+  vi.mocked(useSincronizacionCuadros).mockReturnValue({
+    pendientes: 0,
+    subidos: 0,
+    forzarConDatos: vi.fn(),
+  })
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
 })
 
 describe('RecorridoView', () => {
@@ -130,6 +155,46 @@ describe('RecorridoView', () => {
 
     expect(retomar).toHaveBeenCalledWith('abc')
     expect(screen.queryByRole('button', { name: /iniciar recorrido/i })).toBeInTheDocument()
+  })
+
+  test('pide el permiso de cámara dentro del gesto de iniciar', async () => {
+    const iniciar = vi.fn(async () => {})
+    vi.mocked(useGrabadorGps).mockReturnValue(control(GRABADOR_INICIAL, { iniciar }))
+    const getUserMedia = stubCamara()
+
+    renderVista()
+
+    await userEvent.click(await screen.findByRole('button', { name: /iniciar recorrido/i }))
+
+    await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1))
+    expect(getUserMedia.mock.calls[0][0]).toMatchObject({
+      video: { facingMode: 'environment' },
+    })
+    expect(iniciar).toHaveBeenCalledTimes(1)
+  })
+
+  test('sin permiso de cámara el recorrido arranca igual', async () => {
+    const iniciar = vi.fn(async () => {})
+    vi.mocked(useGrabadorGps).mockReturnValue(control(GRABADOR_INICIAL, { iniciar }))
+    stubCamara(async () => {
+      throw new Error('NotAllowedError')
+    })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    renderVista()
+
+    await userEvent.click(await screen.findByRole('button', { name: /iniciar recorrido/i }))
+
+    await waitFor(() => expect(iniciar).toHaveBeenCalledTimes(1))
+  })
+
+  test('grabando muestra la vista de cámara con su contador', async () => {
+    vi.mocked(useGrabadorGps).mockReturnValue(control(GRABANDO))
+
+    renderVista()
+
+    expect(await screen.findByTestId('video-camara')).toBeInTheDocument()
+    expect(screen.getByLabelText('cuadros capturados')).toHaveTextContent('0 cuadro(s)')
   })
 
   test('grabando muestra el mapa, los km y el tiempo transcurrido', async () => {
