@@ -279,6 +279,20 @@ export async function borrarCuadrosSubidos(recorridoId: string): Promise<number>
   return subidos.length
 }
 
+/**
+ * Da por perdidos los cuadros pendientes de un recorrido: quedan en `error` y
+ * sin blob. La fila se conserva para poder contarlos en el resumen; el blob se
+ * libera porque ya no se va a reintentar la subida.
+ */
+export async function marcarCuadrosEnError(recorridoId: string): Promise<number> {
+  const db = await abrirDb()
+  const pendientes = await listarCuadros(recorridoId, 'pendiente')
+  for (const cuadro of pendientes) {
+    await db.put('cuadros', { ...cuadro, estadoSubida: 'error', blob: undefined })
+  }
+  return pendientes.length
+}
+
 /** Encola los cuadros de un recorrido. Si ya estaba encolado no reinicia sus intentos. */
 export async function encolarCuadros(recorridoId: string): Promise<void> {
   const db = await abrirDb()
@@ -337,6 +351,7 @@ export const baseCuadros: BaseCuadros = {
   contarCuadros,
   marcarCuadro,
   borrarCuadrosSubidos,
+  marcarCuadrosEnError,
   encolarCuadros,
   obtenerItemColaCuadros,
   guardarItemColaCuadros,

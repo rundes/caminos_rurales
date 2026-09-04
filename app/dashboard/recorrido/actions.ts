@@ -134,9 +134,19 @@ export async function finalizarRecorrido(payload: unknown): Promise<ResultadoRec
 
 /** Lo que devuelve `registrarCuadros`: cuántos se guardaron y los puntos del recorrido. */
 export type RegistroCuadros = { registrados: number; puntos: number }
-export type ResultadoCuadros = ResultadoAccion<RegistroCuadros>
+
+/**
+ * Resultado de `registrarCuadros`. Igual que `finalizarRecorrido`, un fallo
+ * marcado `definitivo` no se reintenta: el payload es inválido, el recorrido
+ * no existe o es de otra persona, o el lote no es plausible. Reintentarlo
+ * daría siempre lo mismo y dejaría los cuadros dando vueltas para siempre.
+ */
+export type ResultadoCuadros =
+  | ResultadoAccion<RegistroCuadros>
+  | { ok: false; error: string; definitivo: true }
 
 const ERROR_CUADROS = 'No se pudieron registrar los cuadros. Intentá de nuevo.'
+const ERROR_CUADROS_SIN_RECORRIDO = 'Ese recorrido ya no está disponible.'
 const ERROR_CUADROS_AJENOS = 'Ese recorrido es de otra persona.'
 const ERROR_CUADROS_IMPLAUSIBLES = 'Los cuadros no pudieron validarse.'
 
@@ -150,7 +160,7 @@ const ERROR_CUADROS_IMPLAUSIBLES = 'Los cuadros no pudieron validarse.'
  */
 export async function registrarCuadros(entrada: unknown): Promise<ResultadoCuadros> {
   const parseo = esquemaCuadros.safeParse(entrada)
-  if (!parseo.success) return { ok: false, error: primerError(parseo.error) }
+  if (!parseo.success) return { ok: false, error: primerError(parseo.error), definitivo: true }
   const datos = parseo.data
 
   const supabase = await crearClienteServidor()
@@ -162,10 +172,11 @@ export async function registrarCuadros(entrada: unknown): Promise<ResultadoCuadr
   try {
     const recorrido = await buscarRecorrido(supabase, ctx.recorridoId)
     // Sin recorrido no hay nada que registrar: la cola sube los cuadros recién
-    // después de que el recorrido quedó guardado.
-    if (!recorrido) return { ok: false, error: ERROR_CUADROS }
+    // después de que el recorrido quedó guardado, así que si no está es que se
+    // borró. Reintentar no lo va a traer de vuelta.
+    if (!recorrido) return { ok: false, error: ERROR_CUADROS_SIN_RECORRIDO, definitivo: true }
     if (recorrido.usuario_id !== ctx.usuarioId) {
-      return { ok: false, error: ERROR_CUADROS_AJENOS }
+      return { ok: false, error: ERROR_CUADROS_AJENOS, definitivo: true }
     }
 
     const admin = crearClienteAdmin()
@@ -181,7 +192,7 @@ export async function registrarCuadros(entrada: unknown): Promise<ResultadoCuadr
   } catch (error) {
     console.error('[cuadros]', error)
     if (error instanceof ErrorPlausibilidadCuadros) {
-      return { ok: false, error: ERROR_CUADROS_IMPLAUSIBLES }
+      return { ok: false, error: ERROR_CUADROS_IMPLAUSIBLES, definitivo: true }
     }
     return { ok: false, error: ERROR_CUADROS }
   }

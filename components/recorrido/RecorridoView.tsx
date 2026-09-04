@@ -138,7 +138,7 @@ export function RecorridoView({ usuarioId, municipio, capas, limites, centro }: 
   }, [])
 
   const { solicitarPermiso } = sensores
-  const { solicitarPermiso: solicitarCamara } = camara
+  const { solicitarPermiso: solicitarCamara, detener: detenerCamara } = camara
 
   const iniciar = useCallback(async () => {
     // iOS solo concede los permisos si se piden dentro del gesto: los dos se
@@ -168,6 +168,8 @@ export function RecorridoView({ usuarioId, municipio, capas, limites, centro }: 
 
   const cerrarPendiente = useCallback(async () => {
     if (!sinTerminar) return
+    // Sale de la grabación: la cámara no tiene por qué seguir prendida.
+    detenerCamara()
     const resultado = await cerrarRecorrido(sinTerminar.id)
     setSinTerminar(null)
     if (!resultado.ok) {
@@ -175,10 +177,13 @@ export function RecorridoView({ usuarioId, municipio, capas, limites, centro }: 
       return
     }
     await sincronizar()
-  }, [sinTerminar, sincronizar])
+  }, [detenerCamara, sinTerminar, sincronizar])
 
   const finalizar = useCallback(async () => {
     const { recorridoId, km, cantidad } = grabador.estado
+    // Se libera antes de cerrar, y también cuando el recorrido se descarta:
+    // dejar el hardware prendido en el resumen quema batería y da mala espina.
+    detenerCamara()
     const resultado = await grabador.finalizar()
     if (resultado && !resultado.ok) {
       setErrorLocal(resultado.mensaje)
@@ -186,7 +191,7 @@ export function RecorridoView({ usuarioId, municipio, capas, limites, centro }: 
     }
     if (recorridoId) setCerrado({ recorridoId, km, puntosGps: cantidad })
     await sincronizar()
-  }, [grabador, sincronizar])
+  }, [detenerCamara, grabador, sincronizar])
 
   // Abrir el formulario pausa la grabación y congela la posición: la
   // observación queda donde estaba la persona al verla, no donde termina.
@@ -233,6 +238,8 @@ export function RecorridoView({ usuarioId, municipio, capas, limites, centro }: 
         sinConexion={!enLinea}
         cuadros={totalCuadros.capturados}
         cuadrosPendientes={totalCuadros.pendientes}
+        cuadrosError={cuadros.errorCuadros[cerrado.recorridoId] ?? 0}
+        redVerificada={cuadros.red.verificada}
         onSubirCuadros={cuadros.forzarConDatos}
         onNuevo={() => correr(iniciar)}
       />

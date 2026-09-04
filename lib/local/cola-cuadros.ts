@@ -21,13 +21,16 @@ export type CuadroSubido = {
   ruta: string
 }
 
+/** Lo que el servidor puede devolver al registrar un lote de cuadros. */
+export type RespuestaCuadros =
+  | ResultadoAccion<{ registrados: number; puntos: number }>
+  | { ok: false; error: string; definitivo: true }
+
 /**
  * Firma local de la Server Action `registrarCuadros`. Se inyecta para que la
  * cola no dependa de `actions.ts` (que no se puede importar en los tests).
  */
-export type RegistrarCuadros = (
-  entrada: unknown,
-) => Promise<ResultadoAccion<{ registrados: number; puntos: number }>>
+export type RegistrarCuadros = (entrada: unknown) => Promise<RespuestaCuadros>
 
 export type DepsCuadros = {
   db: BaseCuadros
@@ -48,6 +51,31 @@ export type ResultadoColaCuadros = {
   pendientes: number
   /** Cuadros efectivamente subidos en esta pasada. */
   subidos: number
+  /**
+   * Cuadros que quedaron en error, por recorrido: se dieron por perdidos (o el
+   * servidor los rechazó de forma definitiva) y la UI lo avisa. Solo aparecen
+   * los recorridos con al menos uno.
+   */
+  errorCuadros: Record<string, number>
+}
+
+/** Rechazo del servidor que no tiene sentido reintentar. */
+class FalloDefinitivo extends Error {}
+
+/** ¿El servidor marcó el rechazo como definitivo? */
+function esDefinitivo(respuesta: RespuestaCuadros): boolean {
+  return !respuesta.ok && 'definitivo' in respuesta && respuesta.definitivo === true
+}
+
+/**
+ * Da por perdidos los cuadros pendientes de un recorrido: quedan en `error`
+ * (la fila se conserva para contarlos, el blob se libera) y el item sale de la
+ * cola. Devuelve cuántos descartó.
+ */
+async function descartarCuadros(recorridoId: string, deps: DepsCuadros): Promise<number> {
+  const descartados = await deps.db.marcarCuadrosEnError(recorridoId)
+  await deps.db.borrarItemColaCuadros(recorridoId)
+  return descartados
 }
 
 /** Anota el fallo en la cola de cuadros con el mismo backoff que la cola principal. */
@@ -128,7 +156,11 @@ async function subirCuadrosDe(recorridoId: string, deps: DepsCuadros): Promise<n
       if (filas.length === 0) continue
 
       const resultado = await deps.registrarCuadros({ recorridoId, cuadros: filas })
-      if (!resultado.ok) throw new Error(resultado.error)
+      if (!resultado.ok) {
+        throw esDefinitivo(resultado)
+          ? new FalloDefinitivo(resultado.error)
+          : new Error(resultado.error)
+      }
 
       for (let i = 0; i < ids.length; i += 1) {
         await deps.db.marcarCuadro(ids[i], 'subida', filas[i].ruta)
@@ -140,9 +172,42 @@ async function subirCuadrosDe(recorridoId: string, deps: DepsCuadros): Promise<n
     await deps.db.borrarItemColaCuadros(recorridoId)
   } catch (error) {
     console.error('[cuadros]', error)
-    await registrarFallo(recorridoId, error instanceof Error ? error.message : 'Error desconocido', deps)
+    const mensaje = error instanceof Error ? error.message : 'Error desconocido'
+    // Un rechazo definitivo no se reintenta: los cuadros quedan en error y el
+    // recorrido sale de la cola. Cualquier otro fallo espera su backoff.
+    if (error instanceof FalloDefinitivo) await descartarCuadros(recorridoId, deps)
+    else await registrarFallo(recorridoId, mensaje, deps)
   }
   return subidos
+}
+
+/**
+ * Los recorridos que agotaron los intentos salen de la cola con sus cuadros en
+ * error: si no, `pendientes` seguiría contando cuadros que ya nadie va a subir.
+ */
+async function descartarAgotados(
+  cola: readonly ItemColaCuadros[],
+  propios: ReadonlySet<string>,
+  deps: DepsCuadros,
+): Promise<void> {
+  for (const item of cola) {
+    if (!propios.has(item.recorridoId) || item.intentos < MAX_INTENTOS) continue
+    console.error('[cuadros]', item.recorridoId, item.ultimoError ?? 'intentos agotados')
+    await descartarCuadros(item.recorridoId, deps)
+  }
+}
+
+/** Cuadros en error por recorrido, para que el resumen pueda avisarlo. */
+async function contarErrores(
+  recorridos: readonly string[],
+  deps: DepsCuadros,
+): Promise<Record<string, number>> {
+  const errores: Record<string, number> = {}
+  for (const recorridoId of recorridos) {
+    const enError = await deps.db.contarCuadros(recorridoId, 'error')
+    if (enError > 0) errores[recorridoId] = enError
+  }
+  return errores
 }
 
 /** Vuelve a encolar los recorridos ya subidos que tienen cuadros sin item de cola. */
@@ -164,7 +229,8 @@ async function reencolarHuerfanos(
  * servidor. Solo se procesan los propios: la cola local puede tener
  * recorridos de otra sesión y esos nunca se tocan. Con la red no permitida
  * (preferencia WiFi y datos móviles) no se sube nada, pero se informan los
- * pendientes para que la UI los muestre.
+ * pendientes para que la UI los muestre. Al final, los recorridos que agotaron
+ * los intentos se dan por perdidos.
  */
 export async function procesarColaCuadros(
   deps: DepsCuadros,
@@ -188,6 +254,12 @@ export async function procesarColaCuadros(
     }
   }
 
+  await descartarAgotados(await deps.db.listarColaCuadros(), ids, deps)
+
   const restantes = (await deps.db.listarColaCuadros()).filter((i) => ids.has(i.recorridoId))
-  return { pendientes: restantes.filter((i) => i.intentos < MAX_INTENTOS).length, subidos }
+  return {
+    pendientes: restantes.filter((i) => i.intentos < MAX_INTENTOS).length,
+    subidos,
+    errorCuadros: await contarErrores(subidosEnServidor, deps),
+  }
 }

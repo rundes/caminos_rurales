@@ -959,18 +959,27 @@ describe('registrarCuadros', () => {
 
     const r = await registrarCuadros(lote())
 
-    expect(r).toEqual({ ok: false, error: expect.stringMatching(/otra persona/i) })
+    // Definitivo: reintentar el lote daría siempre lo mismo.
+    expect(r).toEqual({
+      ok: false,
+      error: expect.stringMatching(/otra persona/i),
+      definitivo: true,
+    })
     expect(escrituras).toEqual([])
     expect(mutaciones).toEqual([])
     expect(crearClienteAdmin).not.toHaveBeenCalled()
   })
 
-  test('un recorrido que no existe devuelve el error generico sin escribir', async () => {
+  test('un recorrido que no existe es un rechazo definitivo y no escribe nada', async () => {
     db.recorridoExistente = null
 
     const r = await registrarCuadros(lote())
 
-    expect(r).toEqual({ ok: false, error: expect.stringMatching(/no se pudieron registrar/i) })
+    expect(r).toEqual({
+      ok: false,
+      error: expect.stringMatching(/ya no está disponible/i),
+      definitivo: true,
+    })
     expect(escrituras).toEqual([])
   })
 
@@ -994,7 +1003,11 @@ describe('registrarCuadros', () => {
     const antes = T_BASE - 3_600_000 - 61_000 // antes de inicio - 60 s
     const r = await registrarCuadros(lote({ cuadros: [cuadro({ t: antes })] }))
 
-    expect(r).toEqual({ ok: false, error: expect.stringMatching(/no pudieron validarse/i) })
+    expect(r).toEqual({
+      ok: false,
+      error: expect.stringMatching(/no pudieron validarse/i),
+      definitivo: true,
+    })
     expect(escrituraDe('cuadros')).toBeUndefined()
     expect(escrituraDe('puntos_eventos')).toBeUndefined()
     expect(spy).toHaveBeenCalledWith('[cuadros]', expect.any(Error))
@@ -1009,7 +1022,11 @@ describe('registrarCuadros', () => {
       lote({ cuadros: [cuadro(), cuadro({ t: T_BASE + 3000, lng: 0.006 })] }),
     )
 
-    expect(r).toEqual({ ok: false, error: expect.stringMatching(/no pudieron validarse/i) })
+    expect(r).toEqual({
+      ok: false,
+      error: expect.stringMatching(/no pudieron validarse/i),
+      definitivo: true,
+    })
     expect(escrituraDe('cuadros')).toBeUndefined()
     spy.mockRestore()
   })
@@ -1021,7 +1038,11 @@ describe('registrarCuadros', () => {
 
     const r = await registrarCuadros(lote({ cuadros: [cuadro({ t: T_BASE + 3000 })] }))
 
-    expect(r).toEqual({ ok: false, error: expect.stringMatching(/no pudieron validarse/i) })
+    expect(r).toEqual({
+      ok: false,
+      error: expect.stringMatching(/no pudieron validarse/i),
+      definitivo: true,
+    })
     expect(escrituraDe('cuadros')).toBeUndefined()
     spy.mockRestore()
   })
@@ -1041,14 +1062,22 @@ describe('registrarCuadros', () => {
 
     const r = await registrarCuadros(lote({ cuadros }))
 
-    expect(r).toEqual({ ok: false, error: expect.stringMatching(/no pudieron validarse/i) })
+    expect(r).toEqual({
+      ok: false,
+      error: expect.stringMatching(/no pudieron validarse/i),
+      definitivo: true,
+    })
     expect(escrituraDe('cuadros')).toBeUndefined()
     spy.mockRestore()
   })
 
   test('datos inválidos: no crea el cliente admin ni consulta nada', async () => {
     const r = await registrarCuadros(lote({ recorridoId: 'no-uuid' }))
-    expect(r).toEqual({ ok: false, error: expect.stringMatching(/identificador/i) })
+    expect(r).toEqual({
+      ok: false,
+      error: expect.stringMatching(/identificador/i),
+      definitivo: true,
+    })
     expect(crearClienteAdmin).not.toHaveBeenCalled()
     expect(tablasUsuario).toEqual([])
     expect(escrituras).toEqual([])
@@ -1056,18 +1085,27 @@ describe('registrarCuadros', () => {
 
   test('un lote vacío se rechaza sin tocar la base', async () => {
     const r = await registrarCuadros(lote({ cuadros: [] }))
-    expect(r).toEqual({ ok: false, error: expect.stringMatching(/no hay cuadros/i) })
+    expect(r).toEqual({
+      ok: false,
+      error: expect.stringMatching(/no hay cuadros/i),
+      definitivo: true,
+    })
     expect(tablasUsuario).toEqual([])
   })
 
   test('más de 200 cuadros en una llamada se rechazan', async () => {
     const cuadros = Array.from({ length: 201 }, (_, i) => cuadro({ t: T_BASE + i }))
     const r = await registrarCuadros(lote({ cuadros }))
-    expect(r).toEqual({ ok: false, error: expect.stringMatching(/demasiados cuadros/i) })
+    expect(r).toEqual({
+      ok: false,
+      error: expect.stringMatching(/demasiados cuadros/i),
+      definitivo: true,
+    })
     expect(tablasUsuario).toEqual([])
   })
 
-  test('sin sesión no escribe nada', async () => {
+  // Sin sesión NO es definitivo: la sesión puede volver y el lote sigue siendo válido.
+  test('sin sesión no escribe nada y se puede reintentar', async () => {
     getUser.mockResolvedValue({ data: { user: null } })
     const r = await registrarCuadros(lote())
     expect(r).toEqual({ ok: false, error: expect.stringMatching(/sesión/i) })

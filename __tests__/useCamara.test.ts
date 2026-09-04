@@ -2,8 +2,15 @@ import 'fake-indexeddb/auto'
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { useCamara } from '@/hooks/useCamara'
-import { DISTANCIA_CUADRO_M } from '@/lib/camara/umbrales'
+import { DISTANCIA_CUADRO_M, MAX_CUADROS_RECORRIDO } from '@/lib/camara/umbrales'
 import * as db from '@/lib/local/db'
+
+// El tope real son 2000 cuadros: capturarlos en un test no aporta nada, así
+// que se baja a 2 y el resto de los umbrales queda como en producción.
+vi.mock('@/lib/camara/umbrales', async (importarOriginal) => ({
+  ...(await importarOriginal<typeof import('@/lib/camara/umbrales')>()),
+  MAX_CUADROS_RECORRIDO: 2,
+}))
 
 const RECORRIDO = '11111111-1111-4111-8111-111111111111'
 const T0 = 1_700_000_000_000
@@ -202,6 +209,75 @@ describe('useCamara', () => {
       expect(await result.current.solicitarPermiso()).toBe(false)
     })
     expect(result.current.estado).toBe('inactiva')
+  })
+
+  test('detener libera el hardware sin cambiar la intención de la persona', async () => {
+    const { stream, detener } = crearStream()
+    stubCamara(async () => stream)
+    const { result } = renderHook(() => useCamara())
+
+    await act(async () => {
+      await result.current.solicitarPermiso()
+    })
+
+    act(() => result.current.detener())
+
+    expect(detener).toHaveBeenCalledTimes(1)
+    expect(result.current.estado).toBe('inactiva')
+    // A diferencia de apagarla a mano, el próximo recorrido la vuelve a prender.
+    await act(async () => {
+      expect(await result.current.solicitarPermiso()).toBe(true)
+    })
+    expect(result.current.estado).toBe('activa')
+  })
+
+  test('no captura más allá del tope de cuadros del recorrido', async () => {
+    const { stream } = crearStream()
+    stubCamara(async () => stream)
+    const { result } = renderHook(() => useCamara())
+
+    await act(async () => {
+      await result.current.solicitarPermiso()
+    })
+    engancharVideo(result.current.videoRef)
+
+    await act(async () => {
+      for (let i = 0; i < MAX_CUADROS_RECORRIDO; i += 1) {
+        expect(
+          await result.current.capturarSi(punto(i * (DISTANCIA_CUADRO_M + 10), i * 1000), RECORRIDO),
+        ).toBe(true)
+      }
+    })
+
+    await act(async () => {
+      const pasado = MAX_CUADROS_RECORRIDO * (DISTANCIA_CUADRO_M + 10)
+      expect(await result.current.capturarSi(punto(pasado, 999_000), RECORRIDO)).toBe(false)
+    })
+
+    expect(await db.contarCuadros(RECORRIDO)).toBe(MAX_CUADROS_RECORRIDO)
+    expect(result.current.cuadros).toBe(MAX_CUADROS_RECORRIDO)
+  })
+
+  test('dos disparos encimados capturan un solo cuadro', async () => {
+    const { stream } = crearStream()
+    stubCamara(async () => stream)
+    const { result } = renderHook(() => useCamara())
+
+    await act(async () => {
+      await result.current.solicitarPermiso()
+    })
+    engancharVideo(result.current.videoRef)
+
+    // El segundo punto por sí solo dispararía: lo frena el guard de captura en
+    // curso, no el umbral de distancia.
+    await act(async () => {
+      const primera = result.current.capturarSi(punto(0, 0), RECORRIDO)
+      const segunda = result.current.capturarSi(punto(DISTANCIA_CUADRO_M + 10, 2000), RECORRIDO)
+      expect(await primera).toBe(true)
+      expect(await segunda).toBe(false)
+    })
+
+    expect(await db.contarCuadros(RECORRIDO)).toBe(1)
   })
 
   test('libera la cámara al desmontar', async () => {

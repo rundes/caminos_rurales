@@ -32,7 +32,7 @@ const { RecorridoView } = await import('@/components/recorrido/RecorridoView')
 const { useGrabadorGps } = await import('@/hooks/useGrabadorGps')
 const { useSincronizacion } = await import('@/hooks/useSincronizacion')
 const { useSincronizacionCuadros } = await import('@/hooks/useSincronizacionCuadros')
-const { recorridoEnCurso } = await import('@/lib/local/db')
+const { contarCuadros, recorridoEnCurso } = await import('@/lib/local/db')
 
 const CENTRO: [number, number] = [-36.85, -57.88]
 const T0 = 1_700_000_000_000
@@ -103,21 +103,48 @@ function stubCamara(implementacion: () => Promise<MediaStream> = async () => STR
   return getUserMedia
 }
 
-const STREAM = { getTracks: () => [{ stop: vi.fn() }] } as unknown as MediaStream
+/** Pista con `stop` espiado: sirve para verificar que se libera la cámara. */
+const detenerPista = vi.fn()
+const STREAM = { getTracks: () => [{ stop: detenerPista }] } as unknown as MediaStream
+
+/** Elemento nuevo en cada llamada: React saltea el re-render si es el mismo. */
+function vista() {
+  return (
+    <RecorridoView usuarioId={USUARIO} municipio="maipu" capas={null} limites={null} centro={CENTRO} />
+  )
+}
 
 function renderVista() {
-  return render(
-    <RecorridoView usuarioId={USUARIO} municipio="maipu" capas={null} limites={null} centro={CENTRO} />,
-  )
+  return render(vista())
+}
+
+/**
+ * Deja la vista grabando con la cámara ya prendida: el permiso solo se pide
+ * dentro del gesto de iniciar, así que hay que pasar por ahí.
+ */
+async function grabandoConCamara(extra: Partial<ControlGrabador> = {}): Promise<void> {
+  vi.mocked(useGrabadorGps).mockReturnValue(control(GRABADOR_INICIAL))
+  const getUserMedia = stubCamara()
+  const { rerender } = renderVista()
+
+  await userEvent.click(await screen.findByRole('button', { name: /iniciar recorrido/i }))
+  await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1))
+
+  vi.mocked(useGrabadorGps).mockReturnValue(control(GRABANDO, extra))
+  rerender(vista())
+  await screen.findByText('Cámara activa')
 }
 
 beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(recorridoEnCurso).mockResolvedValue(undefined)
+  vi.mocked(contarCuadros).mockResolvedValue(0)
   vi.mocked(useSincronizacion).mockReturnValue(sincronizacion())
   vi.mocked(useSincronizacionCuadros).mockReturnValue({
     pendientes: 0,
     subidos: 0,
+    errorCuadros: {},
+    red: { permitida: true, verificada: true },
     forzarConDatos: vi.fn(),
   })
 })
@@ -253,6 +280,50 @@ describe('RecorridoView', () => {
     expect(screen.getByText(/recorrido finalizado/i)).toBeInTheDocument()
     expect(screen.getByRole('status')).toHaveTextContent('Pendiente de subir (sin conexión)')
     vi.restoreAllMocks()
+  })
+
+  test('finalizar libera la cámara', async () => {
+    await grabandoConCamara()
+
+    await userEvent.click(screen.getByRole('button', { name: /^finalizar$/i }))
+
+    await waitFor(() => expect(detenerPista).toHaveBeenCalled())
+    expect(screen.getByText(/recorrido finalizado/i)).toBeInTheDocument()
+  })
+
+  test('un recorrido descartado también libera la cámara', async () => {
+    const finalizar = vi.fn(
+      async (): Promise<ResultadoCierre> => ({
+        ok: false,
+        motivo: 'descartado',
+        mensaje: 'Recorrido sin puntos GPS, descartado.',
+      }),
+    )
+    await grabandoConCamara({ finalizar })
+
+    await userEvent.click(screen.getByRole('button', { name: /^finalizar$/i }))
+
+    await waitFor(() => expect(detenerPista).toHaveBeenCalled())
+    expect(await screen.findByRole('alert')).toHaveTextContent(/descartado/i)
+  })
+
+  test('avisa cuántos cuadros no pudieron subirse y que la red no se pudo verificar', async () => {
+    vi.mocked(useGrabadorGps).mockReturnValue(control(GRABANDO))
+    vi.mocked(useSincronizacionCuadros).mockReturnValue({
+      pendientes: 1,
+      subidos: 0,
+      errorCuadros: { [RECORRIDO]: 7 },
+      red: { permitida: true, verificada: false },
+      forzarConDatos: vi.fn(),
+    })
+    vi.mocked(contarCuadros).mockResolvedValue(9)
+
+    renderVista()
+
+    await userEvent.click(await screen.findByRole('button', { name: /^finalizar$/i }))
+
+    expect(await screen.findByText(/7 cuadros no pudieron subirse/i)).toBeInTheDocument()
+    expect(screen.getByText(/no pudimos verificar si estás en wifi/i)).toBeInTheDocument()
   })
 
   test('un recorrido sin puntos se descarta y se avisa', async () => {

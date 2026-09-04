@@ -133,6 +133,12 @@ export interface BaseCuadros {
   marcarCuadro(id: number, estado: EstadoSubida, ruta?: string): Promise<void>
   /** Libera los blobs de los cuadros ya subidos. Devuelve cuántos liberó. */
   borrarCuadrosSubidos(recorridoId: string): Promise<number>
+  /**
+   * Da por perdidos los cuadros pendientes de un recorrido: los deja en
+   * `error` y libera sus blobs (la fila queda para poder contarlos en la UI).
+   * Devuelve cuántos marcó.
+   */
+  marcarCuadrosEnError(recorridoId: string): Promise<number>
   encolarCuadros(recorridoId: string): Promise<void>
   obtenerItemColaCuadros(recorridoId: string): Promise<ItemColaCuadros | undefined>
   guardarItemColaCuadros(item: ItemColaCuadros): Promise<void>

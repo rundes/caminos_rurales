@@ -95,6 +95,92 @@ describe('ResumenRecorrido', () => {
     expect(screen.queryByRole('button', { name: /subir ahora con datos/i })).not.toBeInTheDocument()
   })
 
+  test('avisa cuántos cuadros no pudieron subirse', () => {
+    render(
+      <ResumenRecorrido
+        km={4.5}
+        puntosGps={120}
+        resumen={RESUMEN}
+        sinConexion={false}
+        cuadros={40}
+        cuadrosPendientes={0}
+        cuadrosError={7}
+        onNuevo={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText('7 cuadros no pudieron subirse')).toBeInTheDocument()
+  })
+
+  test('sin cuadros en error no dice nada', () => {
+    render(
+      <ResumenRecorrido
+        km={4.5}
+        puntosGps={120}
+        resumen={RESUMEN}
+        sinConexion={false}
+        cuadros={40}
+        cuadrosPendientes={0}
+        cuadrosError={0}
+        onNuevo={vi.fn()}
+      />,
+    )
+
+    expect(screen.queryByText(/no pudieron subirse/i)).not.toBeInTheDocument()
+  })
+
+  test('avisa que no pudo verificar la red cuando quedan cuadros por subir', () => {
+    const { rerender } = render(
+      <ResumenRecorrido
+        km={4.5}
+        puntosGps={120}
+        resumen={RESUMEN}
+        sinConexion={false}
+        cuadros={40}
+        cuadrosPendientes={12}
+        redVerificada={false}
+        onNuevo={vi.fn()}
+      />,
+    )
+
+    expect(
+      screen.getByText('No pudimos verificar si estás en WiFi; la subida usará la red disponible.'),
+    ).toBeInTheDocument()
+
+    // Sin nada pendiente el aviso no aporta: no hay subida que hacer.
+    rerender(
+      <ResumenRecorrido
+        km={4.5}
+        puntosGps={120}
+        resumen={RESUMEN}
+        sinConexion={false}
+        cuadros={40}
+        cuadrosPendientes={0}
+        redVerificada={false}
+        onNuevo={vi.fn()}
+      />,
+    )
+
+    expect(screen.queryByText(/no pudimos verificar/i)).not.toBeInTheDocument()
+  })
+
+  test('con la red verificada no muestra el aviso', () => {
+    render(
+      <ResumenRecorrido
+        km={4.5}
+        puntosGps={120}
+        resumen={RESUMEN}
+        sinConexion={false}
+        cuadros={40}
+        cuadrosPendientes={12}
+        redVerificada
+        onNuevo={vi.fn()}
+      />,
+    )
+
+    expect(screen.queryByText(/no pudimos verificar/i)).not.toBeInTheDocument()
+  })
+
   test('sin resumen del servidor avisa que se está subiendo', async () => {
     const onNuevo = vi.fn()
     render(

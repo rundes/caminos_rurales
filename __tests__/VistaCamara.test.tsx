@@ -22,6 +22,14 @@ describe('VistaCamara', () => {
     expect(screen.getByLabelText('cuadros capturados')).toHaveTextContent('12 cuadro(s)')
   })
 
+  test('la vista previa queda fuera del lector de pantalla', () => {
+    renderVista('activa', 12)
+
+    // La imagen no le dice nada a quien no la ve: lo que importa está en la
+    // insignia de estado y en el contador.
+    expect(screen.getByTestId('video-camara')).toHaveAttribute('aria-hidden', 'true')
+  })
+
   test('el botón refleja si la cámara está prendida', async () => {
     const { onAlternar } = renderVista('activa')
     const boton = screen.getByRole('button', { name: /cámara/i })

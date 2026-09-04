@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 import type { DestinoSubida } from '@/lib/almacenamiento/tipos'
 import { LOTE_CUADROS } from '@/lib/camara/umbrales'
-import { procesarColaCuadros, type DepsCuadros } from '@/lib/local/cola-cuadros'
+import {
+  procesarColaCuadros,
+  type DepsCuadros,
+  type RespuestaCuadros,
+} from '@/lib/local/cola-cuadros'
 import { BACKOFF_MS, MAX_INTENTOS } from '@/lib/local/deps'
 import type {
   BaseCuadros,
@@ -85,6 +89,13 @@ function crearBase(inicial: Inicial) {
       for (const c of subidos) cuadros.set(c.id, { ...c, blob: undefined })
       return subidos.length
     },
+    marcarCuadrosEnError: async (recorridoId) => {
+      const pendientes = de(recorridoId, 'pendiente')
+      for (const c of pendientes) {
+        cuadros.set(c.id, { ...c, estadoSubida: 'error', blob: undefined })
+      }
+      return pendientes.length
+    },
     encolarCuadros: async (recorridoId) => {
       if (!cola.has(recorridoId)) cola.set(recorridoId, { recorridoId, intentos: 0, proximoIntento: 0 })
     },
@@ -109,7 +120,7 @@ function crearDeps(
   base: Base,
   opciones: {
     permitida?: boolean
-    respuesta?: ResultadoAccion<{ registrados: number; puntos: number }>
+    respuesta?: RespuestaCuadros
     fallarSubida?: boolean
   } = {},
 ): DepsEspiadas {
@@ -151,7 +162,7 @@ describe('procesarColaCuadros', () => {
 
     const resultado = await procesarColaCuadros(deps, USUARIO)
 
-    expect(resultado).toEqual({ pendientes: 0, subidos: cuadros.length })
+    expect(resultado).toEqual({ pendientes: 0, subidos: cuadros.length, errorCuadros: {} })
     // Dos lotes: 20 + 3.
     expect(deps.registrarCuadros).toHaveBeenCalledTimes(2)
     expect(deps.subir).toHaveBeenCalledTimes(cuadros.length)
@@ -213,7 +224,7 @@ describe('procesarColaCuadros', () => {
     const resultado = await procesarColaCuadros(deps, USUARIO)
 
     expect(deps.subir).not.toHaveBeenCalled()
-    expect(resultado).toEqual({ pendientes: 1, subidos: 0 })
+    expect(resultado).toEqual({ pendientes: 1, subidos: 0, errorCuadros: {} })
   })
 
   test('encola el recorrido subido que quedó con cuadros sin item de cola', async () => {
@@ -237,7 +248,7 @@ describe('procesarColaCuadros', () => {
 
     expect(deps.subir).not.toHaveBeenCalled()
     expect(deps.registrarCuadros).not.toHaveBeenCalled()
-    expect(resultado).toEqual({ pendientes: 0, subidos: 0 })
+    expect(resultado).toEqual({ pendientes: 0, subidos: 0, errorCuadros: {} })
   })
 
   test('un fallo de subida deja el item con backoff y los cuadros pendientes', async () => {
@@ -258,7 +269,7 @@ describe('procesarColaCuadros', () => {
       ultimoError: 'sin red',
     })
     expect((await base.db.listarCuadros(ID, 'pendiente')).length).toBe(1)
-    expect(resultado).toEqual({ pendientes: 1, subidos: 0 })
+    expect(resultado).toEqual({ pendientes: 1, subidos: 0, errorCuadros: {} })
   })
 
   test('un rechazo del servidor no marca los cuadros como subidos', async () => {
@@ -287,18 +298,71 @@ describe('procesarColaCuadros', () => {
     })
     const deps = crearDeps(base)
 
-    expect(await procesarColaCuadros(deps, USUARIO)).toEqual({ pendientes: 1, subidos: 0 })
+    expect(await procesarColaCuadros(deps, USUARIO)).toEqual({
+      pendientes: 1,
+      subidos: 0,
+      errorCuadros: {},
+    })
     expect(deps.subir).not.toHaveBeenCalled()
+  })
 
-    const agotada = crearBase({
+  test('con los intentos agotados da los cuadros por perdidos y saca el item de la cola', async () => {
+    const base = crearBase({
+      recorridos: [recorrido()],
+      cuadros: [cuadro(1), cuadro(2)],
+      cola: [
+        { recorridoId: ID, intentos: MAX_INTENTOS, proximoIntento: 0, ultimoError: 'sin red' },
+      ],
+    })
+    const deps = crearDeps(base)
+
+    const resultado = await procesarColaCuadros(deps, USUARIO)
+
+    expect(deps.subir).not.toHaveBeenCalled()
+    expect(resultado).toEqual({ pendientes: 0, subidos: 0, errorCuadros: { [ID]: 2 } })
+    expect(await base.db.listarColaCuadros()).toEqual([])
+    const guardados = await base.db.listarCuadros(ID)
+    expect(guardados.every((c) => c.estadoSubida === 'error')).toBe(true)
+    expect(guardados.every((c) => c.blob === undefined)).toBe(true)
+  })
+
+  test('un rechazo definitivo no se reintenta: cuadros en error y fuera de la cola', async () => {
+    const base = crearBase({
+      recorridos: [recorrido()],
+      cuadros: [cuadro(1), cuadro(2)],
+      cola: [{ recorridoId: ID, intentos: 0, proximoIntento: 0 }],
+    })
+    const deps = crearDeps(base, {
+      respuesta: { ok: false, error: 'Ese recorrido es de otra persona.', definitivo: true },
+    })
+
+    const resultado = await procesarColaCuadros(deps, USUARIO)
+
+    expect(deps.registrarCuadros).toHaveBeenCalledTimes(1)
+    expect(resultado).toEqual({ pendientes: 0, subidos: 0, errorCuadros: { [ID]: 2 } })
+    // No queda item con backoff: reintentar daría siempre lo mismo.
+    expect(await base.db.obtenerItemColaCuadros(ID)).toBeUndefined()
+    const guardados = await base.db.listarCuadros(ID)
+    expect(guardados.every((c) => c.estadoSubida === 'error')).toBe(true)
+    expect(guardados.every((c) => c.blob === undefined)).toBe(true)
+  })
+
+  test('un rechazo sin `definitivo` sí espera el backoff', async () => {
+    const base = crearBase({
       recorridos: [recorrido()],
       cuadros: [cuadro(1)],
-      cola: [{ recorridoId: ID, intentos: MAX_INTENTOS, proximoIntento: 0 }],
+      cola: [{ recorridoId: ID, intentos: 0, proximoIntento: 0 }],
     })
-    const deps2 = crearDeps(agotada)
+    const deps = crearDeps(base, { respuesta: { ok: false, error: 'Se cayó el servidor' } })
 
-    expect(await procesarColaCuadros(deps2, USUARIO)).toEqual({ pendientes: 0, subidos: 0 })
-    expect(deps2.subir).not.toHaveBeenCalled()
+    const resultado = await procesarColaCuadros(deps, USUARIO)
+
+    expect(await base.db.obtenerItemColaCuadros(ID)).toMatchObject({
+      intentos: 1,
+      ultimoError: 'Se cayó el servidor',
+    })
+    expect((await base.db.listarCuadros(ID, 'pendiente')).length).toBe(1)
+    expect(resultado.errorCuadros).toEqual({})
   })
 
   test('un cuadro sin imagen se marca en error y no frena al resto', async () => {

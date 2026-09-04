@@ -2,7 +2,12 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { prepararSubida, registrarCuadros } from '@/app/dashboard/recorrido/actions'
-import { conexionActual, leerPreferenciaRed, redPermitida } from '@/lib/camara/red'
+import {
+  conexionActual,
+  leerPreferenciaRed,
+  redPermitida,
+  type EstadoRed,
+} from '@/lib/camara/red'
 import { procesarColaCuadros, type DepsCuadros } from '@/lib/local/cola-cuadros'
 import { baseCuadros } from '@/lib/local/db'
 import { subirArchivo } from '@/lib/subida'
@@ -15,9 +20,20 @@ export type EstadoSincronizacionCuadros = {
   pendientes: number
   /** Cuadros subidos desde que se abrió la pantalla. */
   subidos: number
+  /** Cuadros que quedaron en error, por recorrido. */
+  errorCuadros: Record<string, number>
+  /**
+   * Cómo quedó la evaluación de la red con la preferencia guardada. Sin
+   * `verificada` la subida igual sale, pero la UI avisa que no pudimos
+   * confirmar que sea WiFi.
+   */
+  red: EstadoRed
   /** Sube ya mismo aunque la preferencia sea "solo con WiFi" (una sola pasada). */
   forzarConDatos: () => void
 }
+
+/** Hasta evaluar la red en el cliente se asume lo que no genera avisos. */
+const RED_INICIAL: EstadoRed = { permitida: true, verificada: true }
 
 /**
  * Vacía la cola de cuadros del usuario: al montar, al recuperar conexión y
@@ -27,6 +43,8 @@ export type EstadoSincronizacionCuadros = {
 export function useSincronizacionCuadros(usuarioId: string): EstadoSincronizacionCuadros {
   const [pendientes, setPendientes] = useState(0)
   const [subidos, setSubidos] = useState(0)
+  const [errorCuadros, setErrorCuadros] = useState<Record<string, number>>({})
+  const [red, setRed] = useState<EstadoRed>(RED_INICIAL)
   const enLinea = useEnLinea()
   const corriendo = useRef(false)
   const forzar = useRef(false)
@@ -48,6 +66,7 @@ export function useSincronizacionCuadros(usuarioId: string): EstadoSincronizacio
       }
       const resultado = await procesarColaCuadros(deps, usuarioId)
       setPendientes(resultado.pendientes)
+      setErrorCuadros(resultado.errorCuadros)
       if (resultado.subidos > 0) setSubidos((previos) => previos + resultado.subidos)
     } catch (error) {
       console.error('[cuadros]', error)
@@ -60,6 +79,15 @@ export function useSincronizacionCuadros(usuarioId: string): EstadoSincronizacio
     forzar.current = true
     void sincronizar()
   }, [sincronizar])
+
+  // `navigator.connection` y `localStorage` son sistemas externos: se leen al
+  // montar y cada vez que cambia la conexión, no durante el render. La lectura
+  // se difiere a un microtask para no encadenar renders desde el efecto.
+  useEffect(() => {
+    void Promise.resolve().then(() =>
+      setRed(redPermitida(leerPreferenciaRed(), conexionActual())),
+    )
+  }, [enLinea])
 
   // El pase se difiere a un microtask para no encadenar renders desde el efecto.
   useEffect(() => {
@@ -75,5 +103,5 @@ export function useSincronizacionCuadros(usuarioId: string): EstadoSincronizacio
     return () => clearInterval(id)
   }, [pendientes, sincronizar])
 
-  return { pendientes, subidos, forzarConDatos }
+  return { pendientes, subidos, errorCuadros, red, forzarConDatos }
 }

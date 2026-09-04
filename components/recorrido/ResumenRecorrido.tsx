@@ -16,6 +16,10 @@ type Props = {
   /** Cuadros de cámara capturados en el recorrido y los que faltan subir. */
   cuadros?: number
   cuadrosPendientes?: number
+  /** Cuadros que ya no se van a subir: el servidor los rechazó o se agotaron los intentos. */
+  cuadrosError?: number
+  /** `false` cuando no pudimos confirmar que la red sea WiFi (iOS no lo informa). */
+  redVerificada?: boolean
   /** Fuerza la subida de cuadros con datos móviles, saltando el ajuste de WiFi. */
   onSubirCuadros?: () => void
   onNuevo: () => void
@@ -23,6 +27,8 @@ type Props = {
 
 const PENDIENTE = 'Pendiente de subir (sin conexión). Lo enviamos solo cuando vuelva la señal.'
 const SUBIENDO = 'Subiendo…'
+const RED_SIN_VERIFICAR =
+  'No pudimos verificar si estás en WiFi; la subida usará la red disponible.'
 
 /** Orden y etiqueta de las barras de calidad estimada por los sensores. */
 const CALIDADES: readonly { codigo: CalidadSegmento; etiqueta: string; clase: string }[] = [
@@ -79,6 +85,8 @@ export function ResumenRecorrido({
   sinConexion,
   cuadros = 0,
   cuadrosPendientes = 0,
+  cuadrosError = 0,
+  redVerificada = true,
   onSubirCuadros,
   onNuevo,
 }: Props) {
@@ -123,6 +131,14 @@ export function ResumenRecorrido({
             Cuadros: {cuadros} capturados
             {cuadrosPendientes > 0 ? ` · ${cuadrosPendientes} pendientes de subir (WiFi)` : ''}
           </p>
+          {cuadrosError > 0 && (
+            <p role="status" className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">
+              {cuadrosError} cuadros no pudieron subirse
+            </p>
+          )}
+          {!redVerificada && cuadrosPendientes > 0 && (
+            <p className="text-sm text-gray-600">{RED_SIN_VERIFICAR}</p>
+          )}
           {cuadrosPendientes > 0 && onSubirCuadros && (
             <Boton variante="secundario" onClick={onSubirCuadros}>
               Subir ahora con datos

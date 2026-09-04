@@ -32,7 +32,8 @@ const CLASE_ESTADO: Record<EstadoCamara, string> = {
 /**
  * Vista previa chica de la cámara con su estado y el contador de cuadros. El
  * `<video>` tiene que estar montado y visible: iOS no deja capturar de un
- * stream oculto.
+ * stream oculto. Va `aria-hidden` porque un lector de pantalla no saca nada de
+ * la imagen: lo que hay que contar lo dicen la insignia de estado y el contador.
  */
 export function VistaCamara({ estado, cuadros, videoRef, onAlternar }: Props) {
   const encendida = estado === 'activa' || estado === 'solicitando'
@@ -45,7 +46,7 @@ export function VistaCamara({ estado, cuadros, videoRef, onAlternar }: Props) {
         playsInline
         muted
         autoPlay
-        aria-label="Vista previa de la cámara"
+        aria-hidden="true"
         className="h-[72px] w-24 shrink-0 rounded-lg bg-black object-cover"
       />
 

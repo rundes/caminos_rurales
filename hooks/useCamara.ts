@@ -35,6 +35,12 @@ export type ControlCamara = {
   solicitarPermiso: () => Promise<boolean>
   /** Prende o apaga la cámara sin cortar la grabación. */
   alternar: () => void
+  /**
+   * Libera la cámara (apaga el stream) sin tocar la preferencia de la persona:
+   * al terminar el recorrido no tiene sentido seguir con el hardware prendido,
+   * pero el próximo recorrido arranca con la cámara si así la dejó.
+   */
+  detener: () => void
   /** Evalúa el disparo con el punto GPS aceptado y, si toca, guarda el cuadro. */
   capturarSi: (punto: PuntoCuadro, recorridoId: string) => Promise<boolean>
   cuadros: number
@@ -80,7 +86,7 @@ async function hayEspacio(): Promise<boolean> {
   }
 }
 
-function detener(stream: MediaStream | null): void {
+function detenerPistas(stream: MediaStream | null): void {
   stream?.getTracks().forEach((pista) => pista.stop())
 }
 
@@ -126,7 +132,7 @@ export function useCamara({ activaInicial = true }: OpcionesCamara = {}): Contro
     aplicar('solicitando')
     try {
       const obtenido = await navigator.mediaDevices.getUserMedia(RESTRICCIONES)
-      detener(streamRef.current)
+      detenerPistas(streamRef.current)
       streamRef.current = obtenido
       setStream(obtenido)
       aplicar('activa')
@@ -138,8 +144,8 @@ export function useCamara({ activaInicial = true }: OpcionesCamara = {}): Contro
     }
   }, [aplicar])
 
-  const apagar = useCallback(() => {
-    detener(streamRef.current)
+  const detener = useCallback(() => {
+    detenerPistas(streamRef.current)
     streamRef.current = null
     setStream(null)
     aplicar('inactiva')
@@ -148,12 +154,12 @@ export function useCamara({ activaInicial = true }: OpcionesCamara = {}): Contro
   const alternar = useCallback(() => {
     if (deseada.current) {
       deseada.current = false
-      apagar()
+      detener()
       return
     }
     deseada.current = true
     void solicitarPermiso()
-  }, [apagar, solicitarPermiso])
+  }, [detener, solicitarPermiso])
 
   // El `<video>` aparece recién cuando el estado es `activa`, así que el
   // stream se engancha en un efecto y no dentro de `solicitarPermiso`.
@@ -166,7 +172,7 @@ export function useCamara({ activaInicial = true }: OpcionesCamara = {}): Contro
   }, [stream])
 
   useEffect(() => {
-    return () => detener(streamRef.current)
+    return () => detenerPistas(streamRef.current)
   }, [])
 
   const capturarSi = useCallback(
@@ -220,5 +226,5 @@ export function useCamara({ activaInicial = true }: OpcionesCamara = {}): Contro
     [aplicar],
   )
 
-  return { estado, videoRef, solicitarPermiso, alternar, capturarSi, cuadros }
+  return { estado, videoRef, solicitarPermiso, alternar, detener, capturarSi, cuadros }
 }
