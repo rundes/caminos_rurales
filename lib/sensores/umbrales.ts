@@ -23,6 +23,13 @@ export const RMS_BUENO = 1
 export const RMS_REGULAR = 2
 export const RMS_MALO = 3.5
 
+/**
+ * Piso de eventos de movimiento por segmento para confiar en su calidad. El
+ * servidor recalcula la calidad ignorando la que mande el cliente; por debajo
+ * de este piso el segmento queda `sin_dato` sin importar la rugosidad.
+ */
+export const MUESTRAS_MINIMAS_SEGMENTO = 20
+
 /** Aceleración longitudinal que cuenta como frenada brusca. */
 export const UMBRAL_FRENADA = -3
 

@@ -4,12 +4,13 @@ import {
   descripcionImpacto,
   filasImpactos,
   filasMuestras,
+  guardarSensores,
   kmPorCalidad,
 } from '@/lib/recorrido-sensores-servidor'
-import type { Contexto } from '@/lib/recorrido-servidor'
+import type { ClienteServidor, Contexto } from '@/lib/recorrido-servidor'
 import { crearAsignadorTramos } from '@/lib/sensores/asignacion'
 import type { CalidadSegmento } from '@/lib/sensores/tipos'
-import type { MuestraPayload } from '@/lib/validaciones'
+import type { MuestraPayload, RecorridoPayload } from '@/lib/validaciones'
 
 const CTX: Contexto = { usuarioId: 'u1', municipio: 'maipu', recorridoId: 'r1' }
 
@@ -89,6 +90,64 @@ describe('filasMuestras', () => {
   test('deja el tramo en null si no hay ninguno cerca', () => {
     const filas = filasMuestras(CTX, [{ ...muestra(0), lat: -37.1, lng: -57.9 }], asignador)
     expect(filas[0].tramo_id).toBeNull()
+  })
+})
+
+/** Encadenable `delete().eq().eq()...` que siempre resuelve sin error. */
+interface ConsultaFake {
+  eq: () => ConsultaFake
+  then: PromiseLike<{ error: null }>['then']
+}
+
+function crearConsultaFake(): ConsultaFake {
+  const promesa = Promise.resolve<{ error: null }>({ error: null })
+  const consulta: ConsultaFake = {
+    eq: () => consulta,
+    then: promesa.then.bind(promesa),
+  }
+  return consulta
+}
+
+/**
+ * Cliente Supabase mínimo para probar `guardarSensores` sin una base real:
+ * `delete().eq(...)` resuelve `{ error: null }` y cada `insert` queda
+ * registrado por tabla para poder inspeccionarlo.
+ */
+function crearClienteFake(insertados: Record<string, unknown[]>): ClienteServidor {
+  return {
+    from: (tabla: string) => ({
+      delete: () => crearConsultaFake(),
+      insert: (filas: unknown[]) => {
+        insertados[tabla] = [...(insertados[tabla] ?? []), ...filas]
+        return Promise.resolve({ error: null })
+      },
+    }),
+  } as unknown as ClienteServidor
+}
+
+describe('guardarSensores', () => {
+  test('recalcula la calidad de cada segmento en el servidor, ignorando la del cliente', async () => {
+    const insertados: Record<string, unknown[]> = {}
+    const cliente = crearClienteFake(insertados)
+
+    const datos = {
+      muestras: [
+        // sin eventos de movimiento: sin_dato, aunque el cliente diga "bueno"
+        { ...muestra(0), muestras: 0, calidad: 'bueno' },
+        // suficientes eventos, rugosidad baja: "bueno" pese a que el cliente diga "intransitable"
+        { ...muestra(0.002), muestras: 40, rmsVertical: 0.5, velocidadKmh: 60, calidad: 'intransitable' },
+        // ídem, con otra rugosidad baja
+        { ...muestra(0.004), muestras: 40, rmsVertical: 0.3, velocidadKmh: 60, calidad: 'intransitable' },
+      ],
+      impactos: [],
+    } as unknown as RecorridoPayload
+
+    const resumen = await guardarSensores(cliente, CTX, datos, TRAMOS)
+
+    const filas = insertados.muestras_sensor as { calidad: CalidadSegmento }[]
+    expect(filas.map((f) => f.calidad)).toEqual(['sin_dato', 'bueno', 'bueno'])
+    expect(resumen.kmPorCalidad.sin_dato).toBe(0)
+    expect(resumen.kmPorCalidad.bueno).toBeGreaterThan(0)
   })
 })
 

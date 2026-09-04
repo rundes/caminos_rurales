@@ -1,6 +1,7 @@
 import type { Severidad } from '../tipos'
 import type { CalidadSegmento } from './tipos'
 import {
+  MUESTRAS_MINIMAS_SEGMENTO,
   PICO_SEVERIDAD_ALTA,
   PICO_SEVERIDAD_MEDIA,
   RMS_BUENO,
@@ -29,4 +30,19 @@ export function severidadDeImpacto(pico: number): Severidad {
   if (pico < PICO_SEVERIDAD_MEDIA) return 'baja'
   if (pico < PICO_SEVERIDAD_ALTA) return 'media'
   return 'alta'
+}
+
+/**
+ * Recalcula la calidad de un segmento en el servidor a partir de sus datos
+ * numéricos, ignorando la que haya mandado el cliente: es el único campo del
+ * payload que un cliente modificado podría falsear para inflar la cobertura.
+ * Con menos del piso de eventos de movimiento, el segmento queda `sin_dato`
+ * aunque la rugosidad reportada sea buena.
+ */
+export function normalizarMuestra<
+  T extends { muestras: number; rmsVertical: number; velocidadKmh: number; calidad: CalidadSegmento },
+>(m: T): T {
+  const calidad: CalidadSegmento =
+    m.muestras < MUESTRAS_MINIMAS_SEGMENTO ? 'sin_dato' : calidadDeSegmento(m.rmsVertical, m.velocidadKmh)
+  return { ...m, calidad }
 }

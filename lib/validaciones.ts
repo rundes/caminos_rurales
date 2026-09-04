@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { buscarPartido } from './partidos'
 import type { CalidadSegmento } from './sensores/tipos'
-import { MAX_IMPACTOS, MAX_MUESTRAS } from './sensores/umbrales'
+import { MAX_IMPACTOS, MAX_MUESTRAS, PICO_IMPACTO } from './sensores/umbrales'
 import type { Severidad, TipoFalla } from './tipos'
 
 export const esquemaLogin = z.object({
@@ -52,6 +52,10 @@ const MAX_PUNTOS_TRACK = 20000
 /** Techos defensivos: valores fuera de rango son ruido del sensor, no datos. */
 const MAX_VELOCIDAD_KMH = 400
 const MAX_ACELERACION = 500
+/** Techo de la rugosidad agregada de un segmento: más alto es ruido del sensor. */
+const MAX_ACELERACION_SEGMENTO = 200
+/** Techo defensivo de eventos de movimiento agregados en un segmento. */
+const MAX_MUESTRAS_SEGMENTO = 100_000
 
 export const esquemaObservacion = z.object({
   id: z.uuid({ message: 'Observación sin identificador válido' }),
@@ -116,11 +120,14 @@ export const esquemaMuestra = z.object({
   velocidadKmh: z.number().min(0).max(MAX_VELOCIDAD_KMH, { message: 'Velocidad fuera de rango' }),
   rumbo: z.number().min(0).max(360, { message: 'Rumbo fuera de rango' }).nullable().default(null),
   altitud: z.number().nullable().default(null),
-  rmsVertical: z.number().min(0).max(MAX_ACELERACION, { message: 'Rugosidad fuera de rango' }),
-  picoVertical: z.number().min(0).max(MAX_ACELERACION, { message: 'Pico fuera de rango' }),
+  rmsVertical: z.number().min(0).max(MAX_ACELERACION_SEGMENTO, { message: 'Rugosidad fuera de rango' }),
+  picoVertical: z.number().min(0).max(MAX_ACELERACION_SEGMENTO, { message: 'Pico fuera de rango' }),
   frenadas: z.int().min(0, { message: 'Cantidad de frenadas inválida' }),
   laterales: z.int().min(0, { message: 'Cantidad de laterales inválida' }),
-  muestras: z.int().min(0, { message: 'Cantidad de muestras inválida' }),
+  muestras: z
+    .int()
+    .min(0, { message: 'Cantidad de muestras inválida' })
+    .max(MAX_MUESTRAS_SEGMENTO, { message: 'Cantidad de muestras inválida' }),
   calidad: z.enum(CALIDADES, { message: 'Calidad de segmento inválida' }),
 })
 
@@ -129,7 +136,9 @@ export const esquemaImpacto = z.object({
   t: z.int().min(0, { message: 'Marca de tiempo inválida' }),
   lat: latitud,
   lng: longitud,
-  pico: z.number().min(0).max(MAX_ACELERACION, { message: 'Pico fuera de rango' }),
+  pico: z.number().min(PICO_IMPACTO, { message: 'Impacto por debajo del umbral' }).max(MAX_ACELERACION, {
+    message: 'Pico fuera de rango',
+  }),
   velocidadKmh: z.number().min(0).max(MAX_VELOCIDAD_KMH, { message: 'Velocidad fuera de rango' }),
 })
 

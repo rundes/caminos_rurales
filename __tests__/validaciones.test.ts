@@ -267,6 +267,17 @@ describe('esquemaMuestra', () => {
     expect(esquemaMuestra.safeParse(muestraSensor({ frenadas: 1.5 })).success).toBe(false)
     expect(esquemaMuestra.safeParse(muestraSensor({ muestras: -1 })).success).toBe(false)
   })
+
+  test('rechaza más de 100000 muestras y acepta el límite', () => {
+    expect(esquemaMuestra.safeParse(muestraSensor({ muestras: 100_001 })).success).toBe(false)
+    expect(esquemaMuestra.safeParse(muestraSensor({ muestras: 100_000 })).success).toBe(true)
+  })
+
+  test('rechaza rugosidad y pico de segmento por encima de 200', () => {
+    expect(esquemaMuestra.safeParse(muestraSensor({ rmsVertical: 200.1 })).success).toBe(false)
+    expect(esquemaMuestra.safeParse(muestraSensor({ picoVertical: 200.1 })).success).toBe(false)
+    expect(esquemaMuestra.safeParse(muestraSensor({ rmsVertical: 200 })).success).toBe(true)
+  })
 })
 
 describe('esquemaImpacto', () => {
@@ -277,6 +288,16 @@ describe('esquemaImpacto', () => {
   test('rechaza un pico negativo o una marca de tiempo inválida', () => {
     expect(esquemaImpacto.safeParse(impactoSensor({ pico: -1 })).success).toBe(false)
     expect(esquemaImpacto.safeParse(impactoSensor({ t: -5 })).success).toBe(false)
+  })
+
+  test('rechaza un pico por debajo del umbral de impacto', () => {
+    const r = esquemaImpacto.safeParse(impactoSensor({ pico: 5.9 }))
+    expect(r.success).toBe(false)
+    if (!r.success) expect(primerError(r.error)).toBe('Impacto por debajo del umbral')
+  })
+
+  test('acepta un pico justo en el umbral de impacto', () => {
+    expect(esquemaImpacto.safeParse(impactoSensor({ pico: 6 })).success).toBe(true)
   })
 })
 

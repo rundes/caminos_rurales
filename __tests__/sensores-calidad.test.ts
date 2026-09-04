@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest'
-import { calidadDeSegmento, severidadDeImpacto } from '@/lib/sensores/calidad'
+import { calidadDeSegmento, normalizarMuestra, severidadDeImpacto } from '@/lib/sensores/calidad'
 import {
+  MUESTRAS_MINIMAS_SEGMENTO,
   PICO_SEVERIDAD_ALTA,
   PICO_SEVERIDAD_MEDIA,
   RMS_BUENO,
@@ -46,5 +47,51 @@ describe('severidadDeImpacto', () => {
 
   test('un pico enorme sigue siendo alta', () => {
     expect(severidadDeImpacto(120)).toBe('alta')
+  })
+})
+
+describe('normalizarMuestra', () => {
+  function segmento(extra: Record<string, unknown> = {}) {
+    return {
+      muestras: 40,
+      rmsVertical: 0.5,
+      velocidadKmh: 60,
+      calidad: 'bueno' as const,
+      ...extra,
+    }
+  }
+
+  test('con menos del piso de eventos de movimiento queda sin_dato pese al valor del cliente', () => {
+    const normalizada = normalizarMuestra(segmento({ muestras: 0, calidad: 'bueno' }))
+    expect(normalizada.calidad).toBe('sin_dato')
+  })
+
+  test('justo debajo del piso queda sin_dato; justo en el piso ya clasifica', () => {
+    expect(
+      normalizarMuestra(segmento({ muestras: MUESTRAS_MINIMAS_SEGMENTO - 1 })).calidad,
+    ).toBe('sin_dato')
+    expect(
+      normalizarMuestra(segmento({ muestras: MUESTRAS_MINIMAS_SEGMENTO })).calidad,
+    ).toBe('bueno')
+  })
+
+  test('con datos suficientes recalcula desde rms y velocidad, ignorando la calidad del cliente', () => {
+    const normalizada = normalizarMuestra(
+      segmento({ muestras: 40, rmsVertical: 0.5, velocidadKmh: 60, calidad: 'intransitable' }),
+    )
+    expect(normalizada.calidad).toBe('bueno')
+  })
+
+  test('la calidad que manda el cliente nunca se usa, aunque diga lo peor', () => {
+    const normalizada = normalizarMuestra(
+      segmento({ muestras: 40, rmsVertical: 0.3, calidad: 'intransitable' }),
+    )
+    expect(normalizada.calidad).toBe('bueno')
+  })
+
+  test('no muta el objeto original', () => {
+    const original = segmento({ muestras: 0, calidad: 'bueno' })
+    normalizarMuestra(original)
+    expect(original.calidad).toBe('bueno')
   })
 })

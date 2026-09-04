@@ -2,7 +2,7 @@ import type { TramoGeometria } from './cobertura'
 import { distanciaKm } from './geo'
 import type { ClienteAdmin, ClienteServidor, Contexto } from './recorrido-servidor'
 import { crearAsignadorTramos, type AsignadorTramos } from './sensores/asignacion'
-import { severidadDeImpacto } from './sensores/calidad'
+import { normalizarMuestra, severidadDeImpacto } from './sensores/calidad'
 import type { CalidadSegmento } from './sensores/tipos'
 import { MAX_MUESTRAS } from './sensores/umbrales'
 import type { Severidad } from './tipos'
@@ -158,7 +158,9 @@ export async function guardarSensores(
   datos: RecorridoPayload,
   tramos: readonly TramoGeometria[],
 ): Promise<ResumenSensores> {
-  const muestras = datos.muestras ?? []
+  // La calidad la recalcula siempre el servidor: es el único campo del
+  // payload que un cliente modificado podría falsear para sumar cobertura.
+  const muestras = (datos.muestras ?? []).map(normalizarMuestra)
   const impactos = datos.impactos ?? []
 
   await borrarSensoresPrevios(supabase, ctx.recorridoId)
