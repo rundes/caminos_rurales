@@ -71,9 +71,14 @@ export default async function MapaPage({ searchParams }: Props) {
     if (ruta.startsWith('https://')) urlsCuadros[ruta] = ruta
   }
   const rutasCuadrosASignar = rutasCuadros.filter((r) => !r.startsWith('https://'))
+  const lotesCuadros: string[][] = []
   for (let i = 0; i < rutasCuadrosASignar.length; i += LOTE_FIRMA_CUADROS) {
-    const lote = rutasCuadrosASignar.slice(i, i + LOTE_FIRMA_CUADROS)
-    const { data: firmadasCuadros } = await supabase.storage.from('evidencia-vial').createSignedUrls(lote, SEGUNDOS_URL_FIRMADA)
+    lotesCuadros.push(rutasCuadrosASignar.slice(i, i + LOTE_FIRMA_CUADROS))
+  }
+  const resultadosCuadros = await Promise.all(
+    lotesCuadros.map((lote) => supabase.storage.from('evidencia-vial').createSignedUrls(lote, SEGUNDOS_URL_FIRMADA)),
+  )
+  for (const { data: firmadasCuadros } of resultadosCuadros) {
     for (const f of firmadasCuadros ?? []) {
       if (f.path && f.signedUrl) urlsCuadros[f.path] = f.signedUrl
     }

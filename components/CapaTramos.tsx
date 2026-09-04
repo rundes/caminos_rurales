@@ -52,7 +52,7 @@ export function CapaTramos({ tramos, modo, rugosidad, cuadrosPorTramo }: Props) 
     <>
       {tramos.map((t) => {
         const posiciones: [number, number][] = t.geometria.map(([lng, lat]) => [lat, lng])
-        const cuadros = sufijoCuadros(t.id, cuadrosPorTramo)
+        const sufijoCuadrosTexto = sufijoCuadros(t.id, cuadrosPorTramo)
 
         if (modo === 'estado') {
           const r = rugosidad?.[t.id]
@@ -63,7 +63,7 @@ export function CapaTramos({ tramos, modo, rugosidad, cuadrosPorTramo }: Props) 
               positions={posiciones}
               pathOptions={{ color: colorCalidad(calidad), weight: PESO_TRAMO_ESTADO }}
             >
-              <Tooltip>{tooltipEstado(t.nombre_codigo, r) + cuadros}</Tooltip>
+              <Tooltip>{tooltipEstado(t.nombre_codigo, r) + sufijoCuadrosTexto}</Tooltip>
             </Polyline>
           )
         }
@@ -79,7 +79,8 @@ export function CapaTramos({ tramos, modo, rugosidad, cuadrosPorTramo }: Props) 
             }}
           >
             <Tooltip>
-              {(cubierto ? `${t.nombre_codigo} · cubierto ${t.veces} veces` : `${t.nombre_codigo} · pendiente`) + cuadros}
+              {(cubierto ? `${t.nombre_codigo} · cubierto ${t.veces} veces` : `${t.nombre_codigo} · pendiente`) +
+                sufijoCuadrosTexto}
             </Tooltip>
           </Polyline>
         )

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { agruparPorTramo, SIN_TRAMO, vecinos, type Cuadro } from '@/lib/cuadros'
+import { agruparPorTramo, calcularVecinos, SIN_TRAMO, vecinos, type Cuadro } from '@/lib/cuadros'
 
 function cuadro(overrides: Partial<Cuadro>): Cuadro {
   return {
@@ -66,5 +66,33 @@ describe('vecinos', () => {
 
   test('id inexistente devuelve ambos null', () => {
     expect(vecinos(todos, 'inexistente')).toEqual({ anterior: null, siguiente: null })
+  })
+})
+
+describe('calcularVecinos', () => {
+  const c1 = cuadro({ id: 'c1', tramo_id: 't1', t: '2026-09-01T00:00:00Z' })
+  const c2 = cuadro({ id: 'c2', tramo_id: 't1', t: '2026-09-01T00:00:01Z' })
+  const c3 = cuadro({ id: 'c3', tramo_id: 't1', t: '2026-09-01T00:00:02Z' })
+  const otroTramo = cuadro({ id: 'o1', tramo_id: 't2', t: '2026-09-01T00:00:00Z' })
+  const todos = [c1, c2, c3, otroTramo]
+
+  test('devuelve un mapa con anterior/siguiente por id, coherente con vecinos()', () => {
+    const mapa = calcularVecinos(todos)
+
+    expect(mapa.get('c1')).toEqual({ anterior: null, siguiente: c2 })
+    expect(mapa.get('c2')).toEqual({ anterior: c1, siguiente: c3 })
+    expect(mapa.get('c3')).toEqual({ anterior: c2, siguiente: null })
+    expect(mapa.get('o1')).toEqual({ anterior: null, siguiente: null })
+    for (const c of todos) {
+      expect(mapa.get(c.id)).toEqual(vecinos(todos, c.id))
+    }
+  })
+
+  test('id ausente del mapa (no incluido en la lista de entrada)', () => {
+    expect(calcularVecinos(todos).get('inexistente')).toBeUndefined()
+  })
+
+  test('lista vacía devuelve mapa vacío', () => {
+    expect(calcularVecinos([]).size).toBe(0)
   })
 })

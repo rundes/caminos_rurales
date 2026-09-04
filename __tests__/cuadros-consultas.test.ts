@@ -10,30 +10,56 @@ const { obtenerCuadros, obtenerCuadrosPorTramo } = await import('@/lib/cuadros-c
 type Cliente = SupabaseClient<Database>
 type Resultado = { data: unknown; error: { message: string } | null }
 
-/** Consulta encadenable fake: select().order().limit() resuelven todas al mismo resultado configurado. */
-function crearConsulta(resolver: () => Resultado) {
+type Llamadas = {
+  select: unknown[][]
+  eq: unknown[][]
+  order: unknown[][]
+  limit: unknown[][]
+}
+
+function crearLlamadas(): Llamadas {
+  return { select: [], eq: [], order: [], limit: [] }
+}
+
+/** Consulta encadenable fake: select().eq().order().limit() resuelven todas al mismo resultado configurado, registrando los argumentos recibidos. */
+function crearConsulta(resolver: () => Resultado, llamadas: Llamadas) {
   const consulta = {
-    select: () => consulta,
-    order: () => consulta,
-    limit: () => consulta,
+    select: (...args: unknown[]) => {
+      llamadas.select.push(args)
+      return consulta
+    },
+    eq: (...args: unknown[]) => {
+      llamadas.eq.push(args)
+      return consulta
+    },
+    order: (...args: unknown[]) => {
+      llamadas.order.push(args)
+      return consulta
+    },
+    limit: (...args: unknown[]) => {
+      llamadas.limit.push(args)
+      return consulta
+    },
     then: (onFulfilled: (v: Resultado) => unknown, onRejected?: (e: unknown) => unknown) =>
       Promise.resolve(resolver()).then(onFulfilled, onRejected),
   }
   return consulta
 }
 
-function crearCliente(config: { cuadros?: Resultado; rpc?: Resultado }): Cliente {
+function crearCliente(config: { cuadros?: Resultado; rpc?: Resultado }) {
+  const llamadas = crearLlamadas()
   const rpc = vi.fn(async () => config.rpc ?? { data: [], error: null })
   const from = (tabla: string) => {
-    if (tabla === 'cuadros') return crearConsulta(() => config.cuadros ?? { data: [], error: null })
+    if (tabla === 'cuadros') return crearConsulta(() => config.cuadros ?? { data: [], error: null }, llamadas)
     throw new Error(`tabla no prevista: ${tabla}`)
   }
-  return { rpc, from } as unknown as Cliente
+  const cliente = { rpc, from } as unknown as Cliente
+  return { cliente, llamadas, rpc }
 }
 
 describe('obtenerCuadros', () => {
   test('mapea filas y coerciona los valores numéricos que llegan como string', async () => {
-    const cliente = crearCliente({
+    const { cliente } = crearCliente({
       cuadros: {
         data: [
           {
@@ -70,7 +96,7 @@ describe('obtenerCuadros', () => {
   })
 
   test('rumbo, velocidad y tramo nulos se mantienen null', async () => {
-    const cliente = crearCliente({
+    const { cliente } = crearCliente({
       cuadros: {
         data: [
           {
@@ -98,17 +124,35 @@ describe('obtenerCuadros', () => {
 
   test('si la consulta falla, devuelve [] y loguea con el prefijo [cuadros]', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const cliente = crearCliente({ cuadros: { data: null, error: { message: 'boom' } } })
+    const { cliente } = crearCliente({ cuadros: { data: null, error: { message: 'boom' } } })
 
     expect(await obtenerCuadros(cliente, 'maipu')).toEqual([])
     expect(spy).toHaveBeenCalledWith('[cuadros]', 'boom')
     spy.mockRestore()
   })
+
+  test('filtra explícitamente por municipio vía la relación recorridos y ordena/limita', async () => {
+    const { cliente, llamadas } = crearCliente({ cuadros: { data: [], error: null } })
+
+    await obtenerCuadros(cliente, 'maipu', 3000)
+
+    expect(llamadas.eq).toContainEqual(['recorridos.municipio', 'maipu'])
+    expect(llamadas.order).toContainEqual(['t', { ascending: false }])
+    expect(llamadas.limit).toContainEqual([3000])
+  })
+
+  test('usa el límite por defecto (3000) cuando no se especifica', async () => {
+    const { cliente, llamadas } = crearCliente({ cuadros: { data: [], error: null } })
+
+    await obtenerCuadros(cliente, 'maipu')
+
+    expect(llamadas.limit).toContainEqual([3000])
+  })
 })
 
 describe('obtenerCuadrosPorTramo', () => {
   test('indexa por tramo_id y coerciona el conteo a número', async () => {
-    const cliente = crearCliente({
+    const { cliente } = crearCliente({
       rpc: {
         data: [
           { tramo_id: 't1', cuadros: '5' },
@@ -123,10 +167,18 @@ describe('obtenerCuadrosPorTramo', () => {
 
   test('si el rpc falla, devuelve {} y loguea con el prefijo [cuadros]', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const cliente = crearCliente({ rpc: { data: null, error: { message: 'boom' } } })
+    const { cliente } = crearCliente({ rpc: { data: null, error: { message: 'boom' } } })
 
     expect(await obtenerCuadrosPorTramo(cliente, 'maipu')).toEqual({})
     expect(spy).toHaveBeenCalledWith('[cuadros]', 'boom')
     spy.mockRestore()
+  })
+
+  test('llama al rpc cuadros_por_tramo con p_municipio', async () => {
+    const { cliente, rpc } = crearCliente({ rpc: { data: [], error: null } })
+
+    await obtenerCuadrosPorTramo(cliente, 'maipu')
+
+    expect(rpc).toHaveBeenCalledWith('cuadros_por_tramo', { p_municipio: 'maipu' })
   })
 })

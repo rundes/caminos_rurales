@@ -34,17 +34,23 @@ export function agruparPorTramo(cuadros: readonly Cuadro[]): Map<string, Cuadro[
 
 export type Vecinos = { anterior: Cuadro | null; siguiente: Cuadro | null }
 
+const SIN_VECINOS: Vecinos = { anterior: null, siguiente: null }
+
+/** Vecino anterior/siguiente por cuadro, precomputado una vez por tramo (evita reordenar por cada consulta). */
+export function calcularVecinos(cuadros: readonly Cuadro[]): Map<string, Vecinos> {
+  const mapa = new Map<string, Vecinos>()
+  for (const grupo of agruparPorTramo(cuadros).values()) {
+    grupo.forEach((c, i) => {
+      mapa.set(c.id, {
+        anterior: i > 0 ? grupo[i - 1] : null,
+        siguiente: i < grupo.length - 1 ? grupo[i + 1] : null,
+      })
+    })
+  }
+  return mapa
+}
+
 /** Cuadro anterior/siguiente dentro del mismo tramo que `id`, ordenados por `t`. */
 export function vecinos(cuadros: readonly Cuadro[], id: string): Vecinos {
-  const actual = cuadros.find((c) => c.id === id)
-  if (!actual) return { anterior: null, siguiente: null }
-
-  const grupo = agruparPorTramo(cuadros).get(actual.tramo_id ?? SIN_TRAMO) ?? []
-  const indice = grupo.findIndex((c) => c.id === id)
-  if (indice === -1) return { anterior: null, siguiente: null }
-
-  return {
-    anterior: indice > 0 ? grupo[indice - 1] : null,
-    siguiente: indice < grupo.length - 1 ? grupo[indice + 1] : null,
-  }
+  return calcularVecinos(cuadros).get(id) ?? SIN_VECINOS
 }

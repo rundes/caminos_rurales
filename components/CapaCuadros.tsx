@@ -3,7 +3,7 @@
 import type { CircleMarker as CircleMarkerLeaflet } from 'leaflet'
 import { useCallback, useMemo, useRef } from 'react'
 import { CircleMarker, Popup, Tooltip } from 'react-leaflet'
-import { agruparPorTramo, type Cuadro, type Vecinos } from '@/lib/cuadros'
+import { calcularVecinos, type Cuadro } from '@/lib/cuadros'
 import { ZONA_HORARIA } from '@/lib/fechas'
 
 type Props = {
@@ -29,20 +29,6 @@ function formatearHora(iso: string): string {
 
 function formatearFechaHora(iso: string): string {
   return new Date(iso).toLocaleString('es-AR', { timeZone: ZONA_HORARIA })
-}
-
-/** Vecino anterior/siguiente por cuadro, precomputado una vez por tramo (evita reordenar en cada marcador). */
-function calcularVecinos(cuadros: readonly Cuadro[]): Map<string, Vecinos> {
-  const mapa = new Map<string, Vecinos>()
-  for (const grupo of agruparPorTramo(cuadros).values()) {
-    grupo.forEach((c, i) => {
-      mapa.set(c.id, {
-        anterior: i > 0 ? grupo[i - 1] : null,
-        siguiente: i < grupo.length - 1 ? grupo[i + 1] : null,
-      })
-    })
-  }
-  return mapa
 }
 
 /** Capa "Cuadros" del mapa: marcadores de fotos de la cámara, con popup navegable por tramo. */

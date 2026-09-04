@@ -8,9 +8,9 @@ type Cliente = SupabaseClient<Database>
 const LIMITE_POR_DEFECTO = 3000
 
 /**
- * Últimos cuadros de cámara del municipio, vía `cuadros`. La política RLS ya
- * scopea las filas al municipio del usuario (por `recorridos`), así que la
- * consulta no repite el filtro: ordena por `t` descendente y corta en `limite`.
+ * Últimos cuadros de cámara del municipio, vía `cuadros`. Filtra explícitamente
+ * por `recorridos.municipio` (join `!inner`) además de confiar en la política
+ * RLS: ordena por `t` descendente y corta en `limite`.
  */
 export async function obtenerCuadros(
   supabase: Cliente,
@@ -19,7 +19,8 @@ export async function obtenerCuadros(
 ): Promise<Cuadro[]> {
   const { data, error } = await supabase
     .from('cuadros')
-    .select('id, recorrido_id, tramo_id, t, latitud, longitud, rumbo, velocidad_kmh, ruta')
+    .select('id, recorrido_id, tramo_id, t, latitud, longitud, rumbo, velocidad_kmh, ruta, recorridos!inner(municipio)')
+    .eq('recorridos.municipio', municipio)
     .order('t', { ascending: false })
     .limit(limite)
 

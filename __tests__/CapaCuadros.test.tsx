@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { expect, test, vi } from 'vitest'
 import type { Cuadro } from '@/lib/cuadros'
+import { ZONA_HORARIA } from '@/lib/fechas'
 
 const llamadasAbrirPopup: number[] = []
 
@@ -108,4 +109,39 @@ test('"Siguiente" abre el popup del cuadro siguiente dentro del mismo tramo', ()
   fireEvent.click(siguienteDeC1)
 
   expect(llamadasAbrirPopup).toContain(CUADROS[1].lat)
+})
+
+test('"Anterior" abre el popup del cuadro anterior dentro del mismo tramo', () => {
+  render(<CapaCuadros cuadros={CUADROS} urls={{}} />)
+
+  const [, anteriorDeC2] = screen.getAllByRole('button', { name: 'Anterior' })
+  fireEvent.click(anteriorDeC2)
+
+  expect(llamadasAbrirPopup).toContain(CUADROS[0].lat)
+})
+
+test('el popup muestra fecha/hora, velocidad y tramo', () => {
+  render(<CapaCuadros cuadros={[CUADROS[0]]} urls={{}} />)
+
+  const popup = screen.getByTestId('popup')
+  const fechaEsperada = new Date(CUADROS[0].t).toLocaleString('es-AR', { timeZone: ZONA_HORARIA })
+  expect(popup.textContent).toContain(fechaEsperada)
+  expect(popup.textContent).toContain('Velocidad: 20 km/h')
+  expect(popup.textContent).toContain('Tramo: t1')
+})
+
+test('sin velocidad (null), el popup omite la línea de velocidad', () => {
+  const cuadroSinVelocidad = { ...CUADROS[0], velocidadKmh: null }
+  render(<CapaCuadros cuadros={[cuadroSinVelocidad]} urls={{}} />)
+
+  const popup = screen.getByTestId('popup')
+  expect(popup.textContent).not.toContain('Velocidad')
+})
+
+test('sin tramo (null), el popup muestra "sin tramo"', () => {
+  const cuadroSinTramo = { ...CUADROS[0], tramo_id: null }
+  render(<CapaCuadros cuadros={[cuadroSinTramo]} urls={{}} />)
+
+  const popup = screen.getByTestId('popup')
+  expect(popup.textContent).toContain('Tramo: sin tramo')
 })
