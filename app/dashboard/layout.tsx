@@ -1,15 +1,11 @@
-import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { crearClienteServidor } from '@/lib/supabase/server'
 import { buscarPartido } from '@/lib/partidos'
 import { BotonSalir } from '@/components/BotonSalir'
+import { NavDashboard } from '@/components/NavDashboard'
 
-const ENLACES = [
-  { href: '/dashboard', etiqueta: 'Inicio' },
-  { href: '/dashboard/caminos', etiqueta: 'Caminos' },
-  { href: '/dashboard/mapa', etiqueta: 'Mapa' },
-  { href: '/dashboard/ranking', etiqueta: 'Ranking' },
-]
+/** Municipio del perfil mientras no haya canjeado un código de invitación válido. */
+const SIN_ASIGNAR = 'sin-asignar'
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const supabase = await crearClienteServidor()
@@ -28,6 +24,9 @@ export default async function DashboardLayout({ children }: { children: React.Re
   // Sin términos aceptados no se entra al dashboard (ante un error de lectura
   // se deja pasar y la cabecera muestra el aviso, para no encerrar al usuario).
   if (!error && !perfil?.acepto_terminos_at) redirect('/terminos')
+  // Sin municipio asignado (código de invitación inválido o ausente) espera
+  // en /pendiente: todavía no tiene nada que grabar ni subir.
+  if (!error && perfil?.municipio_id === SIN_ASIGNAR) redirect('/pendiente')
 
   const partido = perfil ? buscarPartido(perfil.municipio_id)?.nombre ?? perfil.municipio_id : ''
 
@@ -45,19 +44,10 @@ export default async function DashboardLayout({ children }: { children: React.Re
             </p>
           </div>
         )}
-        <BotonSalir />
+        <BotonSalir usuarioId={user.id} />
       </header>
       <main className="mx-auto max-w-3xl px-4 py-6">{children}</main>
-      <nav
-        aria-label="Navegación principal"
-        className="fixed inset-x-0 bottom-0 z-10 grid grid-cols-4 border-t bg-white"
-      >
-        {ENLACES.map((e) => (
-          <Link key={e.href} href={e.href} className="py-4 text-center text-sm font-medium text-green-800">
-            {e.etiqueta}
-          </Link>
-        ))}
-      </nav>
+      <NavDashboard />
     </div>
   )
 }

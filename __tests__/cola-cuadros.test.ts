@@ -5,16 +5,16 @@ import {
   procesarColaCuadros,
   type DepsCuadros,
   type RespuestaCuadros,
+  type RespuestaPrepararSubida,
 } from '@/lib/local/cola-cuadros'
 import { BACKOFF_MS, MAX_INTENTOS } from '@/lib/local/deps'
 import type {
   BaseCuadros,
-  CuadroGuardado,
+  CuadroConBlob,
   EstadoSubida,
   ItemColaCuadros,
   RecorridoLocal,
 } from '@/lib/local/tipos'
-import type { ResultadoAccion } from '@/lib/tipos'
 
 const ID = '11111111-1111-4111-8111-111111111111'
 const USUARIO = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa'
@@ -44,7 +44,7 @@ function recorrido(estado: RecorridoLocal['estado'] = 'subido', id = ID, usuario
   }
 }
 
-function cuadro(indice: number, recorridoId = ID): CuadroGuardado {
+function cuadro(indice: number, recorridoId = ID): CuadroConBlob {
   return {
     id: indice,
     recorridoId,
@@ -54,13 +54,14 @@ function cuadro(indice: number, recorridoId = ID): CuadroGuardado {
     rumbo: 90,
     velocidadKmh: 40,
     blob: new Blob([`cuadro-${indice}`], { type: 'image/jpeg' }),
+    tieneBlob: true,
     estadoSubida: 'pendiente',
   }
 }
 
 type Inicial = {
   recorridos?: RecorridoLocal[]
-  cuadros?: CuadroGuardado[]
+  cuadros?: CuadroConBlob[]
   cola?: ItemColaCuadros[]
 }
 
@@ -78,21 +79,21 @@ function crearBase(inicial: Inicial) {
   const db: BaseCuadros = {
     listarRecorridos: async (usuarioId) =>
       [...recorridos.values()].filter((r) => r.usuarioId === usuarioId),
-    listarCuadros: async (recorridoId, estado) => de(recorridoId, estado),
+    listarCuadrosPendientes: async (recorridoId, limite) => de(recorridoId, 'pendiente').slice(0, limite),
     contarCuadros: async (recorridoId, estado) => de(recorridoId, estado).length,
     marcarCuadro: async (id, estado, ruta) => {
       const guardado = cuadros.get(id)
       if (guardado) cuadros.set(id, { ...guardado, estadoSubida: estado, ...(ruta ? { ruta } : {}) })
     },
     borrarCuadrosSubidos: async (recorridoId) => {
-      const subidos = de(recorridoId, 'subida').filter((c) => c.blob !== undefined)
-      for (const c of subidos) cuadros.set(c.id, { ...c, blob: undefined })
+      const subidos = de(recorridoId, 'subida').filter((c) => c.tieneBlob)
+      for (const c of subidos) cuadros.set(c.id, { ...c, blob: undefined, tieneBlob: false })
       return subidos.length
     },
     marcarCuadrosEnError: async (recorridoId) => {
       const pendientes = de(recorridoId, 'pendiente')
       for (const c of pendientes) {
-        cuadros.set(c.id, { ...c, estadoSubida: 'error', blob: undefined })
+        cuadros.set(c.id, { ...c, estadoSubida: 'error', blob: undefined, tieneBlob: false })
       }
       return pendientes.length
     },
@@ -105,7 +106,7 @@ function crearBase(inicial: Inicial) {
     borrarItemColaCuadros: async (recorridoId) => void cola.delete(recorridoId),
   }
 
-  return { db, cuadros, cola }
+  return { db, cuadros, cola, de }
 }
 
 type Base = ReturnType<typeof crearBase>
@@ -121,18 +122,23 @@ function crearDeps(
   opciones: {
     permitida?: boolean
     respuesta?: RespuestaCuadros
+    respuestaPreparar?: RespuestaPrepararSubida
     fallarSubida?: boolean
   } = {},
 ): DepsEspiadas {
-  const { permitida = true, respuesta = { ok: true as const, data: { registrados: 0, puntos: 0 } } } =
-    opciones
+  const {
+    permitida = true,
+    respuesta = { ok: true as const, data: { registrados: 0, puntos: 0 } },
+    respuestaPreparar,
+  } = opciones
   let contador = 0
 
   return {
     db: base.db,
     prepararSubida: vi.fn(async (_recorridoId: string, _nombre: string, _tipo: string, obsId?: string) => {
+      if (respuestaPreparar) return respuestaPreparar
       contador += 1
-      return { ok: true, data: destino(`uid/rec/${obsId}-cuadro.jpg`) } as ResultadoAccion<DestinoSubida>
+      return { ok: true, data: destino(`uid/rec/${obsId}-cuadro.jpg`) } as RespuestaPrepararSubida
     }),
     subir: vi.fn(async () => {
       if (opciones.fallarSubida) throw new Error('sin red')
@@ -174,7 +180,7 @@ describe('procesarColaCuadros', () => {
     expect(primerLote.cuadros).toHaveLength(LOTE_CUADROS)
     expect(primerLote.cuadros[0].ruta).toContain(`cuadro-${cuadros[0].t}`)
 
-    const guardados = await base.db.listarCuadros(ID)
+    const guardados = await base.de(ID)
     expect(guardados.every((c) => c.estadoSubida === 'subida')).toBe(true)
     expect(guardados.every((c) => c.blob === undefined)).toBe(true)
     expect(guardados[0].ruta).toContain('cuadro.jpg')
@@ -268,7 +274,7 @@ describe('procesarColaCuadros', () => {
       proximoIntento: AHORA + BACKOFF_MS[0],
       ultimoError: 'sin red',
     })
-    expect((await base.db.listarCuadros(ID, 'pendiente')).length).toBe(1)
+    expect((await base.de(ID, 'pendiente')).length).toBe(1)
     expect(resultado).toEqual({ pendientes: 1, subidos: 0, errorCuadros: {} })
   })
 
@@ -282,7 +288,7 @@ describe('procesarColaCuadros', () => {
 
     await procesarColaCuadros(deps, USUARIO)
 
-    expect((await base.db.listarCuadros(ID, 'pendiente')).length).toBe(1)
+    expect((await base.de(ID, 'pendiente')).length).toBe(1)
     expect(await base.db.obtenerItemColaCuadros(ID)).toMatchObject({
       intentos: 2,
       proximoIntento: AHORA + BACKOFF_MS[1],
@@ -321,7 +327,7 @@ describe('procesarColaCuadros', () => {
     expect(deps.subir).not.toHaveBeenCalled()
     expect(resultado).toEqual({ pendientes: 0, subidos: 0, errorCuadros: { [ID]: 2 } })
     expect(await base.db.listarColaCuadros()).toEqual([])
-    const guardados = await base.db.listarCuadros(ID)
+    const guardados = await base.de(ID)
     expect(guardados.every((c) => c.estadoSubida === 'error')).toBe(true)
     expect(guardados.every((c) => c.blob === undefined)).toBe(true)
   })
@@ -342,9 +348,32 @@ describe('procesarColaCuadros', () => {
     expect(resultado).toEqual({ pendientes: 0, subidos: 0, errorCuadros: { [ID]: 2 } })
     // No queda item con backoff: reintentar daría siempre lo mismo.
     expect(await base.db.obtenerItemColaCuadros(ID)).toBeUndefined()
-    const guardados = await base.db.listarCuadros(ID)
+    const guardados = await base.de(ID)
     expect(guardados.every((c) => c.estadoSubida === 'error')).toBe(true)
     expect(guardados.every((c) => c.blob === undefined)).toBe(true)
+  })
+
+  test('un rechazo definitivo de prepararSubida (cupo agotado) tampoco se reintenta', async () => {
+    const base = crearBase({
+      recorridos: [recorrido()],
+      cuadros: [cuadro(1), cuadro(2)],
+      cola: [{ recorridoId: ID, intentos: 0, proximoIntento: 0 }],
+    })
+    const deps = crearDeps(base, {
+      respuestaPreparar: {
+        ok: false,
+        error: 'Alcanzaste el máximo de subidas por día.',
+        definitivo: true,
+      },
+    })
+
+    const resultado = await procesarColaCuadros(deps, USUARIO)
+
+    expect(deps.registrarCuadros).not.toHaveBeenCalled()
+    expect(resultado).toEqual({ pendientes: 0, subidos: 0, errorCuadros: { [ID]: 2 } })
+    expect(await base.db.obtenerItemColaCuadros(ID)).toBeUndefined()
+    const guardados = await base.de(ID)
+    expect(guardados.every((c) => c.estadoSubida === 'error')).toBe(true)
   })
 
   test('un rechazo sin `definitivo` sí espera el backoff', async () => {
@@ -361,12 +390,12 @@ describe('procesarColaCuadros', () => {
       intentos: 1,
       ultimoError: 'Se cayó el servidor',
     })
-    expect((await base.db.listarCuadros(ID, 'pendiente')).length).toBe(1)
+    expect((await base.de(ID, 'pendiente')).length).toBe(1)
     expect(resultado.errorCuadros).toEqual({})
   })
 
   test('un cuadro sin imagen se marca en error y no frena al resto', async () => {
-    const sinBlob: CuadroGuardado = { ...cuadro(1), blob: undefined }
+    const sinBlob: CuadroConBlob = { ...cuadro(1), blob: undefined, tieneBlob: false }
     const base = crearBase({
       recorridos: [recorrido()],
       cuadros: [sinBlob, cuadro(2)],
@@ -377,8 +406,8 @@ describe('procesarColaCuadros', () => {
     const resultado = await procesarColaCuadros(deps, USUARIO)
 
     expect(resultado.subidos).toBe(1)
-    expect((await base.db.listarCuadros(ID, 'error')).map((c) => c.id)).toEqual([1])
-    expect((await base.db.listarCuadros(ID, 'subida')).map((c) => c.id)).toEqual([2])
+    expect((await base.de(ID, 'error')).map((c) => c.id)).toEqual([1])
+    expect((await base.de(ID, 'subida')).map((c) => c.id)).toEqual([2])
     expect(await base.db.listarColaCuadros()).toEqual([])
   })
 })

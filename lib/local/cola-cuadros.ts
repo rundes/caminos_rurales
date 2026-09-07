@@ -4,7 +4,7 @@ import type { EstadoRed } from '@/lib/camara/red'
 import { LOTE_CUADROS } from '@/lib/camara/umbrales'
 import type { ResultadoAccion } from '@/lib/tipos'
 import { esperaBackoff, MAX_INTENTOS } from './deps'
-import type { BaseCuadros, CuadroGuardado, ItemColaCuadros } from './tipos'
+import type { BaseCuadros, CuadroConBlob, ItemColaCuadros } from './tipos'
 
 /** Nombre del archivo; la ruta la arma el servidor con el `observacionId`. */
 export const NOMBRE_CUADRO = 'cuadro.jpg'
@@ -26,6 +26,11 @@ export type RespuestaCuadros =
   | ResultadoAccion<{ registrados: number; puntos: number }>
   | { ok: false; error: string; definitivo: true }
 
+/** Lo que el servidor puede devolver al preparar la subida de un cuadro. */
+export type RespuestaPrepararSubida =
+  | ResultadoAccion<DestinoSubida>
+  | { ok: false; error: string; definitivo: true }
+
 /**
  * Firma local de la Server Action `registrarCuadros`. Se inyecta para que la
  * cola no dependa de `actions.ts` (que no se puede importar en los tests).
@@ -39,7 +44,7 @@ export type DepsCuadros = {
     nombre: string,
     contentType: string,
     observacionId?: string,
-  ) => Promise<ResultadoAccion<DestinoSubida>>
+  ) => Promise<RespuestaPrepararSubida>
   subir: (destino: DestinoSubida, archivo: Blob) => Promise<void>
   registrarCuadros: RegistrarCuadros
   ahora: () => number
@@ -62,9 +67,9 @@ export type ResultadoColaCuadros = {
 /** Rechazo del servidor que no tiene sentido reintentar. */
 class FalloDefinitivo extends Error {}
 
-/** ¿El servidor marcó el rechazo como definitivo? */
-function esDefinitivo(respuesta: RespuestaCuadros): boolean {
-  return !respuesta.ok && 'definitivo' in respuesta && respuesta.definitivo === true
+/** ¿El servidor marcó el rechazo como definitivo? Sirve para cualquier respuesta con esa forma. */
+function esDefinitivo(respuesta: { ok: boolean; definitivo?: boolean }): boolean {
+  return !respuesta.ok && respuesta.definitivo === true
 }
 
 /**
@@ -100,7 +105,7 @@ async function registrarFallo(
 
 /** Sube un cuadro y devuelve la fila que hay que registrar en el servidor. */
 async function subirCuadro(
-  cuadro: CuadroGuardado,
+  cuadro: CuadroConBlob,
   recorridoId: string,
   deps: DepsCuadros,
 ): Promise<CuadroSubido> {
@@ -114,7 +119,11 @@ async function subirCuadro(
     TIPO_CUADRO,
     `cuadro-${cuadro.t}`,
   )
-  if (!preparada.ok) throw new Error(preparada.error)
+  if (!preparada.ok) {
+    // Cupo agotado u otro rechazo permanente del servidor: no tiene sentido
+    // reintentar preparar la misma subida una y otra vez.
+    throw esDefinitivo(preparada) ? new FalloDefinitivo(preparada.error) : new Error(preparada.error)
+  }
 
   await deps.subir(preparada.data, cuadro.blob)
 
@@ -138,7 +147,9 @@ async function subirCuadrosDe(recorridoId: string, deps: DepsCuadros): Promise<n
   let subidos = 0
   try {
     for (;;) {
-      const lote = (await deps.db.listarCuadros(recorridoId, 'pendiente')).slice(0, LOTE_CUADROS)
+      // Lectura acotada: solo carga en memoria los blobs de este lote, no los
+      // de todos los cuadros pendientes del recorrido.
+      const lote = await deps.db.listarCuadrosPendientes(recorridoId, LOTE_CUADROS)
       if (lote.length === 0) break
 
       const filas: CuadroSubido[] = []

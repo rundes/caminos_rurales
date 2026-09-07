@@ -136,7 +136,7 @@ describe('useCamara', () => {
       velocidadKmh: 40,
       estadoSubida: 'pendiente',
     })
-    expect(cuadros[0].blob).toBeDefined()
+    expect(cuadros[0].tieneBlob).toBe(true)
     expect(await db.obtenerItemColaCuadros(RECORRIDO)).toMatchObject({ intentos: 0 })
     expect(result.current.cuadros).toBe(1)
   })

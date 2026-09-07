@@ -3,12 +3,22 @@ import { MAX_INTENTOS, type DepsSincronizacion } from './deps'
 import { sincronizarRecorrido } from './sincronizacion'
 import type { ItemCola, RecorridoLocal } from './tipos'
 
+/** Recorrido del usuario que quedó en error, para que la UI lo muestre con su motivo. */
+export type RecorridoEnError = {
+  recorridoId: string
+  ultimoError: string
+  inicio: string
+  km: number
+}
+
 export type ResultadoCola = {
   procesados: number
   /** Items que todavía se van a reintentar: los que agotaron intentos no cuentan. */
   pendientes: number
   /** Resumen del servidor por recorrido subido en esta pasada. */
   resumenes: Record<string, ResumenRecorrido>
+  /** Recorridos del usuario en `error` al final de esta pasada (nuevos o de antes). */
+  enError: RecorridoEnError[]
 }
 
 /**
@@ -80,9 +90,23 @@ export async function procesarCola(
   const restantes = (await deps.db.listarCola()).filter((i) => ids.has(i.recorridoId))
   await marcarAgotados(await deps.db.listarRecorridos(usuarioId), restantes, deps)
 
+  // Se relee después de marcar los agotados: así `enError` incluye tanto los
+  // que se acaban de dar por perdidos como los que ya estaban en error de una
+  // pasada anterior (por ejemplo, tras recargar la app).
+  const finales = await deps.db.listarRecorridos(usuarioId)
+  const enError: RecorridoEnError[] = finales
+    .filter((r) => r.estado === 'error')
+    .map((r) => ({
+      recorridoId: r.id,
+      ultimoError: r.ultimoError ?? 'No se pudo subir el recorrido.',
+      inicio: r.inicio,
+      km: r.km,
+    }))
+
   return {
     procesados,
     pendientes: restantes.filter((i) => i.intentos < MAX_INTENTOS).length,
     resumenes,
+    enError,
   }
 }

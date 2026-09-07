@@ -47,6 +47,20 @@ function distanciaPerpendicularM(a: PuntoGps, b: PuntoGps, p: PuntoGps): number 
   return Math.abs(dy * (P.x - A.x) - dx * (P.y - A.y)) / largo
 }
 
+/**
+ * Douglas-Peucker con pila explícita: un track de miles de puntos casi
+ * colineales puede generar una recursión tan profunda como la cantidad de
+ * puntos (el peor caso del algoritmo parte casi siempre un extremo del rango),
+ * y eso desborda la pila de llamadas. Acá la "pila" es un array común: cada
+ * rango pendiente de evaluar es un elemento, y el bucle sigue hasta vaciarlo.
+ *
+ * El orden de recorrido no importa para qué puntos se conservan (eso lo
+ * decide únicamente la distancia contra la tolerancia en cada rango), pero sí
+ * para el orden final del array: como la versión recursiva conserva siempre
+ * el orden de índices (recorre izquierda, agrega el pivote, recorre derecha),
+ * acá se junten los índices conservados y se ordenan al final para dar
+ * exactamente el mismo resultado.
+ */
 function simplificarRango(
   puntos: readonly PuntoGps[],
   inicio: number,
@@ -54,20 +68,29 @@ function simplificarRango(
   toleranciaM: number,
   salida: PuntoGps[],
 ): void {
-  let indiceMasLejano = -1
-  let distanciaMaxima = -1
-  for (let i = inicio + 1; i < fin; i += 1) {
-    const d = distanciaPerpendicularM(puntos[inicio], puntos[fin], puntos[i])
-    if (d > distanciaMaxima) {
-      distanciaMaxima = d
-      indiceMasLejano = i
+  const pendientes: [number, number][] = [[inicio, fin]]
+  const conservados: number[] = []
+
+  while (pendientes.length > 0) {
+    const [desde, hasta] = pendientes.pop() as [number, number]
+    let indiceMasLejano = -1
+    let distanciaMaxima = -1
+    for (let i = desde + 1; i < hasta; i += 1) {
+      const d = distanciaPerpendicularM(puntos[desde], puntos[hasta], puntos[i])
+      if (d > distanciaMaxima) {
+        distanciaMaxima = d
+        indiceMasLejano = i
+      }
+    }
+    if (distanciaMaxima > toleranciaM && indiceMasLejano !== -1) {
+      conservados.push(indiceMasLejano)
+      pendientes.push([desde, indiceMasLejano])
+      pendientes.push([indiceMasLejano, hasta])
     }
   }
-  if (distanciaMaxima > toleranciaM && indiceMasLejano !== -1) {
-    simplificarRango(puntos, inicio, indiceMasLejano, toleranciaM, salida)
-    salida.push(puntos[indiceMasLejano])
-    simplificarRango(puntos, indiceMasLejano, fin, toleranciaM, salida)
-  }
+
+  conservados.sort((a, b) => a - b)
+  for (const indice of conservados) salida.push(puntos[indice])
 }
 
 /**

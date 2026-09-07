@@ -40,7 +40,7 @@ export default async function PendientePage() {
       <FormularioCodigo />
 
       <div className="flex justify-center">
-        <BotonSalir />
+        <BotonSalir usuarioId={user.id} />
       </div>
     </main>
   )

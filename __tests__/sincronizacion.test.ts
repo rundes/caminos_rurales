@@ -447,7 +447,12 @@ describe('procesarCola', () => {
     const resultado = await procesarCola(deps, USUARIO)
 
     expect(deps.finalizarRecorrido).toHaveBeenCalledTimes(1)
-    expect(resultado).toEqual({ procesados: 1, pendientes: 1, resumenes: { [ID]: RESUMEN } })
+    expect(resultado).toEqual({
+      procesados: 1,
+      pendientes: 1,
+      resumenes: { [ID]: RESUMEN },
+      enError: [],
+    })
   })
 
   test('los items agotados no se procesan, se marcan en error y no cuentan como pendientes', async () => {
@@ -465,6 +470,10 @@ describe('procesarCola', () => {
     expect(resultado.pendientes).toBe(0)
     expect(base.recorridos.get(ID)?.estado).toBe('error')
     expect(base.recorridos.get(ID)?.ultimoError).toBe('falló')
+    // El error queda visible para la UI, con motivo, inicio y km.
+    expect(resultado.enError).toEqual([
+      { recorridoId: ID, ultimoError: 'falló', inicio: recorrido().inicio, km: recorrido().km },
+    ])
   })
 
   test('no toca los recorridos de otro usuario', async () => {
@@ -479,7 +488,7 @@ describe('procesarCola', () => {
     const resultado = await procesarCola(deps, USUARIO)
 
     expect(deps.finalizarRecorrido).not.toHaveBeenCalled()
-    expect(resultado).toEqual({ procesados: 0, pendientes: 0, resumenes: {} })
+    expect(resultado).toEqual({ procesados: 0, pendientes: 0, resumenes: {}, enError: [] })
     expect(base.recorridos.get('ajeno')?.estado).toBe('finalizado')
     expect(base.cola.size).toBe(1)
   })
@@ -493,5 +502,26 @@ describe('procesarCola', () => {
     expect(deps.finalizarRecorrido).toHaveBeenCalledTimes(1)
     expect(resultado.procesados).toBe(1)
     expect(base.recorridos.get(ID)?.estado).toBe('subido')
+  })
+
+  test('un recorrido que ya estaba en error de una pasada anterior sigue apareciendo', async () => {
+    const enError: RecorridoLocal = {
+      ...recorrido('error'),
+      id: 'viejo',
+      ultimoError: 'No se pudo subir el recorrido.',
+    }
+    const base = crearBase({ recorridos: [enError], puntos: puntosDe('viejo'), cola: [] })
+    const deps = crearDeps(base)
+
+    const resultado = await procesarCola(deps, USUARIO)
+
+    expect(resultado.enError).toEqual([
+      {
+        recorridoId: 'viejo',
+        ultimoError: 'No se pudo subir el recorrido.',
+        inicio: enError.inicio,
+        km: enError.km,
+      },
+    ])
   })
 })

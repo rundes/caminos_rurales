@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { cerrarRecorrido, type ResultadoCierre } from '@/lib/local/cierre'
 import { guardarRecorrido, listarPuntos, obtenerRecorrido } from '@/lib/local/db'
+import { fijarEstadoGrabacion, type EstadoGrabacionGlobal } from '@/lib/local/estado-grabacion'
 import {
   agregarPunto,
   finalizar as finalizarGrabador,
@@ -11,6 +12,7 @@ import {
   pausar as pausarGrabador,
   reanudar as reanudarGrabador,
   retomar as retomarGrabador,
+  type EstadoGrabacion,
   type Grabador,
 } from '@/lib/local/grabador'
 import type { PuntoGps } from '@/lib/track'
@@ -65,6 +67,14 @@ function mensajeGps(error: GeolocationPositionError): string {
   return ERRORES_GPS[error.code] ?? 'No pudimos obtener tu ubicación.'
 }
 
+/** `finalizado` e `inactivo` no bloquean la nav: solo importa grabando/pausado. */
+const ESTADO_GLOBAL: Record<EstadoGrabacion, EstadoGrabacionGlobal> = {
+  inactivo: 'inactivo',
+  grabando: 'grabando',
+  pausado: 'pausado',
+  finalizado: 'inactivo',
+}
+
 /**
  * Graba el recorrido con `watchPosition`, filtra y persiste cada punto
  * aceptado en IndexedDB y mantiene la pantalla encendida. Solo graba con la
@@ -100,6 +110,13 @@ export function useGrabadorGps({ usuarioId, municipio, onPunto }: OpcionesGrabad
 
   const grabando = estado.estado === 'grabando'
   useWakeLock(grabando || estado.estado === 'pausado')
+
+  // La nav inferior (fuera de este árbol) necesita saber si hay una grabación
+  // en curso para bloquearse: se publica en un store aparte, no en contexto.
+  useEffect(() => {
+    fijarEstadoGrabacion(ESTADO_GLOBAL[estado.estado])
+    return () => fijarEstadoGrabacion('inactivo')
+  }, [estado.estado])
 
   useEffect(() => {
     if (!grabando) return
