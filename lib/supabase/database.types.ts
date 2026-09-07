@@ -84,6 +84,27 @@ export type Database = {
           },
         ]
       }
+      codigos_invitacion: {
+        Row: {
+          activo: boolean
+          codigo: string
+          creado_at: string | null
+          municipio: string
+        }
+        Insert: {
+          activo?: boolean
+          codigo: string
+          creado_at?: string | null
+          municipio: string
+        }
+        Update: {
+          activo?: boolean
+          codigo?: string
+          creado_at?: string | null
+          municipio?: string
+        }
+        Relationships: []
+      }
       cuadros: {
         Row: {
           created_at: string

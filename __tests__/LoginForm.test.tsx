@@ -19,13 +19,16 @@ describe('LoginForm', () => {
     render(<LoginForm />)
     expect(screen.getByRole('button', { name: /ingresar/i })).toBeInTheDocument()
     expect(screen.queryByLabelText(/partido/i)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(/código de invitación/i)).not.toBeInTheDocument()
   })
 
-  test('cambia a registro y muestra nombre y partido', async () => {
+  test('cambia a registro y muestra nombre y código de invitación, sin partido', async () => {
     render(<LoginForm />)
     await userEvent.click(screen.getByRole('button', { name: /crear cuenta/i }))
     expect(screen.getByLabelText(/nombre/i)).toBeInTheDocument()
-    expect(screen.getByLabelText(/partido/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/código de invitación/i)).toBeInTheDocument()
+    expect(screen.queryByLabelText(/partido/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /registrarme/i })).toBeInTheDocument()
   })
 
@@ -49,7 +52,7 @@ describe('LoginForm', () => {
     await userEvent.type(screen.getByLabelText(/email/i), 'a@b.com')
     await userEvent.type(screen.getByLabelText(/contraseña/i), '12345678')
     await userEvent.type(screen.getByLabelText(/nombre/i), 'Ana')
-    await userEvent.selectOptions(screen.getByLabelText(/partido/i), 'carlos-tejedor')
+    await userEvent.type(screen.getByLabelText(/código de invitación/i), 'MAIPU-2027')
     await userEvent.click(screen.getByRole('button', { name: /registrarme/i }))
 
     const estado = await screen.findByRole('status')
