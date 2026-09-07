@@ -4,14 +4,19 @@ import {
   clasificarTramos,
   contarConEvidencia,
   coordenadasDeTrack,
+  ErrorRutaAjena,
   filaObservacion,
   fraccionCubierta,
   kmDeTramos,
   partirCobertura,
+  prefijoRuta,
+  type Contexto,
   type FilaCoberturaLocalidad,
   type TramoMunicipio,
 } from '@/lib/recorrido-servidor'
 import type { Observacion } from '@/lib/validaciones'
+
+const CTX: Contexto = { usuarioId: 'u1', municipio: 'maipu', recorridoId: 'r1' }
 
 const TRAMOS: TramoMunicipio[] = [
   { id: 'w1', km: 2, localidad: 'Segurola', geometria: [] },
@@ -121,9 +126,15 @@ describe('aCoberturaPorLocalidad', () => {
   })
 })
 
+describe('prefijoRuta', () => {
+  test('cuelga del usuario y del recorrido', () => {
+    expect(prefijoRuta(CTX)).toBe('u1/r1/')
+  })
+})
+
 describe('filaObservacion', () => {
   test('sin evidencia deja ambas columnas en null', () => {
-    const fila = filaObservacion('r1', observacion())
+    const fila = filaObservacion(CTX, observacion())
     expect(fila).toMatchObject({
       recorrido_id: 'r1',
       descripcion: null,
@@ -133,13 +144,31 @@ describe('filaObservacion', () => {
   })
 
   test('la evidencia va a la columna de imagen o de video segun el tipo', () => {
-    const imagen = filaObservacion('r1', observacion({ evidencia: { ruta: 'a.jpg', tipo: 'imagen' } }))
-    expect(imagen.url_evidencia_imagen).toBe('a.jpg')
+    const imagen = filaObservacion(
+      CTX,
+      observacion({ evidencia: { ruta: 'u1/r1/a.jpg', tipo: 'imagen' } }),
+    )
+    expect(imagen.url_evidencia_imagen).toBe('u1/r1/a.jpg')
     expect(imagen.url_evidencia_video).toBeNull()
 
-    const video = filaObservacion('r1', observacion({ evidencia: { ruta: 'a.mp4', tipo: 'video' } }))
-    expect(video.url_evidencia_video).toBe('a.mp4')
+    const video = filaObservacion(
+      CTX,
+      observacion({ evidencia: { ruta: 'u1/r1/a.mp4', tipo: 'video' } }),
+    )
+    expect(video.url_evidencia_video).toBe('u1/r1/a.mp4')
     expect(video.url_evidencia_imagen).toBeNull()
+  })
+
+  test('rechaza una ruta de evidencia de otro usuario', () => {
+    expect(() =>
+      filaObservacion(CTX, observacion({ evidencia: { ruta: 'u2/r1/a.jpg', tipo: 'imagen' } })),
+    ).toThrow(ErrorRutaAjena)
+  })
+
+  test('rechaza una ruta de evidencia de otro recorrido del mismo usuario', () => {
+    expect(() =>
+      filaObservacion(CTX, observacion({ evidencia: { ruta: 'u1/r2/a.jpg', tipo: 'imagen' } })),
+    ).toThrow(ErrorRutaAjena)
   })
 })
 

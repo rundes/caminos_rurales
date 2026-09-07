@@ -492,6 +492,35 @@ export type Database = {
         }
         Relationships: []
       }
+      uso_diario: {
+        Row: {
+          dia: string
+          recorridos: number
+          subidas: number
+          usuario_id: string
+        }
+        Insert: {
+          dia?: string
+          recorridos?: number
+          subidas?: number
+          usuario_id: string
+        }
+        Update: {
+          dia?: string
+          recorridos?: number
+          subidas?: number
+          usuario_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "uso_diario_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "perfiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
@@ -506,6 +535,10 @@ export type Database = {
           localidad: string
           tramos: number
         }[]
+      }
+      consumir_cupo: {
+        Args: { p_max: number; p_tipo: string }
+        Returns: boolean
       }
       cuadros_por_tramo: {
         Args: { p_municipio: string }

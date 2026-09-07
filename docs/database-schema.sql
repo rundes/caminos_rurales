@@ -2,7 +2,7 @@
 -- Estado final: refleja 0001_schema.sql + 0002_storage_por_municipio.sql +
 -- 0003a_tipos_falla.sql + 0003_recorridos.sql + 0004_recorridos_procesado.sql +
 -- 0005_fallas_update.sql + 0006a_enums_sensor.sql + 0006_muestras_sensor.sql +
--- 0007_cuadros.sql + 0008_seguridad.sql.
+-- 0007_cuadros.sql + 0008_seguridad.sql + 0009_cupos.sql.
 -- Una instalación nueva puede
 -- correr solo este archivo. La tabla `relevamientos` ya no existe: el flujo
 -- es recorrido GPS -> cobertura de tramos -> puntos e insignias.
@@ -651,3 +651,64 @@ create policy "evidencia_delete_propio" on storage.objects
     bucket_id = 'evidencia-vial'
     and (storage.foldername(name))[1] = auth.uid()::text
   );
+
+-- 16. CUPOS (0009): cupos diarios y puntos únicos por motivo dentro de un recorrido
+-- Contador por usuario y día de subidas de evidencia y recorridos finalizados.
+-- Sin políticas: la app nunca lee ni escribe esta tabla directo, solo a través
+-- de `consumir_cupo` (security definer).
+create table public.uso_diario (
+  usuario_id uuid not null references public.perfiles(id) on delete cascade,
+  dia date not null default current_date,
+  subidas int not null default 0,
+  recorridos int not null default 0,
+  primary key (usuario_id, dia)
+);
+
+alter table public.uso_diario enable row level security;
+
+-- Suma 1 al contador del tipo pedido para el usuario autenticado y el día de
+-- hoy (upsert) y devuelve si todavía está dentro del máximo. Sin sesión no hay
+-- cupo que dar: devuelve false.
+create or replace function public.consumir_cupo(p_tipo text, p_max int)
+returns boolean
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_usuario uuid := auth.uid();
+  v_n int;
+begin
+  if v_usuario is null then
+    return false;
+  end if;
+
+  if p_tipo = 'subidas' then
+    insert into public.uso_diario (usuario_id, dia, subidas)
+    values (v_usuario, current_date, 1)
+    on conflict (usuario_id, dia)
+    do update set subidas = public.uso_diario.subidas + 1
+    returning subidas into v_n;
+  elsif p_tipo = 'recorridos' then
+    insert into public.uso_diario (usuario_id, dia, recorridos)
+    values (v_usuario, current_date, 1)
+    on conflict (usuario_id, dia)
+    do update set recorridos = public.uso_diario.recorridos + 1
+    returning recorridos into v_n;
+  else
+    raise exception 'Tipo de cupo inválido: %', p_tipo;
+  end if;
+
+  return v_n <= p_max;
+end;
+$$;
+
+revoke all on function public.consumir_cupo(text, int) from public;
+grant execute on function public.consumir_cupo(text, int) to authenticated;
+
+-- `guardarPuntos`/`recalcularPuntosCuadros` idempotizaban borrando todos los
+-- eventos del recorrido antes de reinsertar; eso abría una ventana donde una
+-- carrera podía duplicar motivos. La restricción única fuerza el upsert por
+-- (recorrido_id, motivo) en su lugar (ver sección 8, tabla `puntos_eventos`).
+alter table public.puntos_eventos
+  add constraint puntos_eventos_recorrido_motivo_unico unique (recorrido_id, motivo);

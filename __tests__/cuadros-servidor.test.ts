@@ -12,6 +12,7 @@ import {
   validarPlausibilidadCuadros,
   type VentanaRecorrido,
 } from '@/lib/cuadros-servidor'
+import { PUNTOS_MAX_DIA } from '@/lib/juego'
 import type { ClienteAdmin, ClienteServidor, Contexto } from '@/lib/recorrido-servidor'
 import { crearAsignadorTramos } from '@/lib/sensores/asignacion'
 import type { CuadroPayload } from '@/lib/validaciones'
@@ -72,13 +73,16 @@ function clienteFake(escrituras: Escritura[], existentes: string[] = []): Client
 }
 
 /**
- * Cliente admin: `select` sobre `cuadros` devuelve el conteo configurado y las
- * escrituras y borrados sobre `puntos_eventos` quedan registrados.
+ * Cliente admin: `select` sobre `cuadros` devuelve el conteo configurado;
+ * `select` sobre `puntos_eventos` (el que hace `puntosDelDia` para el tope
+ * diario) devuelve `puntosPreviosDia` como filas `{ puntos }`; las escrituras
+ * (upsert) y los borrados sobre `puntos_eventos` quedan registrados.
  */
 function adminFake(
   cuadrosGuardados: number,
   escrituras: Escritura[],
   borrados: Borrado[],
+  puntosPreviosDia: readonly number[] = [],
 ): ClienteAdmin {
   return {
     from: (tabla: string) => {
@@ -94,14 +98,31 @@ function adminFake(
           filtros.push(args)
           return consulta
         },
+        neq: (...args: unknown[]) => {
+          filtros.push(args)
+          return consulta
+        },
+        gte: (...args: unknown[]) => {
+          filtros.push(args)
+          return consulta
+        },
+        limit: () => consulta,
         insert: (filas: unknown) => {
           escrituras.push({ tabla, filas })
+          return Promise.resolve({ error: null })
+        },
+        upsert: (filas: unknown, opciones?: unknown) => {
+          escrituras.push({ tabla, filas, opciones })
           return Promise.resolve({ error: null })
         },
         then: (cumplir: (r: unknown) => unknown) => {
           if (esBorrado) {
             borrados.push({ tabla, filtros })
             return Promise.resolve({ data: null, error: null }).then(cumplir)
+          }
+          if (tabla === 'puntos_eventos') {
+            const data = puntosPreviosDia.map((puntos) => ({ puntos }))
+            return Promise.resolve({ data, error: null }).then(cumplir)
           }
           return Promise.resolve({ data: null, count: cuadrosGuardados, error: null }).then(cumplir)
         },
@@ -352,16 +373,14 @@ describe('validarPlausibilidadCuadros', () => {
 })
 
 describe('recalcularPuntosCuadros', () => {
-  test('borra los eventos previos de cuadros y reinserta el total recalculado', async () => {
+  test('con cuadros de sobra hace upsert por (recorrido_id, motivo) con el total recalculado', async () => {
     const escrituras: Escritura[] = []
     const borrados: Borrado[] = []
 
     const puntos = await recalcularPuntosCuadros(adminFake(25, escrituras, borrados), CTX)
 
     expect(puntos).toBe(2)
-    expect(borrados).toEqual([
-      { tabla: 'puntos_eventos', filtros: [['recorrido_id', 'r1'], ['motivo', 'cuadros']] },
-    ])
+    expect(borrados).toEqual([])
     expect(escrituras).toEqual([
       {
         tabla: 'puntos_eventos',
@@ -372,6 +391,7 @@ describe('recalcularPuntosCuadros', () => {
           motivo: 'cuadros',
           puntos: 2,
         },
+        opciones: { onConflict: 'recorrido_id,motivo' },
       },
     ])
   })
@@ -384,18 +404,20 @@ describe('recalcularPuntosCuadros', () => {
     expect(await recalcularPuntosCuadros(admin, CTX)).toBe(2)
     expect(await recalcularPuntosCuadros(admin, CTX)).toBe(2)
 
-    // cada pasada borra antes de insertar: nunca quedan dos eventos vivos
-    expect(borrados).toHaveLength(2)
+    // el upsert por (recorrido_id, motivo) pisa el evento anterior: nunca hace falta borrar.
+    expect(borrados).toEqual([])
     expect(escrituras).toHaveLength(2)
     expect(escrituras[0]).toEqual(escrituras[1])
   })
 
-  test('con menos de diez cuadros borra el evento y no inserta ninguno', async () => {
+  test('con menos de diez cuadros borra el evento existente y no inserta ninguno', async () => {
     const escrituras: Escritura[] = []
     const borrados: Borrado[] = []
 
     expect(await recalcularPuntosCuadros(adminFake(9, escrituras, borrados), CTX)).toBe(0)
-    expect(borrados).toHaveLength(1)
+    expect(borrados).toEqual([
+      { tabla: 'puntos_eventos', filtros: [['recorrido_id', 'r1'], ['motivo', 'cuadros']] },
+    ])
     expect(escrituras).toEqual([])
   })
 
@@ -405,5 +427,33 @@ describe('recalcularPuntosCuadros', () => {
 
     expect(await recalcularPuntosCuadros(adminFake(2000, escrituras, borrados), CTX)).toBe(100)
     expect(escrituras[0].filas).toMatchObject({ puntos: 100 })
+  })
+
+  test('respeta el tope diario de puntos ya sumados por el usuario', async () => {
+    const escrituras: Escritura[] = []
+    const borrados: Borrado[] = []
+
+    // 25 cuadros -> 2 puntos crudos, pero solo queda 1 disponible en el día.
+    const puntos = await recalcularPuntosCuadros(
+      adminFake(25, escrituras, borrados, [PUNTOS_MAX_DIA - 1]),
+      CTX,
+    )
+
+    expect(puntos).toBe(1)
+    expect(escrituras[0].filas).toMatchObject({ puntos: 1 })
+  })
+
+  test('tope diario agotado: borra el evento sin insertar', async () => {
+    const escrituras: Escritura[] = []
+    const borrados: Borrado[] = []
+
+    const puntos = await recalcularPuntosCuadros(
+      adminFake(25, escrituras, borrados, [PUNTOS_MAX_DIA]),
+      CTX,
+    )
+
+    expect(puntos).toBe(0)
+    expect(escrituras).toEqual([])
+    expect(borrados).toHaveLength(1)
   })
 })
