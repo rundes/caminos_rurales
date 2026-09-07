@@ -1,5 +1,10 @@
-import { fireEvent, render, screen } from '@testing-library/react'
-import { expect, test, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { beforeEach, expect, test, vi } from 'vitest'
+
+const obtenerCuadrosMunicipio = vi.fn()
+vi.mock('@/app/dashboard/mapa/actions', () => ({
+  obtenerCuadrosMunicipio: (...args: unknown[]) => obtenerCuadrosMunicipio(...args),
+}))
 
 vi.mock('react-leaflet', () => ({
   MapContainer: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
@@ -33,6 +38,10 @@ vi.mock('react-leaflet', () => ({
 vi.mock('@/components/CapasMunicipio', () => ({ CapasMunicipio: () => null }))
 
 const { MapaRelevamiento } = await import('@/components/MapaRelevamiento')
+
+beforeEach(() => {
+  obtenerCuadrosMunicipio.mockReset()
+})
 
 test('renderiza los tramos cubiertos en verde y los pendientes en gris con su tooltip', () => {
   render(
@@ -136,44 +145,73 @@ const CUADRO_EJEMPLO = {
   ruta: 'u1/r1/cuadros/1.jpg',
 }
 
-test('el botón "Cuadros" arranca apagado y, al activarse, muestra la capa de cuadros', () => {
-  render(
-    <MapaRelevamiento
-      puntos={[]}
-      centro={[-36.6, -60.0]}
-      urlsEvidencia={{}}
-      cuadros={[CUADRO_EJEMPLO]}
-      urlsCuadros={{}}
-    />,
-  )
+test('el botón "Cuadros" arranca apagado y, al activarse, pide los cuadros al servidor y los muestra', async () => {
+  obtenerCuadrosMunicipio.mockResolvedValue({ ok: true, data: { cuadros: [CUADRO_EJEMPLO], urls: {} } })
+
+  render(<MapaRelevamiento puntos={[]} centro={[-36.6, -60.0]} urlsEvidencia={{}} />)
 
   const boton = screen.getByRole('button', { name: 'Cuadros' })
   expect(boton).toHaveAttribute('aria-pressed', 'false')
   expect(screen.queryByTestId('circle-marker')).not.toBeInTheDocument()
+  expect(obtenerCuadrosMunicipio).not.toHaveBeenCalled()
 
   fireEvent.click(boton)
 
   expect(boton).toHaveAttribute('aria-pressed', 'true')
-  expect(screen.getAllByTestId('circle-marker').length).toBeGreaterThan(0)
+  expect(obtenerCuadrosMunicipio).toHaveBeenCalledTimes(1)
+
+  await waitFor(() => expect(screen.getAllByTestId('circle-marker').length).toBeGreaterThan(0))
 })
 
-test('el toggle "Cuadros" es independiente del modo Cobertura/Estado', () => {
-  render(
-    <MapaRelevamiento
-      puntos={[]}
-      centro={[-36.6, -60.0]}
-      urlsEvidencia={{}}
-      tramos={TRAMOS}
-      cuadros={[CUADRO_EJEMPLO]}
-      urlsCuadros={{}}
-    />,
+test('mientras carga los cuadros muestra un aviso, y apagar/prender el toggle no vuelve a pedirlos', async () => {
+  let resolver!: (valor: unknown) => void
+  obtenerCuadrosMunicipio.mockReturnValue(
+    new Promise((resolve) => {
+      resolver = resolve
+    }),
   )
+
+  render(<MapaRelevamiento puntos={[]} centro={[-36.6, -60.0]} urlsEvidencia={{}} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Cuadros' }))
+
+  expect(screen.getByText('Cargando cuadros…')).toBeInTheDocument()
+
+  resolver({ ok: true, data: { cuadros: [CUADRO_EJEMPLO], urls: {} } })
+  await waitFor(() => expect(screen.queryByText('Cargando cuadros…')).not.toBeInTheDocument())
+
+  fireEvent.click(screen.getByRole('button', { name: 'Cuadros' })) // apaga
+  fireEvent.click(screen.getByRole('button', { name: 'Cuadros' })) // vuelve a prender
+
+  expect(obtenerCuadrosMunicipio).toHaveBeenCalledTimes(1)
+})
+
+test('si falla la carga de cuadros, muestra el error y "Reintentar" permite volver a pedirlos', async () => {
+  obtenerCuadrosMunicipio.mockResolvedValueOnce({ ok: false, error: 'No se pudieron cargar los cuadros.' })
+  obtenerCuadrosMunicipio.mockResolvedValueOnce({ ok: true, data: { cuadros: [CUADRO_EJEMPLO], urls: {} } })
+
+  render(<MapaRelevamiento puntos={[]} centro={[-36.6, -60.0]} urlsEvidencia={{}} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Cuadros' }))
+
+  expect(await screen.findByRole('alert')).toHaveTextContent('No se pudieron cargar los cuadros.')
+
+  fireEvent.click(screen.getByRole('button', { name: 'Reintentar' }))
+
+  await waitFor(() => expect(screen.getAllByTestId('circle-marker').length).toBeGreaterThan(0))
+  expect(obtenerCuadrosMunicipio).toHaveBeenCalledTimes(2)
+})
+
+test('el toggle "Cuadros" es independiente del modo Cobertura/Estado', async () => {
+  obtenerCuadrosMunicipio.mockResolvedValue({ ok: true, data: { cuadros: [CUADRO_EJEMPLO], urls: {} } })
+
+  render(<MapaRelevamiento puntos={[]} centro={[-36.6, -60.0]} urlsEvidencia={{}} tramos={TRAMOS} />)
 
   fireEvent.click(screen.getByRole('button', { name: 'Cuadros' }))
   fireEvent.click(screen.getByRole('button', { name: 'Estado estimado' }))
 
   expect(screen.getByRole('button', { name: 'Cuadros' })).toHaveAttribute('aria-pressed', 'true')
   expect(screen.getByRole('button', { name: 'Estado estimado' })).toHaveAttribute('aria-pressed', 'true')
+
+  await waitFor(() => expect(screen.getAllByTestId('circle-marker').length).toBeGreaterThan(0))
 })
 
 test('las observaciones origen sensor tienen contorno punteado, radio distinto y aviso en el popup', () => {

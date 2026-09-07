@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 import { obtenerProveedor } from '@/lib/almacenamiento'
+import { revalidarMunicipio } from '@/lib/cache'
 import type { DestinoSubida } from '@/lib/almacenamiento/tipos'
 import { TIPOS_PERMITIDOS, rutaEvidencia } from '@/lib/archivos'
 import { ErrorPlausibilidadCuadros, guardarCuadros, recalcularPuntosCuadros } from '@/lib/cuadros-servidor'
@@ -45,10 +46,14 @@ const ERROR_CUPO_RECORRIDOS = 'Alcanzaste el máximo de recorridos por día. Vol
 /** Código Postgres de violación de unicidad (`unique_violation`). */
 const CODIGO_DUPLICADO = '23505'
 
-function revalidarDashboard(): void {
+function revalidarDashboard(municipio: string): void {
   revalidatePath('/dashboard')
   revalidatePath('/dashboard/mapa')
   revalidatePath('/dashboard/ranking')
+  // Los agregados por municipio del mapa (tramos, cuadros por tramo) se
+  // cachean aparte con `unstable_cache` (ver `lib/cache.ts`): `revalidatePath`
+  // no los alcanza, así que un recorrido nuevo tiene que invalidar su tag.
+  revalidarMunicipio(municipio)
 }
 
 /**
@@ -147,7 +152,7 @@ export async function finalizarRecorrido(payload: unknown): Promise<ResultadoRec
 
     try {
       const resumen = await procesarRecorrido(supabase, admin, ctx, datos, kmGuardado)
-      revalidarDashboard()
+      revalidarDashboard(ctx.municipio)
       return { ok: true, data: resumen }
     } catch (error) {
       // El procesamiento quedó a medias: libera el sello para que un

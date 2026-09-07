@@ -1,11 +1,14 @@
 import 'server-only'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { cacheMunicipio } from './cache'
 import type { Cuadro } from './cuadros'
+import { crearClienteAdmin } from './supabase/admin'
 import type { Database } from './supabase/database.types'
 
 type Cliente = SupabaseClient<Database>
 
 const LIMITE_POR_DEFECTO = 3000
+const LIMITE_CUADROS_POR_TRAMO = 20000
 
 /**
  * Últimos cuadros de cámara del municipio, vía `cuadros`. Filtra explícitamente
@@ -56,4 +59,39 @@ export async function obtenerCuadrosPorTramo(supabase: Cliente, municipio: strin
     resultado[fila.tramo_id] = Number(fila.cuadros)
   }
   return resultado
+}
+
+/**
+ * Igual que `obtenerCuadrosPorTramo`, pero con el cliente ADMIN y agrupando
+ * en JS en vez de la función SQL `cuadros_por_tramo`: es lo que necesita
+ * `cacheMunicipio` (sin `cookies()`, filtro por municipio explícito).
+ */
+async function obtenerCuadrosPorTramoAdmin(municipio: string): Promise<Record<string, number>> {
+  const admin = crearClienteAdmin()
+  const { data, error } = await admin
+    .from('cuadros')
+    .select('tramo_id, recorridos!inner(municipio)')
+    .eq('recorridos.municipio', municipio)
+    .limit(LIMITE_CUADROS_POR_TRAMO)
+
+  if (error) {
+    console.error('[cuadros]', error.message)
+    return {}
+  }
+
+  const resultado: Record<string, number> = {}
+  for (const fila of data ?? []) {
+    if (!fila.tramo_id) continue
+    resultado[fila.tramo_id] = (resultado[fila.tramo_id] ?? 0) + 1
+  }
+  return resultado
+}
+
+/**
+ * Versión cacheada (120s, tag `municipio:<slug>`) del conteo de cuadros por
+ * tramo, para la carga inicial del mapa (los cuadros con foto se cargan
+ * aparte, bajo demanda: ver `obtenerCuadrosMunicipio` en `app/dashboard/mapa/actions.ts`).
+ */
+export function obtenerCuadrosPorTramoCacheado(municipio: string): Promise<Record<string, number>> {
+  return cacheMunicipio('cuadros-por-tramo', () => obtenerCuadrosPorTramoAdmin(municipio), municipio)()
 }

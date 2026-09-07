@@ -199,6 +199,7 @@ const crearClienteAdmin = vi.fn(() => ({
 vi.mock('@/lib/supabase/server', () => ({ crearClienteServidor: async () => clienteUsuario }))
 vi.mock('@/lib/supabase/admin', () => ({ crearClienteAdmin }))
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }))
+vi.mock('@/lib/cache', () => ({ revalidarMunicipio: vi.fn() }))
 
 const prepararSubidaProveedor = vi.fn()
 vi.mock('@/lib/almacenamiento', () => ({
