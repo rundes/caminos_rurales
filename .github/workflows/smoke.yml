@@ -1,0 +1,45 @@
+name: Smoke test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Escribir .env.local
+        run: |
+          cat > .env.local <<EOF
+          NEXT_PUBLIC_SUPABASE_URL=${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=${{ secrets.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}
+          SUPABASE_SECRET_KEY=${{ secrets.SUPABASE_SECRET_KEY }}
+          EOF
+
+      - name: Levantar servidor de desarrollo
+        run: npm run dev &
+
+      - name: Esperar a que :3000 responda
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:3000/ -o /dev/null; then
+              echo "servidor arriba"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "el servidor no respondió a tiempo" >&2
+          exit 1
+
+      - name: Smoke test
+        run: node scripts/smoke.mjs
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}

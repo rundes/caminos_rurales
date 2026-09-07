@@ -23,13 +23,16 @@ vi.mock('@google-cloud/storage', () => ({ Storage }))
 const { obtenerProveedor, valorParaGuardar } = await import('@/lib/almacenamiento')
 const { crearProveedorSupabase, BUCKET_EVIDENCIA } = await import('@/lib/almacenamiento/supabase')
 const { crearProveedorGcs } = await import('@/lib/almacenamiento/gcs')
+const { limpiarCacheEnvServidor } = await import('@/lib/env')
 
 const CLAVE_GCS = JSON.stringify({ client_email: 'a@b.iam.gserviceaccount.com', private_key: 'x' })
 const entornoOriginal = { ...process.env }
 
 beforeEach(() => {
   vi.clearAllMocks()
-  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_test'
+  limpiarCacheEnvServidor()
+  process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://sb.example.co'
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_test_1234'
   createSignedUploadUrl.mockResolvedValue({
     data: { signedUrl: 'https://sb.co/storage/v1/object/upload/sign/evidencia-vial/u1/r1/a.jpg?token=t', token: 't' },
     error: null,
@@ -40,6 +43,7 @@ beforeEach(() => {
 
 afterEach(() => {
   process.env = { ...entornoOriginal }
+  limpiarCacheEnvServidor()
 })
 
 describe('obtenerProveedor', () => {
@@ -78,8 +82,8 @@ describe('proveedor supabase', () => {
         'content-type': 'image/jpeg',
         'cache-control': 'max-age=3600',
         'x-upsert': 'false',
-        apikey: 'sb_publishable_test',
-        authorization: 'Bearer sb_publishable_test',
+        apikey: 'sb_publishable_test_1234',
+        authorization: 'Bearer sb_publishable_test_1234',
       },
       urlLectura: 'u1/r1/a.jpg',
       ruta: 'u1/r1/a.jpg',

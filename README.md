@@ -68,11 +68,121 @@ cp .env.example .env.local   # completar con las claves del proyecto Supabase
 npm run dev
 ```
 
-Variables de entorno relevantes (además de las de Supabase):
+Node `>= 20.9` (ver `engines` en `package.json` y `.nvmrc`: `nvm use`). Variables
+de entorno: ver [Variables de entorno](#variables-de-entorno-validadas-al-arrancar).
+Para dejar un proyecto Supabase nuevo (o uno existente) al día con las
+migraciones y los datos base, ver [Configuración inicial](#configuración-inicial-npm-run-setup).
 
-- `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`: proyecto Supabase.
-- `ALMACENAMIENTO`: proveedor de subida de evidencia, `supabase` (por defecto) o `gcs`. Ver [Almacenamiento de evidencia](#almacenamiento-de-evidencia).
-- `GCS_BUCKET`, `GCS_SERVICE_ACCOUNT_KEY`: requeridas solo si `ALMACENAMIENTO=gcs`.
+## CI
+
+`.github/workflows/ci.yml` corre en cada pull request y en cada push a `main`:
+tipos (`tsc --noEmit`), lint (`eslint --max-warnings=0`), tests con cobertura
+(`npm run test:coverage`, ver umbrales en `vitest.config.mts`) y build. El
+build solo recibe las variables públicas (`NEXT_PUBLIC_SUPABASE_URL`,
+`NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`) como secrets del repositorio: no
+necesita `SUPABASE_SECRET_KEY` porque `lib/supabase/admin.ts` la lee recién
+al llamar a `crearClienteAdmin()`, nunca a nivel de módulo. Cancela
+ejecuciones anteriores del mismo branch/PR (`concurrency`).
+
+`.github/workflows/smoke.yml` es manual (`workflow_dispatch`): escribe
+`.env.local` desde secrets, levanta `npm run dev`, espera a que responda
+`:3000` y corre `node scripts/smoke.mjs` contra el proyecto Supabase real
+(necesita `SUPABASE_ACCESS_TOKEN` para limpiar sus propios datos de prueba
+vía Management API).
+
+## Configuración inicial (`npm run setup`)
+
+Para un proyecto Supabase nuevo (o para poner uno existente al día):
+
+```bash
+SUPABASE_ACCESS_TOKEN=sbp_... npm run setup              # migraciones + seeds
+SUPABASE_ACCESS_TOKEN=sbp_... npm run setup -- --solo-migraciones
+npm run setup -- --dry-run                                # solo imprime el plan
+```
+
+`scripts/setup-entorno.mjs` aplica las migraciones de `supabase/migrations/`
+en el orden documentado en [Migraciones](#migraciones) (vía Management API,
+igual que `scripts/aplicar-sql.mjs`) y después corre los seeds del piloto
+Maipú (`seed-caminos-maipu.mjs`, `seed-tramos.mjs`). `--solo-migraciones`
+aplica las migraciones y omite los seeds; `--dry-run` no necesita
+`SUPABASE_ACCESS_TOKEN` y solo imprime qué haría.
+
+## Variables de entorno (validadas al arrancar)
+
+`lib/env.ts` valida el entorno con zod. Dos funciones, según dónde corre el código:
+
+- `envServidor()`: solo para código de servidor. Valida todo el esquema y
+  cachea el resultado (una sola vez por proceso); si falta o es inválida
+  alguna variable, tira un error en español que las lista todas. La usan
+  `lib/supabase/server.ts`, `lib/supabase/admin.ts` (además de su propio
+  chequeo de `SUPABASE_SECRET_KEY`) y `lib/almacenamiento/{index,gcs}.ts`.
+- `envPublico()`: variables `NEXT_PUBLIC_*`, con acceso literal
+  (`process.env.NEXT_PUBLIC_X`) para que el bundler de Next las pueda
+  inlinear en el bundle del cliente. La usa `lib/supabase/client.ts`.
+
+Variables:
+
+- `NEXT_PUBLIC_SUPABASE_URL` (URL), `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
+  (mínimo 20 caracteres): proyecto Supabase, siempre requeridas.
+- `SUPABASE_SECRET_KEY`: opcional a nivel de esquema; la exige puntualmente
+  `lib/supabase/admin.ts` al llamar a `crearClienteAdmin()`.
+- `ALMACENAMIENTO`: `supabase` (por defecto) o `gcs`. Ver
+  [Almacenamiento de evidencia](#almacenamiento-de-evidencia).
+- `GCS_BUCKET`, `GCS_SERVICE_ACCOUNT_KEY`: requeridas solo si
+  `ALMACENAMIENTO=gcs`.
+
+## Códigos de invitación
+
+El registro pide un código de invitación (además de nombre y partido). El
+trigger `handle_new_user` (migración `0008_seguridad.sql`) valida el código
+contra `public.codigos_invitacion` y asigna el `municipio_id` del perfil
+según ese código, nunca según lo que mande el cliente. Código inicial de
+Maipú: `MAIPU-2027`.
+
+- Un código inválido, inactivo o ausente deja el perfil en
+  `municipio_id = 'sin-asignar'`; esos usuarios quedan en `/pendiente`
+  ("Tu cuenta espera un código válido") hasta que un admin les asigne uno.
+- Para agregar un código nuevo: un `insert` en `codigos_invitacion` vía
+  `scripts/aplicar-sql.mjs` (o la consola de Supabase), por ejemplo:
+
+  ```sql
+  insert into public.codigos_invitacion (codigo, municipio) values ('OTRO-2027', 'otro-partido');
+  ```
+
+- `perfiles.rol` y `perfiles.municipio_id` son inmutables desde la app
+  (`revoke update` + trigger `perfiles_no_escalar`, migración
+  `0008_seguridad.sql`): solo la clave secreta (sin sesión de usuario) puede
+  cambiarlos, por ejemplo para promover a alguien a `municipio` o `auditor`
+  (ver [Roles](#roles)).
+
+## Cupos diarios
+
+Para frenar abuso, `public.consumir_cupo` (migración `0009_cupos.sql`) limita
+por usuario y por día: **1500 subidas de evidencia** y **30 recorridos
+finalizados**. Al superarse el cupo, `prepararSubida`/`finalizarRecorrido`
+devuelven un error explícito en vez de seguir aceptando datos.
+
+## Baja de usuario
+
+```bash
+node scripts/borrar-usuario.mjs correo@ejemplo.com --dry-run   # solo lista qué borraría
+node scripts/borrar-usuario.mjs correo@ejemplo.com
+```
+
+`scripts/borrar-usuario.mjs` busca el usuario por email (paginando
+`auth.admin.listUsers`), borra recursivamente todo lo que tenga en
+`evidencia-vial/<uid>/` (por lotes) y por último borra la cuenta de
+`auth.users`: el borrado de la cuenta arrastra en cascada su perfil y, desde
+ahí, sus recorridos, cobertura, puntos y observaciones. Requiere
+`NEXT_PUBLIC_SUPABASE_URL` y `SUPABASE_SECRET_KEY` (entorno o `.env.local`).
+
+## Copias de seguridad
+
+El proyecto Supabase del piloto está en el plan gratuito: backups diarios
+automáticos, **sin point-in-time recovery (PITR)** (una hora de datos
+perdida en el peor caso, ventana de restauración corta). Antes de pasar a
+producción con datos reales de un municipio, subir al plan Pro (backups con
+más retención y PITR).
 
 ## Scripts
 
@@ -86,10 +196,12 @@ Variables de entorno relevantes (además de las de Supabase):
 - `node scripts/seed-tramos.mjs [--dry-run]`: siembra `public.tramos` (denominador de cobertura) desde el mismo GeoJSON, con geometría, km y localidad por tramo.
 - `node scripts/generar-iconos.mjs`: genera los íconos PWA (`public/icons/`) desde un SVG inline con `sharp`.
 - `node scripts/smoke.mjs`: smoke test de integración contra el proyecto Supabase real. Ver [Smoke test](#smoke-test-de-integración).
+- `npm run setup` (`node scripts/setup-entorno.mjs [--solo-migraciones] [--dry-run]`): ver [Configuración inicial](#configuración-inicial-npm-run-setup).
+- `npm run borrar-usuario -- <email> [--dry-run]` (`node scripts/borrar-usuario.mjs`): ver [Baja de usuario](#baja-de-usuario).
 
 ## Migraciones
 
-Las migraciones en `supabase/migrations/` se aplican en orden con `scripts/aplicar-sql.mjs`. `docs/database-schema.sql` refleja el estado final (equivalente a aplicar todas en orden) y una instalación nueva puede correr solo ese archivo.
+Las migraciones en `supabase/migrations/` se aplican en orden con `scripts/aplicar-sql.mjs` (o todas juntas con `npm run setup`, ver [Configuración inicial](#configuración-inicial-npm-run-setup)). `docs/database-schema.sql` refleja el estado final (equivalente a aplicar todas en orden) y una instalación nueva puede correr solo ese archivo.
 
 1. `0001_schema.sql`: esquema inicial del MVP (perfiles, caminos, relevamientos, fallas_deteccion, storage).
 2. `0002_storage_por_municipio.sql`: restringe la lectura de evidencia a usuarios del mismo municipio de quien la subió.
@@ -100,6 +212,8 @@ Las migraciones en `supabase/migrations/` se aplican en orden con `scripts/aplic
 7. `0006a_enums_sensor.sql`: crea los enums `calidad_segmento` y `origen_observacion`. Debe aplicarse **antes** que `0006_muestras_sensor.sql`, de la que depende (mismo motivo que `0003a`: un `create type` y su primer uso no pueden ir en la misma transacción).
 8. `0006_muestras_sensor.sql`: crea `muestras_sensor` (segmentos agregados de sensores por recorrido); agrega `origen`, `magnitud` y `tramo_id` a `fallas_deteccion`; agrega la función `rugosidad_tramos`.
 9. `0007_cuadros.sql`: crea `cuadros` (cuadros georreferenciados de la cámara durante el recorrido, con `tramo_id` asignado y ruta al objeto en storage); agrega la función `cuadros_por_tramo`.
+10. `0008_seguridad.sql`: `perfiles` inmutable desde la app salvo `nombre`/`acepto_terminos_at` (trigger `perfiles_no_escalar`); altas de `recorridos` acotadas al municipio propio y sin update desde la app; altas de `fallas_deteccion` solo con `origen = 'manual'`; `search_path` fijo en las funciones `security definer`; tabla `codigos_invitacion` y `handle_new_user` resuelve el municipio por código, no por metadata del cliente; índices que faltaban (`puntos_eventos`, `cobertura_tramos`, `fallas_deteccion`, `cuadros`).
+11. `0009_cupos.sql`: tabla `uso_diario` y función `consumir_cupo` (cupos diarios de subidas y recorridos, ver [Cupos diarios](#cupos-diarios)); restricción única `(recorrido_id, motivo)` en `puntos_eventos` para que el upsert reemplace el borrado-y-reinserción anterior.
 
 ## Capas
 
@@ -145,6 +259,25 @@ Los usuarios nuevos tienen rol `productor`. Para crear caminos hace falta `munic
 ```sql
 update public.perfiles set rol = 'municipio' where id = '<uuid>';
 ```
+
+Nota: `rol` y `municipio_id` son inmutables desde la app (migración
+`0008_seguridad.sql`); el `update` de arriba solo funciona con la clave
+secreta (service role), nunca con la sesión de un usuario.
+
+## Seguridad y rendimiento de lectura
+
+- **Headers de seguridad** (`next.config.ts`): HSTS, `X-Content-Type-Options:
+  nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`,
+  `X-Frame-Options: DENY`, `Permissions-Policy` (geolocalización, cámara,
+  acelerómetro y giroscopio acotados a `self`, sin micrófono ni pagos) y una
+  `Content-Security-Policy` sin `script-src` (la app no tiene JS inline ni de
+  terceros, así que `default-src 'self'` ya cubre los scripts propios).
+- **Cache inmutable** para `/capas/*` y `/icons/*` (no cambian salvo un
+  redeploy explícito).
+- **Cache por municipio** en el dashboard y el mapa: los agregados de
+  cobertura y ranking usan `unstable_cache` con el tag `municipio:<slug>`, y
+  se invalidan (`revalidateTag`) cuando cambia algo de ese municipio, en vez
+  de recalcular en cada request.
 
 ## Verificación manual
 

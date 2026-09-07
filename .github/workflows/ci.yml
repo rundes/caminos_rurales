@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Tipos (tsc)
+        run: npx tsc --noEmit
+
+      - name: Lint
+        run: npx eslint --max-warnings=0 .
+
+      - name: Tests + cobertura
+        run: npm run test:coverage
+
+      - name: Build
+        run: npm run build
+        env:
+          # Solo variables públicas: `lib/env.ts` valida el resto en tiempo de
+          # ejecución (server-only) y `lib/supabase/admin.ts` lee
+          # SUPABASE_SECRET_KEY recién al llamar a `crearClienteAdmin()`, así
+          # que el build nunca necesita la clave secreta.
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}
