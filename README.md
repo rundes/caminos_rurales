@@ -12,6 +12,7 @@ Plataforma de relevamiento del estado de caminos rurales de la Provincia de Buen
 - `docs/step-by-step-guide.md`: fases de implementación.
 - `docs/fuentes-datos.md`: fuentes de datos de referencia (IGN, OSM, UBA, SENASA, MapBiomas, GSW, severo_data).
 - `docs/superpowers/plans/2026-09-04-endurecimiento-y-alcance.md`: plan de las olas 1 (endurecimiento) y 2 (producto), con la lista de [Pendiente](docs/superpowers/plans/2026-09-04-endurecimiento-y-alcance.md#pendiente) actualizada.
+- `docs/superpowers/specs/2026-09-08-clasificacion-imagenes-evaluacion.md`: evaluación honesta de qué haría falta para la fase 12b (clasificación automática de imágenes) y por qué no es accionable todavía.
 
 ## Stack
 
@@ -28,7 +29,7 @@ Next.js 16 (App Router), TypeScript, Tailwind CSS 4, Supabase (Auth, Postgres, S
 
 ### Límites conocidos
 
-- La grabación **solo funciona con la app abierta en primer plano**; no hay grabación en segundo plano (requeriría una app nativa). Está documentado en la pantalla de términos.
+- La grabación **solo funciona con la app abierta en primer plano**; no hay grabación en segundo plano (no hay geolocalización confiable en 2° plano en la web — iOS suspende la página; requeriría una app nativa). Se avisa antes de arrancar (`PantallaInicio`) y está documentado en la pantalla de términos. Lo que la app sí hace: si bloquean el teléfono, cambian de app, o el GPS se queda sin señal más de 30 s (`UMBRAL_INTERRUPCION_MS`, `hooks/useGrabadorGps.ts`), la interrupción se detecta (watchdog por tiempo, reforzado por `visibilitychange`/`pageshow`/`pagehide` y la pérdida del wake lock) y corta la grabación igual que una pausa manual: el tramo no relevado **no** se dibuja como una recta en el mapa ni cuenta como cobertura (`cortes`/`partirEnSegmentos`, verificado también contra el cálculo de cobertura del servidor, `lib/cobertura.ts`), y se avisa en pantalla y en el resumen del recorrido con el horario del hueco.
 - Sin señal, el track y las observaciones quedan en IndexedDB y se suben cuando vuelve la conexión (reintentos con backoff).
 - El primer ingreso exige aceptar los términos (`perfiles.acepto_terminos_at`); sin aceptarlos no se accede al resto de la app.
 - La interfaz es **solo modo claro**: ver [Modo claro (sin tema oscuro)](#modo-claro-sin-tema-oscuro).

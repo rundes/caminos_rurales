@@ -615,6 +615,13 @@ try {
   })
   ok(Boolean(tramoInsertProductor.error), 'RLS bloquea insert de tramo como productor', tramoInsertProductor.error?.message)
 
+  // `/dashboard/tramos/nuevo` usa `notFound()` (no un 403/redirect) para no
+  // mostrarle un formulario a alguien que igual no va a poder guardar nada
+  // (ver el comentario del propio `app/dashboard/tramos/nuevo/page.tsx`): el
+  // gate real es RLS, esto solo evita el 200 con un formulario inútil.
+  const rNuevoProductor = await fetch(`${DEV}/dashboard/tramos/nuevo`, { headers: { Cookie: cookie }, redirect: 'manual' })
+  ok(rNuevoProductor.status === 404, 'GET /dashboard/tramos/nuevo como productor → 404', String(rNuevoProductor.status))
+
   const tramoUpdateProductor = await maipu.c
     .from('tramos')
     .update({ nombre_codigo: 'hackeado' })
@@ -655,6 +662,9 @@ try {
     'la clave secreta promueve al usuario a rol municipio',
     promover.error?.message ?? JSON.stringify(promover.data),
   )
+
+  const rNuevoMunicipio = await fetch(`${DEV}/dashboard/tramos/nuevo`, { headers: { Cookie: cookie }, redirect: 'manual' })
+  ok(rNuevoMunicipio.status === 200, 'GET /dashboard/tramos/nuevo como municipio → 200', String(rNuevoMunicipio.status))
 
   const idTramoMunicipio = `smoke-municipio-${Date.now()}`
   const tramoInsertMunicipio = await maipu.c

@@ -54,37 +54,20 @@ Fuente: auditorías de producto/UX, arquitectura/rendimiento, seguridad y tests/
 
 ## Pendiente
 
-Lo que queda abierto después de las olas 1 y 2, confirmado contra el código a 2026-09-08:
+Lo que queda abierto después de las olas 1 y 2 y de la rama `feat/pendientes`
+(GCS con lectura firmada, difuminado de privacidad, alta/edición de tramos y
+mitigación de la interrupción de grabación — ver `CHANGELOG.md` 0.8.0),
+confirmado contra el código a 2026-09-08:
 
-- **Alta de tramos para rol municipio/auditor**: `tramos` hoy solo tiene la
-  política `tramos_select` (lectura); no existe `tramos_insert` a diferencia
-  de `caminos_insert` (0001). El listado (`app/dashboard/tramos/page.tsx`)
-  ya deja el comentario de dónde montar el formulario, gateado a
-  `perfil.rol === 'municipio' || perfil.rol === 'auditor'`, cuando exista esa
-  migración.
-- **Cutover a GCS con bucket privado y URLs firmadas de lectura**: el
-  proveedor GCS (`lib/almacenamiento/gcs.ts`) ya firma la escritura (V4, 15
-  min), pero la lectura sigue siendo una URL pública fija
-  (`https://storage.googleapis.com/<bucket>/<ruta>`, función `urlPublica`),
-  lo que exige que el bucket sea de lectura pública (`allUsers` /
-  `Storage Object Viewer`, ver README). Falta firmar también la lectura y
-  pasar el bucket a privado.
-- **Difuminado de caras y patentes en los cuadros**: sin implementar; los
-  cuadros de cámara (fase 12) son visibles tal cual para los usuarios del
-  mismo municipio. Documentado como límite conocido en el README.
-- **Clasificación automática de imágenes (fase 12b)**: sin implementar;
-  sigue pendiente en `docs/step-by-step-guide.md` (clasificación de
-  superficie y detección de baches sobre los cuadros capturados).
+- **Clasificación automática de imágenes (fase 12b)**: sin implementar; la
+  app hoy solo *recolecta* los cuadros (`cuadros`), sin ninguna etiqueta.
+  Evaluación de qué haría falta (datos, camino de etiquetado, ambigüedad del
+  target) en `docs/superpowers/specs/2026-09-08-clasificacion-imagenes-evaluacion.md`;
+  sigue sin ser accionable hoy.
 - **SMTP propio para los correos de auth**: sin configurar; el proyecto usa
   el envío de emails de auth del plan gratuito de Supabase, que rate-limita
   agresivamente por proyecto (ver README, sección Recuperar contraseña).
   Recomendado antes de un volumen real de producción.
-
-Encontrados durante esta auditoría, no estaban en la lista original:
-
-- **Grabación en segundo plano**: sigue sin resolver (límite conocido desde
-  el MVP, README "Límites conocidos"); requeriría una app nativa o un
-  wrapper, la PWA solo graba con la pantalla y la app en primer plano.
 - **Moderación de observaciones más allá del estado de gestión**: 0010 da a
   municipio/auditor un circuito de seguimiento (pendiente/en obra/resuelta/
   descartada), pero no una forma de ocultar o borrar una observación falsa o
@@ -92,3 +75,12 @@ Encontrados durante esta auditoría, no estaban en la lista original:
   observaciones de origen manual (sí existe `fallas_delete_sensor_propio`
   para las de origen sensor, 0006). Ver también fase 10 (pendiente) en
   `docs/step-by-step-guide.md`.
+- **Grabación en segundo plano — límite de plataforma, no mitigable desde la
+  web**: una PWA no puede grabar GPS con la pantalla apagada ni la app en 2°
+  plano (iOS suspende la página; no hay geolocalización en 2° plano
+  confiable en la web). La rama `feat/pendientes` mitiga la consecuencia
+  (una interrupción ya no se dibuja como una recta ni cuenta como cobertura,
+  ver `hooks/useGrabadorGps.ts` y CHANGELOG 0.8.0), pero grabar de verdad en
+  2° plano seguiría necesitando una app nativa o un wrapper con permiso de
+  ubicación en segundo plano (Capacitor/Cordova + plugin nativo, o una app
+  Android/iOS aparte). No planificado.
