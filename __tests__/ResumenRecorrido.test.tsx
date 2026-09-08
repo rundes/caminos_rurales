@@ -40,6 +40,29 @@ describe('ResumenRecorrido', () => {
     expect(screen.getByText(/3 impacto\(s\) detectado\(s\)/i)).toBeInTheDocument()
   })
 
+  test('muestra las interrupciones de la grabación con sus horarios', () => {
+    const T0 = new Date('2026-09-03T13:00:00.000Z').getTime()
+    render(
+      <ResumenRecorrido
+        km={4.5}
+        puntosGps={120}
+        resumen={RESUMEN}
+        sinConexion={false}
+        interrupciones={[{ desde: T0, hasta: T0 + 5 * 60_000 }]}
+        onNuevo={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText(/se interrumpió 1 vez/i)).toBeInTheDocument()
+    expect(screen.getByText(/no quedaron relevados/i)).toBeInTheDocument()
+  })
+
+  test('sin interrupciones no muestra el aviso', () => {
+    renderResumen(RESUMEN)
+
+    expect(screen.queryByText(/se interrumpió/i)).not.toBeInTheDocument()
+  })
+
   test('omite las calidades sin km', () => {
     renderResumen(RESUMEN)
 
@@ -75,6 +98,60 @@ describe('ResumenRecorrido', () => {
     expect(screen.getByText(/40 capturados · 12 pendientes de subir \(WiFi\)/i)).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: /subir ahora con datos/i }))
     expect(onSubirCuadros).toHaveBeenCalledTimes(1)
+  })
+
+  test('mientras procesa avisa que está difuminando y subiendo', () => {
+    render(
+      <ResumenRecorrido
+        km={4.5}
+        puntosGps={120}
+        resumen={null}
+        sinConexion={false}
+        cuadros={40}
+        cuadrosPendientes={12}
+        procesandoCuadros
+        privacidadActivada
+        onNuevo={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText(/difuminando caras y vehículos y subiendo/i)).toBeInTheDocument()
+  })
+
+  test('con el difuminado apagado, mientras procesa solo dice que está subiendo', () => {
+    render(
+      <ResumenRecorrido
+        km={4.5}
+        puntosGps={120}
+        resumen={null}
+        sinConexion={false}
+        cuadros={40}
+        cuadrosPendientes={12}
+        procesandoCuadros
+        privacidadActivada={false}
+        onNuevo={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText(/^subiendo cuadros…$/i)).toBeInTheDocument()
+    expect(screen.queryByText(/difuminando/i)).not.toBeInTheDocument()
+  })
+
+  test('sin procesar activo no muestra el aviso de difuminando/subiendo', () => {
+    render(
+      <ResumenRecorrido
+        km={4.5}
+        puntosGps={120}
+        resumen={null}
+        sinConexion={false}
+        cuadros={40}
+        cuadrosPendientes={12}
+        procesandoCuadros={false}
+        onNuevo={vi.fn()}
+      />,
+    )
+
+    expect(screen.queryByText(/difuminando/i)).not.toBeInTheDocument()
   })
 
   test('sin cuadros pendientes no ofrece subirlos con datos', () => {

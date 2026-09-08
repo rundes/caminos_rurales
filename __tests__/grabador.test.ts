@@ -8,6 +8,7 @@ import {
   pausar,
   reanudar,
   retomar,
+  UMBRAL_INTERRUPCION_MS,
 } from '@/lib/local/grabador'
 import type { PuntoGps } from '@/lib/track'
 
@@ -137,6 +138,34 @@ describe('grabador', () => {
     expect(reanudar(grabando)).toBe(grabando)
   })
 
+  test('retomar agrega un corte cuando pasó más del umbral desde el último punto guardado', () => {
+    const puntos = [punto(0), punto(1), punto(2)]
+    const ahora = punto(2).t + UMBRAL_INTERRUPCION_MS + 1
+
+    const grabador = retomar(ID, T0, puntos, ahora)
+
+    // El corte cae justo después de los puntos ya guardados: el próximo
+    // punto aceptado arranca un segmento nuevo, no una recta desde punto(2).
+    expect(grabador.cortes).toEqual([3])
+    expect(grabador.cantidad).toBe(3)
+  })
+
+  test('retomar no corta cuando el hueco está por debajo del umbral', () => {
+    const puntos = [punto(0), punto(1), punto(2)]
+    const ahora = punto(2).t + UMBRAL_INTERRUPCION_MS - 1
+
+    const grabador = retomar(ID, T0, puntos, ahora)
+
+    expect(grabador.cortes).toEqual([])
+  })
+
+  test('retomar sin puntos guardados no corta aunque pase mucho tiempo', () => {
+    const grabador = retomar(ID, T0, [], T0 + UMBRAL_INTERRUPCION_MS * 10)
+
+    expect(grabador.cortes).toEqual([])
+    expect(grabador.ultimo).toBeNull()
+  })
+
   test('el tiempo en pausa no suma kilómetros: agregarPunto se ignora hasta reanudar', () => {
     let grabador = iniciar(ID, T0)
     grabador = agregarPunto(grabador, punto(0))
@@ -152,5 +181,40 @@ describe('grabador', () => {
     grabador = reanudar(grabador)
     grabador = agregarPunto(grabador, punto(5))
     expect(grabador.km).toBeGreaterThan(kmAntes)
+  })
+
+  test('agregarPunto no suma distancia si pasó más del umbral desde el último punto, aunque no se haya pausado', () => {
+    let grabador = iniciar(ID, T0)
+    grabador = agregarPunto(grabador, punto(0))
+    const kmAntes = grabador.km
+
+    // Mismo caso que detecta el watchdog antes de pausar en la app real: un
+    // hueco de tiempo por encima del umbral, sin pausado manual de por medio.
+    const lejos: PuntoGps = {
+      lat: punto(0).lat + 1,
+      lng: punto(0).lng,
+      t: T0 + UMBRAL_INTERRUPCION_MS + 1,
+      precision: 5,
+    }
+    grabador = agregarPunto(grabador, lejos)
+
+    expect(grabador.km).toBe(kmAntes)
+    expect(grabador.ultimo).toEqual(lejos)
+    expect(grabador.cantidad).toBe(2)
+  })
+
+  test('retomar no bridgea un hueco de tiempo que ya estaba entre los puntos guardados', () => {
+    const lejos: PuntoGps = {
+      lat: punto(0).lat + 1,
+      lng: punto(0).lng,
+      t: punto(0).t + UMBRAL_INTERRUPCION_MS + 1,
+      precision: 5,
+    }
+
+    const grabador = retomar(ID, T0, [punto(0), lejos])
+
+    // El salto de ~111 km entre punto(0) y `lejos` no se suma: hay más de
+    // `UMBRAL_INTERRUPCION_MS` de por medio.
+    expect(grabador.km).toBe(0)
   })
 })

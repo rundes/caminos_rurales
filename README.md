@@ -12,6 +12,7 @@ Plataforma de relevamiento del estado de caminos rurales de la Provincia de Buen
 - `docs/step-by-step-guide.md`: fases de implementación.
 - `docs/fuentes-datos.md`: fuentes de datos de referencia (IGN, OSM, UBA, SENASA, MapBiomas, GSW, severo_data).
 - `docs/superpowers/plans/2026-09-04-endurecimiento-y-alcance.md`: plan de las olas 1 (endurecimiento) y 2 (producto), con la lista de [Pendiente](docs/superpowers/plans/2026-09-04-endurecimiento-y-alcance.md#pendiente) actualizada.
+- `docs/superpowers/specs/2026-09-08-clasificacion-imagenes-evaluacion.md`: evaluación honesta de qué haría falta para la fase 12b (clasificación automática de imágenes) y por qué no es accionable todavía.
 
 ## Stack
 
@@ -28,7 +29,11 @@ Next.js 16 (App Router), TypeScript, Tailwind CSS 4, Supabase (Auth, Postgres, S
 
 ### Límites conocidos
 
-- La grabación **solo funciona con la app abierta en primer plano**; no hay grabación en segundo plano (requeriría una app nativa). Está documentado en la pantalla de términos.
+- La grabación **solo funciona con la app abierta en primer plano**; no hay grabación en segundo plano (no hay geolocalización confiable en 2° plano en la web — iOS suspende la página; requeriría una app nativa). Se avisa antes de arrancar (`PantallaInicio`) y está documentado en la pantalla de términos. Lo que la app sí hace: si bloquean el teléfono, cambian de app, o el GPS se queda sin señal más de 30 s (`UMBRAL_INTERRUPCION_MS`, `lib/track.ts`), la interrupción se detecta (watchdog por tiempo, reforzado por `visibilitychange`/`pageshow`/`pagehide` y la pérdida del wake lock) y corta la grabación igual que una pausa manual: el tramo no relevado **no** se dibuja como una recta en el mapa, no cuenta como cobertura (`cortes`/`partirEnSegmentos`, verificado también contra el cálculo de cobertura del servidor, `lib/cobertura.ts`) **ni como kilómetros**, y se avisa en pantalla y en el resumen del recorrido con el horario del hueco.
+- **Los kilómetros nunca cruzan una pausa ni una interrupción.** `kmDeTrack` (`lib/track.ts`) suma distancia dentro de cada segmento del track, nunca entre el último punto de antes de un corte y el primero de después — ni en el estimado local que se muestra antes de subir (`lib/local/cierre.ts`) ni en el que calcula y persiste el servidor (`app/dashboard/recorrido/actions.ts`, columna `recorridos.km`). El servidor no confía en huecos que declare el cliente: deriva los cortes él mismo (`derivarCortesDeTrack`, `lib/track.ts`), de la **unión** de dos señales independientes — con cualquiera de las dos alcanza para cortar:
+  - **velocidad implícita** (`derivarCortesPorVelocidad`), directo sobre `datos.puntos` (alineado índice a índice con `datos.track`, obligatorio): si la distancia entre dos puntos consecutivos no es alcanzable en el tiempo transcurrido a una velocidad físicamente plausible (`LIMITES_PLAUSIBILIDAD.velocidadMaximaMax`), es una interrupción, sin importar cuán corto sea el hueco de reloj entre ellos;
+  - **cadencia real de fixes** (`derivarCortesDeCadencia`), sobre `datos.cadencia`: un array aparte, muestreado por *tiempo* (una entrada cada `INTERVALO_CADENCIA_MS`, 5 s, ver `lib/local/payload.ts`) a partir de los puntos GPS crudos, *antes* de Douglas-Peucker. Hace falta un array aparte porque `track`/`puntos` son el mismo array ya simplificado: un tramo recto real puede colapsar a sólo dos vértices separados por varios kilómetros y varios minutos sin que haya pasado nada (un camino recto de 20 km a velocidad normal, por ejemplo), así que ni la velocidad implícita ni un hueco de tiempo sobre `track`/`puntos` alcanzan para distinguir eso de una pausa real que cubrió la misma distancia en el mismo tiempo. La cadencia sí: mientras hubo grabación real nunca le falta una entrada por más de `UMBRAL_INTERRUPCION_MS` (30 s), así que un hueco (o una velocidad implausible dentro de la propia cadencia) ahí es una interrupción real, y se mapea a un índice de `track` por timestamp, no por posición de índice.
+  `esquemaRecorrido` exige `puntos` y `cadencia` (ambos obligatorios, `puntos` de la misma longitud que `track`) y rechaza el payload si no vienen o no son consistentes con `inicio`/`fin`: sin esa evidencia, un recorrido no es verificable y se rechaza en vez de acreditarse a medias (fail-closed). Ni ocultar una pausa ni inventar una, ni desalinear o fabricar `puntos`/`cadencia`, alcanza para inflar o recortar los km acreditados — y esos km son los que puntúan (`lib/juego.ts`) y los que evalúa la plausibilidad del recorrido. Los km con datos de sensores (`kmConSensores`, `lib/juego.ts`, y el desglose por calidad `kmPorCalidad`, `lib/recorrido-sensores-servidor.ts`) son un caso distinto: las muestras de sensores *son* de cadencia cruda (cada 5 s o 100 m), así que ahí sigue siendo correcto combinar tiempo y velocidad sobre el mismo array (`derivarCortesDeMuestras`) — tampoco puentean una pausa.
 - Sin señal, el track y las observaciones quedan en IndexedDB y se suben cuando vuelve la conexión (reintentos con backoff).
 - El primer ingreso exige aceptar los términos (`perfiles.acepto_terminos_at`); sin aceptarlos no se accede al resto de la app.
 - La interfaz es **solo modo claro**: ver [Modo claro (sin tema oscuro)](#modo-claro-sin-tema-oscuro).
@@ -60,7 +65,20 @@ Durante el recorrido, además del track y los sensores, la app puede capturar cu
 - **Subida**: diferida, por WiFi por defecto ("Subir cuadros solo con WiFi", configurable), después de que el recorrido ya se subió. También hay un botón "Subir ahora con datos" para forzar la subida usando datos móviles.
 - **Mapa**: capa "Cuadros" en `/dashboard/mapa` (toggle independiente), con marcadores y popup de miniatura, fecha, velocidad y navegación anterior/siguiente dentro del mismo tramo.
 - **Puntos**: +1 punto cada 10 cuadros registrados, con tope de 100 puntos por recorrido.
-- **Límites conocidos**: consume batería adicional (cámara + GPS + pantalla encendida); en iOS el stream se pausa con la pantalla bloqueada; sin difuminado de caras ni patentes en esta fase; las imágenes son visibles para los usuarios del mismo municipio.
+- **Límites conocidos**: consume batería adicional (cámara + GPS + pantalla encendida); en iOS el stream se pausa con la pantalla bloqueada; las imágenes son visibles para los usuarios del mismo municipio. Ver [Difuminado de privacidad](#difuminado-de-privacidad) para lo que pasa (y lo que no cubre) con las caras y las patentes.
+
+### Difuminado de privacidad
+
+Las imágenes son visibles para todos los usuarios del mismo municipio, así que antes de subirse se les aplica un difuminado de privacidad en el propio dispositivo: `lib/privacidad/`.
+
+- **Cuándo corre**: nunca durante la grabación (GPS + cámara + pantalla encendida ya castigan la batería; correr un modelo por cuadro mientras se maneja lo empeoraría). Se aplica en la cola de subida (`lib/local/cola-cuadros.ts`), justo antes del `PUT` de cada cuadro — momento en que, en la práctica, el celular ya suele estar detenido y con WiFi (la cola solo procesa cuando la preferencia de red lo permite, por defecto solo WiFi). **La imagen sin difuminar nunca sale del dispositivo**: se difumina y reencodea localmente, y solo el resultado se sube.
+- **Qué detecta**: caras (`BlazeFace`) y personas/vehículos —auto, camioneta, moto, colectivo— (`COCO-SSD`, base `lite_mobilenet_v2`), corriendo con TensorFlow.js en el navegador. No existe un detector liviano y confiable de patentes: en vez de simular uno, se bloquea el vehículo entero cuando se lo detecta (auto/moto/colectivo/camión), lo que de paso tapa la patente y a los ocupantes. El sujeto de estos cuadros es la superficie del camino, así que perder el detalle de un auto o una persona de paso no cuesta nada.
+- **Cómo difumina**: cada detección con confianza suficiente se expande con un margen (`lib/privacidad/umbrales.ts`) y se pixela (mosaico, irreversible: el detalle original no sobrevive en el archivo final) antes de reencodear a JPEG.
+- **Ajuste**: "Difuminar caras y vehículos en los cuadros" en la pantalla de inicio, **activado por defecto**. Se puede apagar; con el ajuste apagado los cuadros se suben sin procesar.
+- **Si el difuminado falla** (el modelo no cargó, la inferencia tiró una excepción): el cuadro **no se sube sin procesar**. La imagen original nunca es un fallback válido, así que el fallo se trata como cualquier otro fallo de subida — reintenta con el mismo backoff que la cola (`lib/local/deps.ts`) y, si agota los reintentos, el cuadro se da por perdido (queda en error, visible en el resumen del recorrido) en vez de subirse igual. El resumen del recorrido (`ResumenRecorrido`) muestra "Difuminando caras y vehículos y subiendo cuadros…" mientras la cola trabaja, para que quede claro que no quedó colgado.
+- **Qué NO cubre — no es garantía de anonimato**: caras chicas o muy lejanas (la resolución del cuadro, 1280 px, ya limita cuánto detalle hay para detectar), caras en ángulos raros o parcialmente tapadas, y patentes sueltas sin un vehículo detectado alrededor (por ejemplo una patente apoyada en el piso, o un vehículo que el detector no reconoció). El ajuste reduce el riesgo, no lo elimina; el texto de términos y la pantalla de inicio lo dicen explícitamente.
+- **Reintentos y doble procesamiento**: cada cuadro guarda si ya se difuminó (`cuadros.difuminado` en IndexedDB, `lib/local/db.ts`); un reintento de subida nunca vuelve a difuminar un cuadro ya procesado (aplicar el pixelado dos veces no suma privacidad y sí pierde nitidez de más).
+- **Pesos del modelo**: se sirven desde el propio origen (`public/modelos/blazeface/`, `public/modelos/coco-ssd/`), nunca desde un CDN de terceros — la CSP (`next.config.ts`) no tiene `script-src` propio y su `connect-src` es `'self'` más los hosts de Supabase/IGN/OSM, así que un `fetch` a un CDN externo en tiempo de ejecución quedaría bloqueado. Pesan **~455 KB** (BlazeFace) **+ ~17,7 MB** (COCO-SSD `lite_mobilenet_v2`) ≈ **18,1 MB** en total; se descargan recién la primera vez que hace falta difuminar algo (no en la carga inicial de la app: `lib/privacidad/modelo.ts` los importa con `import()` dinámico, así que Next los deja en chunks aparte) y quedan cacheados por el service worker (`cache-first` en `/modelos/*`, `public/sw.js`) y por el `Cache-Control: immutable` del propio Next, así que un dispositivo no los vuelve a bajar.
 
 ## Ola 2: producto
 
@@ -104,13 +122,47 @@ enfocado, y sus observaciones y cuadros de cámara; la política
 tramo de otro municipio (o inexistente) da 404 directamente, sin comparar
 `municipio` a mano.
 
-No hay alta de tramos todavía: a diferencia de `caminos` (que tenía
-`caminos_insert`), la tabla `tramos` solo tiene la política de lectura
-`tramos_select` — la siembra el servidor con la clave secreta
-(`scripts/seed-tramos.mjs`). El listado deja un comentario señalando dónde
-montar el formulario cuando exista esa migración, gateado a
-`perfil.rol === 'municipio' || perfil.rol === 'auditor'`. Ver
-[Pendiente](docs/superpowers/plans/2026-09-04-endurecimiento-y-alcance.md#pendiente).
+#### Alta y edición de tramos (0011)
+
+Solo `municipio`/`auditor` pueden crear o editar un tramo — un `productor`
+nunca ve el botón "Nuevo tramo" ni "Editar", y aunque llamara a la Server
+Action directo, las políticas `tramos_insert_gestion`/`tramos_update_gestion`
+(`rol_actual() in ('municipio', 'auditor')` + `municipio = municipio_actual()`,
+en `using` y `with check`) lo rechazan — la Server Action repite el chequeo de
+rol solo para devolver un mensaje temprano y claro, RLS es el gate real.
+
+- `/dashboard/tramos/nuevo` y `/dashboard/tramos/[id]/editar`
+  (`app/dashboard/tramos/TramoForm.tsx`, compartido por ambas rutas): nombre,
+  localidad, `activo` y la geometría dibujada a mano sobre un mapa Leaflet
+  (`components/MapaDibujarTramo.tsx`) — cada click agrega un vértice, con un
+  botón "Deshacer último punto"; sin biblioteca de dibujo. El km se muestra en
+  vivo mientras se dibuja, calculado con el mismo haversine que usa el resto
+  de la app (`kmDeTrack`, `lib/track.ts`, envuelto en `kmDeGeometria`,
+  `lib/tramos.ts`).
+- **`km` siempre se calcula en el servidor** a partir de la geometría
+  (`crearTramo`/`actualizarTramo`, `app/dashboard/tramos/actions.ts`): el
+  formulario nunca manda un `km`, y el esquema zod (`esquemaTramo`,
+  `lib/validaciones.ts`) ni siquiera lo declara — si igual llegara en el
+  payload, `z.object` lo descarta por defecto. Un `km` que mandara el cliente
+  podría inflar el denominador de cobertura o el progreso propio.
+- No hay política de `delete`: un tramo con historial de cobertura
+  (`cobertura_tramos`, `muestras_sensor`, `fallas_deteccion`, `cuadros`
+  referencian su `id`) no puede desaparecer y arrastrar ese historial con él.
+  En su lugar, columna `activo boolean default true`. **Semántica**: un tramo
+  desactivado deja de contar en todo lo que enumera "los tramos del
+  municipio" hacia adelante — el denominador de `cobertura_municipio`, la
+  lista `/dashboard/tramos` (`lib/tramos-consultas.ts`) y la capa de tramos
+  del mapa (`lib/cobertura-consultas.ts`) filtran por tramos activos. Lo que
+  **no** cambia es el historial ya registrado: `rugosidad_tramos` y
+  `cuadros_por_tramo` agregan filas ya existentes por `tramo_id` y no filtran
+  por `activo` a propósito, y `/dashboard/tramos/<id>` sigue accesible por
+  link directo (con una etiqueta "Inactivo") para reactivarlo o revisar su
+  historial. Semántica completa comentada en
+  `supabase/migrations/0011_alta_tramos.sql`.
+- Columnas de auditoría `creado_por`/`actualizado_at`, selladas por el
+  trigger `tramos_auditoria` (mismo patrón defensivo que
+  `fallas_estado_no_escalar`, 0010: RLS ya exige el rol vía `using`, el
+  trigger es la segunda barrera si una política futura amplía el update).
 
 ### Exportes CSV/GeoJSON
 
@@ -267,7 +319,10 @@ Variables:
 - `ALMACENAMIENTO`: `supabase` (por defecto) o `gcs`. Ver
   [Almacenamiento de evidencia](#almacenamiento-de-evidencia).
 - `GCS_BUCKET`, `GCS_SERVICE_ACCOUNT_KEY`: requeridas solo si
-  `ALMACENAMIENTO=gcs`.
+  `ALMACENAMIENTO=gcs`. `GCS_SERVICE_ACCOUNT_KEY` además se valida al
+  arrancar: tiene que parsear como JSON y traer `client_email`/`private_key`,
+  o `envServidor()` tira un error en español que lo dice (sin loguear la
+  clave). Ver [Almacenamiento de evidencia](#almacenamiento-de-evidencia).
 - `SITE_URL`: opcional, origen público fijo (por ejemplo
   `https://visiovial.example`, sin `/` final) para armar el `redirectTo` del
   email de recuperación de contraseña. Sin definirla, `lib/url-origen.ts` la
@@ -406,6 +461,7 @@ más retención y PITR).
 - `node scripts/smoke.mjs`: smoke test de integración contra el proyecto Supabase real. Ver [Smoke test](#smoke-test-de-integración).
 - `npm run setup` (`node scripts/setup-entorno.mjs [--solo-migraciones] [--dry-run]`): ver [Configuración inicial](#configuración-inicial-npm-run-setup).
 - `npm run borrar-usuario -- <email> [--dry-run]` (`node scripts/borrar-usuario.mjs`): ver [Baja de usuario](#baja-de-usuario).
+- `npm run verificar-gcs` (`node scripts/verificar-gcs.mjs`): checklist post-cutover del bucket GCS (sube, firma, lee, borra, y avisa si el bucket sigue siendo público). Ver [Almacenamiento de evidencia](#almacenamiento-de-evidencia).
 
 ## Migraciones
 
@@ -422,6 +478,8 @@ Las migraciones en `supabase/migrations/` se aplican en orden con `scripts/aplic
 9. `0007_cuadros.sql`: crea `cuadros` (cuadros georreferenciados de la cámara durante el recorrido, con `tramo_id` asignado y ruta al objeto en storage); agrega la función `cuadros_por_tramo`.
 10. `0008_seguridad.sql`: `perfiles` inmutable desde la app salvo `nombre`/`acepto_terminos_at` (trigger `perfiles_no_escalar`); altas de `recorridos` acotadas al municipio propio y sin update desde la app; altas de `fallas_deteccion` solo con `origen = 'manual'`; `search_path` fijo en las funciones `security definer`; tabla `codigos_invitacion` y `handle_new_user` resuelve el municipio por código, no por metadata del cliente; índices que faltaban (`puntos_eventos`, `cobertura_tramos`, `fallas_deteccion`, `cuadros`).
 11. `0009_cupos.sql`: tabla `uso_diario` y función `consumir_cupo` (cupos diarios de subidas y recorridos, ver [Cupos diarios](#cupos-diarios)); restricción única `(recorrido_id, motivo)` en `puntos_eventos` para que el upsert reemplace el borrado-y-reinserción anterior.
+12. `0010_estado_observaciones.sql`: estado de gestión de una observación (`pendiente`/`en_obra`/`resuelta`/`descartada`), escribible solo por `municipio`/`auditor` (grant por columna + RLS + trigger `fallas_estado_no_escalar`); función `resumen_observaciones`.
+13. `0011_alta_tramos.sql`: políticas `tramos_insert_gestion`/`tramos_update_gestion` (alta y edición para `municipio`/`auditor`, dentro de su propio municipio; sin política de delete); columna `activo` (el denominador de `cobertura_municipio` cuenta solo tramos activos, ver [Alta y edición de tramos](#alta-y-edición-de-tramos-0011)); columnas de auditoría `creado_por`/`actualizado_at` y trigger `tramos_auditoria`.
 
 ## Capas
 
@@ -435,26 +493,79 @@ Archivos estáticos en `public/capas/<slug-de-municipio>/`, registrados por slug
 ## Almacenamiento de evidencia
 
 Las fotos y videos de las observaciones se suben desde el navegador con un `PUT`
-a una URL firmada que devuelve la Server Action `prepararSubida`. El proveedor se
-elige con la variable `ALMACENAMIENTO`:
+a una URL firmada que devuelve la Server Action `prepararSubida`, y se leen con
+una URL firmada de lectura (nunca una URL pública fija). El proveedor se elige
+con la variable `ALMACENAMIENTO`, y los dos exponen el mismo contrato
+(`lib/almacenamiento/tipos.ts`): en la base se guarda siempre la **ruta**
+dentro del bucket, y se firma una URL de lectura de 1 h recién al mostrarla
+(`urlLectura` para una sola ruta, `urlsLectura` para firmar muchas de una
+vez — el mapa firma en lote con concurrencia acotada en vez de mandar
+cientos de pedidos sueltos, ver `lib/concurrencia.ts`).
 
 - **Supabase Storage** (por defecto, `ALMACENAMIENTO=supabase` o sin definir):
-  usa `createSignedUploadUrl` sobre el bucket `evidencia-vial`. En la base se
-  guarda la **ruta** dentro del bucket y se firma una URL de lectura de 1 h cada
-  vez que hay que mostrarla.
-- **Google Cloud Storage** (`ALMACENAMIENTO=gcs`): usa una URL firmada V4 de
-  escritura válida 15 minutos. Requiere `GCS_BUCKET` (por ejemplo `maipu-pba`) y
+  usa `createSignedUploadUrl` para subir y `createSignedUrl`/`createSignedUrls`
+  sobre el bucket `evidencia-vial` para leer.
+- **Google Cloud Storage** (`ALMACENAMIENTO=gcs`): usa `getSignedUrl` V4 tanto
+  para subir (`action: 'write'`, 15 min) como para leer (`action: 'read'`,
+  1 h). Requiere `GCS_BUCKET` (por ejemplo `maipu-pba`) y
   `GCS_SERVICE_ACCOUNT_KEY` con el JSON de la cuenta de servicio **en una sola
-  línea**. En la base se guarda la URL pública
-  `https://storage.googleapis.com/<bucket>/<ruta>`.
+  línea**; `envServidor()` valida al arrancar que el JSON parsee y tenga
+  `client_email`/`private_key` — una clave rota se detecta ahí, no en el
+  primer pedido de un usuario.
 
-Para GCS el bucket debe ser de **lectura pública** (`allUsers` con rol
-`Storage Object Viewer`) y tener CORS que habilite `PUT` desde el dominio de la
-app:
+### El bucket de GCS debe ser privado
 
-```json
-[{ "origin": ["https://tu-dominio"], "method": ["PUT", "GET"], "responseHeader": ["Content-Type"], "maxAgeSeconds": 3600 }]
-```
+**El bucket NO debe ser público.** Con URLs de lectura firmadas ya no hace
+falta lectura pública, y dejarla habilitada expone las fotos y cuadros de
+cámara de todos los municipios a cualquiera que adivine una ruta. Checklist
+del cutover a un bucket nuevo (por ejemplo `maipu-pba`):
+
+1. **Uniform bucket-level access, sin `allUsers`.** Crear el bucket con
+   acceso uniforme a nivel de bucket y no otorgar ningún rol a `allUsers` ni
+   `allAuthenticatedUsers`. Si el bucket viene de antes con lectura pública,
+   sacar ese acceso:
+
+   ```bash
+   gsutil iam ch -d allUsers:objectViewer gs://maipu-pba
+   ```
+
+2. **La cuenta de servicio solo necesita `roles/storage.objectAdmin`**, y
+   acotado a ese bucket (no a nivel de proyecto):
+
+   ```bash
+   gsutil iam ch serviceAccount:cuenta@proyecto.iam.gserviceaccount.com:roles/storage.objectAdmin gs://maipu-pba
+   ```
+
+3. **CORS para `PUT`**: las subidas firmadas van directo del navegador al
+   bucket (origen cruzado), así que el bucket necesita CORS habilitado para el
+   dominio de la app. Guardar como `cors.json`:
+
+   ```json
+   [
+     {
+       "origin": ["https://tu-dominio"],
+       "method": ["PUT", "GET"],
+       "responseHeader": ["Content-Type"],
+       "maxAgeSeconds": 3600
+     }
+   ]
+   ```
+
+   y aplicarlo con:
+
+   ```bash
+   gsutil cors set cors.json gs://maipu-pba
+   ```
+
+4. **Variables de entorno**: `ALMACENAMIENTO=gcs`, `GCS_BUCKET=maipu-pba`,
+   `GCS_SERVICE_ACCOUNT_KEY` con el JSON de la cuenta de servicio en una sola
+   línea (ver arriba).
+
+5. **Verificar**: con esas variables ya configuradas, correr
+   `npm run verificar-gcs` (`scripts/verificar-gcs.mjs`). Sube un objeto
+   chico, firma una URL de lectura, la descarga, la borra, y además chequea
+   que la URL pública del objeto (sin firmar) **no** devuelva 200 — si
+   devuelve 200, el bucket sigue siendo público y hay que revisar el paso 1.
 
 Las fotos se comprimen en el teléfono antes de subirlas (`lib/imagenes.ts`:
 1600 px de lado mayor, JPEG calidad 0.8); los videos se suben sin transcodificar
@@ -515,6 +626,7 @@ Checklist para validar el flujo v2 completo en el proyecto Supabase real:
 - [ ] Durante la grabación se ve la vista previa chica de la cámara y el contador de cuadros capturados.
 - [ ] Después de "Finalizar" con WiFi disponible, el resumen pasa a mostrar "Cuadros subidos".
 - [ ] En `/dashboard/mapa`, el toggle "Cuadros" muestra los marcadores con miniatura en el popup y permite navegar anterior/siguiente dentro del tramo.
+- [ ] Con "Difuminar caras y vehículos" activado (por defecto) y WiFi disponible, los cuadros del mapa se ven con las caras/vehículos detectados pixelados en la miniatura; el resumen del recorrido muestra "Difuminando caras y vehículos y subiendo cuadros…" mientras la cola procesa.
 - [ ] `/dashboard/observaciones` muestra el listado con estado; con un usuario `municipio`/`auditor`, cambiar el estado desde `EstadoSelect` y ver que persiste al recargar; con un usuario `productor`, el estado se ve como badge de solo lectura.
 - [ ] Exportar CSV y GeoJSON desde `/dashboard/observaciones` descargan un archivo con los datos filtrados.
 - [ ] `/dashboard/tramos` lista los tramos con km, estado estimado y última visita; entrar a un tramo muestra el detalle con mapa, observaciones y cuadros.
@@ -531,4 +643,4 @@ Con `npm run dev` corriendo y `SUPABASE_ACCESS_TOKEN` en el entorno:
 node scripts/smoke.mjs
 ```
 
-Verifica contra el proyecto Supabase real: trigger de perfil, gate de términos (`/terminos`, `/dashboard`), RLS de `tramos`/`recorridos`/`cobertura_tramos`/`puntos_eventos`/`fallas_deteccion` por municipio y por propietario, las funciones `cobertura_municipio` y `ranking_municipio`, políticas de storage por municipio, las tres capas del estado de observación (grant de columna + RLS + trigger `fallas_estado_no_escalar`, migración 0010) y `resumen_observaciones`, las rutas `/dashboard/tramos`, `/dashboard/tramos/<id>` y la baja de `/dashboard/caminos` (404), los exportes CSV/GeoJSON de observaciones, `/recuperar`, `/nueva-clave` y `/auth/confirm`, y las rutas públicas de la PWA (`/manifest.json`, `/sw.js`, `/offline`). Crea y borra sus propios datos de prueba (usuarios, recorridos, cobertura, puntos, observaciones, archivo de storage).
+Verifica contra el proyecto Supabase real: trigger de perfil, gate de términos (`/terminos`, `/dashboard`), RLS de `tramos`/`recorridos`/`cobertura_tramos`/`puntos_eventos`/`fallas_deteccion` por municipio y por propietario, las funciones `cobertura_municipio` y `ranking_municipio`, políticas de storage por municipio, las tres capas del estado de observación (grant de columna + RLS + trigger `fallas_estado_no_escalar`, migración 0010) y `resumen_observaciones`, las rutas `/dashboard/tramos`, `/dashboard/tramos/<id>` y la baja de `/dashboard/caminos` (404), el alta/edición de tramos (0011: RLS `tramos_insert_gestion`/`tramos_update_gestion` bloquea a un `productor` y a un `municipio` insertando en otro municipio, la clave secreta puede, y el denominador de `cobertura_municipio` deja de contar un tramo apenas se lo marca `activo = false` sin borrarlo, sección 13), los exportes CSV/GeoJSON de observaciones, `/recuperar`, `/nueva-clave` y `/auth/confirm`, y las rutas públicas de la PWA (`/manifest.json`, `/sw.js`, `/offline`). Crea y borra sus propios datos de prueba (usuarios, recorridos, cobertura, puntos, observaciones, tramos, archivo de storage).

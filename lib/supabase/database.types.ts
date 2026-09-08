@@ -486,6 +486,9 @@ export type Database = {
       }
       tramos: {
         Row: {
+          activo: boolean
+          actualizado_at: string | null
+          creado_por: string | null
           geometria: Json
           id: string
           km: number
@@ -494,6 +497,9 @@ export type Database = {
           nombre_codigo: string
         }
         Insert: {
+          activo?: boolean
+          actualizado_at?: string | null
+          creado_por?: string | null
           geometria: Json
           id: string
           km: number
@@ -502,6 +508,9 @@ export type Database = {
           nombre_codigo: string
         }
         Update: {
+          activo?: boolean
+          actualizado_at?: string | null
+          creado_por?: string | null
           geometria?: Json
           id?: string
           km?: number
@@ -509,7 +518,15 @@ export type Database = {
           municipio?: string
           nombre_codigo?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "tramos_creado_por_fkey"
+            columns: ["creado_por"]
+            isOneToOne: false
+            referencedRelation: "perfiles"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       uso_diario: {
         Row: {

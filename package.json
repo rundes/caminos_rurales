@@ -1,6 +1,6 @@
 {
   "name": "caminos_rurales",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "engines": {
     "node": ">=20.9"
@@ -15,12 +15,19 @@
     "test:coverage": "vitest run --coverage",
     "tipos": "node scripts/generar-tipos.mjs",
     "setup": "node scripts/setup-entorno.mjs",
-    "borrar-usuario": "node scripts/borrar-usuario.mjs"
+    "borrar-usuario": "node scripts/borrar-usuario.mjs",
+    "verificar-gcs": "node scripts/verificar-gcs.mjs"
   },
   "dependencies": {
     "@google-cloud/storage": "^8.0.1",
     "@supabase/ssr": "^0.12.5",
     "@supabase/supabase-js": "^2.114.0",
+    "@tensorflow-models/blazeface": "^0.1.0",
+    "@tensorflow-models/coco-ssd": "^2.2.3",
+    "@tensorflow/tfjs-backend-cpu": "^4.22.0",
+    "@tensorflow/tfjs-backend-webgl": "^4.22.0",
+    "@tensorflow/tfjs-converter": "^4.22.0",
+    "@tensorflow/tfjs-core": "^4.22.0",
     "idb": "^8.0.3",
     "leaflet": "^1.9.4",
     "next": "16.3.4",

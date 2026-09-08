@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { parsearCredencialesGcs } from '@/lib/almacenamiento/gcs-credenciales'
 
 /**
  * Esquema completo del entorno. `SUPABASE_SECRET_KEY` es opcional a nivel de
@@ -37,6 +38,14 @@ const esquemaServidor = esquemaBase.superRefine((valores, ctx) => {
       path: ['GCS_SERVICE_ACCOUNT_KEY'],
       message: 'requerida cuando ALMACENAMIENTO=gcs',
     })
+    return
+  }
+  // Validar acá (al arrancar) en vez de recién al firmar la primera subida o
+  // lectura: una clave mal formada o incompleta se detecta una sola vez, con
+  // un mensaje claro, en vez de romper en el primer pedido de un usuario.
+  const credenciales = parsearCredencialesGcs(valores.GCS_SERVICE_ACCOUNT_KEY)
+  if (!credenciales.ok) {
+    ctx.addIssue({ code: 'custom', path: ['GCS_SERVICE_ACCOUNT_KEY'], message: credenciales.error })
   }
 })
 

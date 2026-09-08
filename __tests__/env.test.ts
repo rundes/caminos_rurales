@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterEach, beforeEach, describe, expect, test } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { envPublico, envServidor, limpiarCacheEnvServidor } from '@/lib/env'
 
 const URL_VALIDA = 'https://sb.example.co'
@@ -85,13 +85,49 @@ describe('envServidor', () => {
     expect(() => envServidor()).toThrow(/GCS_SERVICE_ACCOUNT_KEY/)
   })
 
-  test('ALMACENAMIENTO=gcs con GCS_BUCKET y GCS_SERVICE_ACCOUNT_KEY pasa', () => {
+  test('ALMACENAMIENTO=gcs con GCS_BUCKET y GCS_SERVICE_ACCOUNT_KEY válidas pasa', () => {
     process.env.ALMACENAMIENTO = 'gcs'
     process.env.GCS_BUCKET = 'maipu-pba'
-    process.env.GCS_SERVICE_ACCOUNT_KEY = '{}'
+    process.env.GCS_SERVICE_ACCOUNT_KEY = JSON.stringify({
+      client_email: 'cuenta@maipu-pba.iam.gserviceaccount.com',
+      private_key: '-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n',
+    })
     const env = envServidor()
     expect(env.ALMACENAMIENTO).toBe('gcs')
     expect(env.GCS_BUCKET).toBe('maipu-pba')
+  })
+
+  test('ALMACENAMIENTO=gcs con GCS_SERVICE_ACCOUNT_KEY que no es JSON falla con un mensaje claro', () => {
+    process.env.ALMACENAMIENTO = 'gcs'
+    process.env.GCS_BUCKET = 'maipu-pba'
+    process.env.GCS_SERVICE_ACCOUNT_KEY = 'no-es-json'
+    expect(() => envServidor()).toThrow(/GCS_SERVICE_ACCOUNT_KEY.*JSON válido/)
+  })
+
+  test('ALMACENAMIENTO=gcs con GCS_SERVICE_ACCOUNT_KEY sin client_email ni private_key falla nombrando el campo', () => {
+    process.env.ALMACENAMIENTO = 'gcs'
+    process.env.GCS_BUCKET = 'maipu-pba'
+    process.env.GCS_SERVICE_ACCOUNT_KEY = '{}'
+    expect(() => envServidor()).toThrow(/client_email/)
+  })
+
+  test('ALMACENAMIENTO=gcs con GCS_SERVICE_ACCOUNT_KEY sin private_key falla nombrando el campo', () => {
+    process.env.ALMACENAMIENTO = 'gcs'
+    process.env.GCS_BUCKET = 'maipu-pba'
+    process.env.GCS_SERVICE_ACCOUNT_KEY = JSON.stringify({ client_email: 'cuenta@maipu-pba.iam.gserviceaccount.com' })
+    expect(() => envServidor()).toThrow(/private_key/)
+  })
+
+  test('no registra el contenido de la clave al fallar la validación', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    process.env.ALMACENAMIENTO = 'gcs'
+    process.env.GCS_BUCKET = 'maipu-pba'
+    process.env.GCS_SERVICE_ACCOUNT_KEY = 'un-secreto-que-no-debe-aparecer-en-ningun-log'
+    expect(() => envServidor()).toThrow()
+    for (const llamada of spy.mock.calls) {
+      expect(llamada.join(' ')).not.toContain('un-secreto-que-no-debe-aparecer-en-ningun-log')
+    }
+    spy.mockRestore()
   })
 
   test('un ALMACENAMIENTO fuera del enum falla', () => {

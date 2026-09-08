@@ -4,10 +4,11 @@ import { useMemo, useState, type ReactNode } from 'react'
 import { Boton } from '@/components/Boton'
 import type { CapasMunicipio as CapasMunicipioTipo } from '@/lib/capas'
 import type { ControlCamara } from '@/hooks/useCamara'
+import type { Interrupcion } from '@/hooks/useGrabadorGps'
 import type { EstadoSensores } from '@/hooks/useSensores'
 import type { Grabador } from '@/lib/local/grabador'
 import { partirEnSegmentos, simplificar, type PuntoGps } from '@/lib/track'
-import { formatearKm, formatearPrecision, formatearVelocidad } from './formato'
+import { formatearHora, formatearKm, formatearPrecision, formatearVelocidad } from './formato'
 import { MapaRecorridoCliente } from './MapaRecorridoCliente'
 import { Reloj } from './Reloj'
 import { VistaCamara } from './VistaCamara'
@@ -33,6 +34,8 @@ type Props = {
   centro: [number, number]
   capas: CapasMunicipioTipo | null
   error: string | null
+  /** Interrupción detectada (2° plano, sin señal) que dejó la grabación en pausa sin que la tocaran. */
+  interrupcionActual?: Interrupcion | null
   sensores: EstadoPanelSensores
   camara: EstadoPanelCamara
   /** El cierre está en curso: deshabilita el botón para que un doble tap no lo dispare dos veces. */
@@ -118,6 +121,7 @@ export function PanelGrabacion({
   centro,
   capas,
   error,
+  interrupcionActual = null,
   sensores,
   camara,
   finalizando,
@@ -208,7 +212,14 @@ export function PanelGrabacion({
         onAlternar={camara.onAlternar}
       />
 
-      {!grabando && (
+      {!grabando && interrupcionActual && (
+        <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm font-medium text-red-900">
+          Se interrumpió la grabación: el tramo entre las {formatearHora(interrupcionActual.desde)} y
+          las {formatearHora(interrupcionActual.hasta)} no quedó registrado. Tocá &quot;Reanudar&quot;
+          para seguir.
+        </p>
+      )}
+      {!grabando && !interrupcionActual && (
         <p role="status" className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">
           Recorrido en pausa: no se están registrando puntos.
         </p>

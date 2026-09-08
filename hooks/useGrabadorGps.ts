@@ -12,6 +12,7 @@ import {
   pausar as pausarGrabador,
   reanudar as reanudarGrabador,
   retomar as retomarGrabador,
+  UMBRAL_INTERRUPCION_MS,
   type EstadoGrabacion,
   type Grabador,
 } from '@/lib/local/grabador'
@@ -50,18 +51,35 @@ export type OpcionesGrabador = {
   onPunto?: (punto: PuntoGps, posicion?: GeolocationPosition) => void
 }
 
+/**
+ * Hueco en la grabación causado por una interrupción detectada (2° plano,
+ * pantalla bloqueada, sin señal de GPS por más de `UMBRAL_INTERRUPCION_MS`):
+ * entre `desde` y `hasta` (epoch ms) no se registró ningún punto.
+ */
+export type Interrupcion = { desde: number; hasta: number }
+
 export type ControlGrabador = {
   estado: Grabador
   error: string | null
   precision: number | null
   /** Track completo en memoria. No es estado: leerlo no dispara renders. */
   obtenerPuntos: () => readonly PuntoGps[]
+  /**
+   * La interrupción más reciente mientras sigue sin reconocerse (el grabador
+   * está pausado por eso, no por un pausado manual). Se limpia al reanudar.
+   */
+  interrupcionActual: Interrupcion | null
+  /** Todas las interrupciones detectadas en este recorrido, para el resumen. */
+  interrupciones: readonly Interrupcion[]
   iniciar: () => Promise<void>
   retomar: (recorridoId: string) => Promise<void>
   pausar: () => void
   reanudar: () => void
   finalizar: () => Promise<ResultadoCierre | null>
 }
+
+/** Cada cuánto se chequea si pasó el umbral de interrupción mientras se graba. */
+const INTERVALO_CHEQUEO_INTERRUPCION_MS = 5000
 
 function mensajeGps(error: GeolocationPositionError): string {
   return ERRORES_GPS[error.code] ?? 'No pudimos obtener tu ubicación.'
@@ -78,7 +96,15 @@ const ESTADO_GLOBAL: Record<EstadoGrabacion, EstadoGrabacionGlobal> = {
 /**
  * Graba el recorrido con `watchPosition`, filtra y persiste cada punto
  * aceptado en IndexedDB y mantiene la pantalla encendida. Solo graba con la
- * app en primer plano (documentado en los términos).
+ * app en primer plano (documentado en los términos y avisado antes de
+ * arrancar, ver `PantallaInicio`): no hay geolocalización confiable en 2°
+ * plano en la web, así que una interrupción (pantalla bloqueada, app
+ * cambiada, o una zona sin señal) corta la grabación en vez de dibujar una
+ * recta sobre lo que no se recorrió. La detecta un watchdog por tiempo (ver
+ * `UMBRAL_INTERRUPCION_MS`), reforzado por `visibilitychange`/`pageshow`/
+ * `pagehide` y por la pérdida inesperada del wake lock; al detectarla,
+ * pausa igual que un pausado manual (reusa `cortes`/`pausarGrabador`) y
+ * expone el hueco en `interrupcionActual`/`interrupciones`.
  *
  * El track vive en un `ref`: lo único que llega al render es el agregado (`km`,
  * `ultimo`, `cantidad`, `precision`), así un recorrido largo no re-renderiza la
@@ -88,9 +114,16 @@ export function useGrabadorGps({ usuarioId, municipio, onPunto }: OpcionesGrabad
   const [estado, setEstado] = useState<Grabador>(GRABADOR_INICIAL)
   const [error, setError] = useState<string | null>(null)
   const [precision, setPrecision] = useState<number | null>(null)
+  const [interrupcionActual, setInterrupcionActual] = useState<Interrupcion | null>(null)
+  const [interrupciones, setInterrupciones] = useState<readonly Interrupcion[]>([])
   const actual = useRef<Grabador>(GRABADOR_INICIAL)
   const puntos = useRef<PuntoGps[]>([])
   const ultimaPrecision = useRef(0)
+  // Última vez que llegó CUALQUIER lectura del GPS, la acepte o no el filtro
+  // (una posición filtrada por estar quieto en un semáforo no es una
+  // interrupción). El watchdog compara esto contra el umbral, no contra el
+  // último punto aceptado.
+  const ultimaRecepcion = useRef(0)
   // En un `ref` para que cambiar el callback no reabra el `watchPosition`.
   const alPuntoExterno = useRef(onPunto)
 
@@ -108,8 +141,33 @@ export function useGrabadorGps({ usuarioId, municipio, onPunto }: OpcionesGrabad
 
   const obtenerPuntos = useCallback(() => puntos.current, [])
 
+  /**
+   * Corta la grabación (igual que un pausado manual, ver `pausarGrabador`) y
+   * registra el hueco `[desde, ahora]` para avisar en vivo y en el resumen.
+   * No hace nada si ya no se estaba grabando (interrupción ya reconocida, o
+   * pausado manual de por medio).
+   */
+  const marcarInterrupcion = useCallback(
+    (desde: number) => {
+      if (actual.current.estado !== 'grabando') return
+      const hasta = Date.now()
+      aplicar(pausarGrabador(actual.current))
+      const nueva: Interrupcion = { desde, hasta }
+      setInterrupcionActual(nueva)
+      setInterrupciones((previas) => [...previas, nueva])
+    },
+    [aplicar],
+  )
+
+  const chequearInterrupcion = useCallback(() => {
+    if (actual.current.estado !== 'grabando') return
+    if (Date.now() - ultimaRecepcion.current > UMBRAL_INTERRUPCION_MS) {
+      marcarInterrupcion(ultimaRecepcion.current)
+    }
+  }, [marcarInterrupcion])
+
   const grabando = estado.estado === 'grabando'
-  useWakeLock(grabando || estado.estado === 'pausado')
+  useWakeLock(grabando || estado.estado === 'pausado', chequearInterrupcion)
 
   // La nav inferior (fuera de este árbol) necesita saber si hay una grabación
   // en curso para bloquearse: se publica en un store aparte, no en contexto.
@@ -118,12 +176,36 @@ export function useGrabadorGps({ usuarioId, municipio, onPunto }: OpcionesGrabad
     return () => fijarEstadoGrabacion('inactivo')
   }, [estado.estado])
 
+  // Watchdog: mientras se graba, revisa cada `INTERVALO_CHEQUEO_INTERRUPCION_MS`
+  // si pasó el umbral desde la última lectura del GPS. `setInterval` no corre
+  // mientras la pestaña está oculta, así que la revisión inmediata al volver
+  // a estar visible (o al restaurarse desde el cache de retroceso) es la que
+  // realmente detecta una interrupción por 2° plano; el intervalo cubre el
+  // caso de quedarse en primer plano sin señal (zona sin GPS).
+  useEffect(() => {
+    if (!grabando) return
+    const id = setInterval(chequearInterrupcion, INTERVALO_CHEQUEO_INTERRUPCION_MS)
+    const alVolverVisible = () => {
+      if (document.visibilityState === 'visible') chequearInterrupcion()
+    }
+    document.addEventListener('visibilitychange', alVolverVisible)
+    window.addEventListener('pageshow', chequearInterrupcion)
+    window.addEventListener('pagehide', chequearInterrupcion)
+    return () => {
+      clearInterval(id)
+      document.removeEventListener('visibilitychange', alVolverVisible)
+      window.removeEventListener('pageshow', chequearInterrupcion)
+      window.removeEventListener('pagehide', chequearInterrupcion)
+    }
+  }, [grabando, chequearInterrupcion])
+
   useEffect(() => {
     if (!grabando) return
     const geolocalizacion = typeof navigator === 'undefined' ? undefined : navigator.geolocation
     if (!geolocalizacion) return
 
     const alPunto = (posicion: GeolocationPosition) => {
+      ultimaRecepcion.current = Date.now()
       const punto: PuntoGps = {
         lat: posicion.coords.latitude,
         lng: posicion.coords.longitude,
@@ -182,6 +264,9 @@ export function useGrabadorGps({ usuarioId, municipio, onPunto }: OpcionesGrabad
     cola.reiniciar()
     setError(null)
     setPrecision(null)
+    setInterrupcionActual(null)
+    setInterrupciones([])
+    ultimaRecepcion.current = ahora
     aplicar(iniciarGrabador(id, ahora))
   }, [usuarioId, municipio, aplicar, cola])
 
@@ -194,7 +279,22 @@ export function useGrabadorGps({ usuarioId, municipio, onPunto }: OpcionesGrabad
         puntos.current = guardados.map((p) => ({ lat: p.lat, lng: p.lng, t: p.t, precision: p.precision }))
         cola.reiniciar()
         setError(null)
-        aplicar(retomarGrabador(recorridoId, Date.parse(recorrido.inicio), puntos.current))
+        setInterrupcionActual(null)
+        setInterrupciones([])
+        const ahora = Date.now()
+        ultimaRecepcion.current = ahora
+        const siguiente = retomarGrabador(recorridoId, Date.parse(recorrido.inicio), puntos.current, ahora)
+        // `retomarGrabador` ya decidió (con el mismo umbral) si el tiempo que
+        // pasó desde el último punto guardado hasta ahora fue una
+        // interrupción real: si agregó un corte, hay que avisarla igual que
+        // una detectada en vivo, para el resumen y el aviso en pantalla.
+        const ultimoGuardado = puntos.current[puntos.current.length - 1]
+        if (siguiente.cortes.length > 0 && ultimoGuardado) {
+          const nueva: Interrupcion = { desde: ultimoGuardado.t, hasta: ahora }
+          setInterrupcionActual(nueva)
+          setInterrupciones([nueva])
+        }
+        aplicar(siguiente)
       } catch (fallo) {
         console.error('[grabador]', fallo)
         setError(ERROR_GUARDADO)
@@ -204,7 +304,11 @@ export function useGrabadorGps({ usuarioId, municipio, onPunto }: OpcionesGrabad
   )
 
   const pausar = useCallback(() => aplicar(pausarGrabador(actual.current)), [aplicar])
-  const reanudar = useCallback(() => aplicar(reanudarGrabador(actual.current)), [aplicar])
+  const reanudar = useCallback(() => {
+    ultimaRecepcion.current = Date.now()
+    setInterrupcionActual(null)
+    aplicar(reanudarGrabador(actual.current))
+  }, [aplicar])
 
   const finalizar = useCallback(async () => {
     const recorridoId = actual.current.recorridoId
@@ -222,5 +326,17 @@ export function useGrabadorGps({ usuarioId, municipio, onPunto }: OpcionesGrabad
     }
   }, [aplicar, cola])
 
-  return { estado, error, precision, obtenerPuntos, iniciar, retomar, pausar, reanudar, finalizar }
+  return {
+    estado,
+    error,
+    precision,
+    obtenerPuntos,
+    interrupcionActual,
+    interrupciones,
+    iniciar,
+    retomar,
+    pausar,
+    reanudar,
+    finalizar,
+  }
 }

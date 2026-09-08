@@ -3,9 +3,10 @@
 import type { ResumenRecorrido as Resumen } from '@/app/dashboard/recorrido/actions'
 import { Boton } from '@/components/Boton'
 import { Insignia } from '@/components/Insignia'
+import type { Interrupcion } from '@/hooks/useGrabadorGps'
 import { ETIQUETA_INSIGNIA } from '@/lib/juego'
 import type { CalidadSegmento } from '@/lib/sensores/tipos'
-import { formatearKm } from './formato'
+import { formatearHora, formatearKm } from './formato'
 
 type Props = {
   km: number
@@ -13,6 +14,8 @@ type Props = {
   resumen: Resumen | null
   /** Sin señal el recorrido queda esperando; con señal se está subiendo. */
   sinConexion: boolean
+  /** Huecos por interrupción de la grabación (2° plano, sin señal): esos tramos no se relevaron. */
+  interrupciones?: readonly Interrupcion[]
   /** Cuadros de cámara capturados en el recorrido y los que faltan subir. */
   cuadros?: number
   cuadrosPendientes?: number
@@ -20,6 +23,10 @@ type Props = {
   cuadrosError?: number
   /** `false` cuando no pudimos confirmar que la red sea WiFi (iOS no lo informa). */
   redVerificada?: boolean
+  /** La cola de cuadros está trabajando ahora mismo (difuminando y/o subiendo). */
+  procesandoCuadros?: boolean
+  /** Si el ajuste "difuminar caras y vehículos" está activado en este dispositivo. */
+  privacidadActivada?: boolean
   /** Fuerza la subida de cuadros con datos móviles, saltando el ajuste de WiFi. */
   onSubirCuadros?: () => void
   /** Motivo por el que la subida del recorrido falló del todo (agotó los reintentos). */
@@ -48,6 +55,28 @@ function Dato({ etiqueta, valor }: { etiqueta: string; valor: string | number })
     <div className="rounded-xl bg-gray-50 p-3 text-center">
       <p className="text-xl font-bold text-green-800">{valor}</p>
       <p className="text-xs text-gray-600">{etiqueta}</p>
+    </div>
+  )
+}
+
+/** Lista de huecos de la grabación por interrupción: no cuentan como relevados. */
+function AvisoInterrupciones({ interrupciones }: { interrupciones: readonly Interrupcion[] }) {
+  if (interrupciones.length === 0) return null
+  return (
+    <div role="status" className="flex flex-col gap-1 rounded-xl bg-amber-50 p-3 text-sm text-amber-900">
+      <p className="font-semibold">
+        {interrupciones.length === 1
+          ? 'La grabación se interrumpió 1 vez.'
+          : `La grabación se interrumpió ${interrupciones.length} veces.`}{' '}
+        Esos tramos no quedaron relevados:
+      </p>
+      <ul className="list-disc pl-5">
+        {interrupciones.map((i) => (
+          <li key={`${i.desde}-${i.hasta}`}>
+            {formatearHora(i.desde)} a {formatearHora(i.hasta)}
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }
@@ -87,10 +116,13 @@ export function ResumenRecorrido({
   puntosGps,
   resumen,
   sinConexion,
+  interrupciones = [],
   cuadros = 0,
   cuadrosPendientes = 0,
   cuadrosError = 0,
   redVerificada = true,
+  procesandoCuadros = false,
+  privacidadActivada = true,
   onSubirCuadros,
   error = null,
   onReintentar,
@@ -108,6 +140,8 @@ export function ResumenRecorrido({
         <Dato etiqueta="puntos GPS" valor={puntosGps} />
         <Dato etiqueta="puntos ganados" valor={resumen?.puntos ?? 0} />
       </div>
+
+      <AvisoInterrupciones interrupciones={interrupciones} />
 
       {error ? (
         <div role="alert" className="flex flex-col gap-3 rounded-xl bg-red-50 p-4 text-sm text-red-900">
@@ -149,6 +183,11 @@ export function ResumenRecorrido({
             Cuadros: {cuadros} capturados
             {cuadrosPendientes > 0 ? ` · ${cuadrosPendientes} pendientes de subir (WiFi)` : ''}
           </p>
+          {procesandoCuadros && cuadrosPendientes > 0 && (
+            <p role="status" className="text-sm text-gray-600">
+              {privacidadActivada ? 'Difuminando caras y vehículos y subiendo cuadros…' : 'Subiendo cuadros…'}
+            </p>
+          )}
           {cuadrosError > 0 && (
             <p role="status" className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">
               {cuadrosError} cuadros no pudieron subirse

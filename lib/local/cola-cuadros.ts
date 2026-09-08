@@ -49,6 +49,15 @@ export type DepsCuadros = {
   registrarCuadros: RegistrarCuadros
   ahora: () => number
   red: () => EstadoRed
+  /**
+   * Difumina un cuadro (caras, personas, vehículos — ver `lib/privacidad/`) y
+   * devuelve el blob nuevo. Si tira, el cuadro no se sube en esta pasada (ver
+   * `difuminarSiHaceFalta`): el fallo se trata igual que cualquier otro
+   * fallo de la subida, con el mismo backoff.
+   */
+  difuminar: (blob: Blob) => Promise<Blob>
+  /** Si el ajuste "difuminar caras y vehículos" está activado en este dispositivo. */
+  privacidadActivada: () => boolean
 }
 
 export type ResultadoColaCuadros = {
@@ -101,6 +110,24 @@ async function registrarFallo(
     proximoIntento: deps.ahora() + esperaBackoff(intentos),
     ultimoError: mensaje,
   })
+}
+
+/**
+ * Difumina el cuadro si el ajuste está activado y todavía no se le aplicó
+ * (`difuminado` en falso): persiste el resultado (fila + blob) antes de
+ * devolverlo, así un reintento de subida no lo vuelve a difuminar (lossy) ni
+ * termina subiendo el original sin procesar si la subida en sí falla
+ * después. Si `difuminar` tira (modelo que no cargó, inferencia que
+ * explotó), no hay resultado parcial ni original de respaldo: la excepción
+ * se propaga tal cual y la maneja el catch de `subirCuadrosDe`, con el mismo
+ * backoff que cualquier otro fallo — la imagen sin procesar nunca llega a
+ * `subirCuadro`.
+ */
+async function difuminarSiHaceFalta(cuadro: CuadroConBlob, deps: DepsCuadros): Promise<CuadroConBlob> {
+  if (!deps.privacidadActivada() || cuadro.difuminado || !cuadro.blob) return cuadro
+  const blobDifuminado = await deps.difuminar(cuadro.blob)
+  await deps.db.marcarDifuminado(cuadro.id, blobDifuminado)
+  return { ...cuadro, blob: blobDifuminado, difuminado: true }
 }
 
 /** Sube un cuadro y devuelve la fila que hay que registrar en el servidor. */
@@ -161,8 +188,9 @@ async function subirCuadrosDe(recorridoId: string, deps: DepsCuadros): Promise<n
           await deps.db.marcarCuadro(cuadro.id, 'error')
           continue
         }
-        filas.push(await subirCuadro(cuadro, recorridoId, deps))
-        ids.push(cuadro.id)
+        const listo = await difuminarSiHaceFalta(cuadro, deps)
+        filas.push(await subirCuadro(listo, recorridoId, deps))
+        ids.push(listo.id)
       }
       if (filas.length === 0) continue
 

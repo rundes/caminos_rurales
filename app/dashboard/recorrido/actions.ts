@@ -23,7 +23,7 @@ import {
 } from '@/lib/recorrido-servidor'
 import { crearClienteAdmin } from '@/lib/supabase/admin'
 import { crearClienteServidor } from '@/lib/supabase/server'
-import { evaluarPlausibilidad, kmDeTrack } from '@/lib/track'
+import { derivarCortesDeTrack, evaluarPlausibilidad, kmDeTrack } from '@/lib/track'
 import type { ResultadoAccion } from '@/lib/tipos'
 import { esquemaCuadros, esquemaRecorrido, primerError } from '@/lib/validaciones'
 
@@ -82,7 +82,31 @@ export async function finalizarRecorrido(payload: unknown): Promise<ResultadoRec
   if (!parseo.success) return { ok: false, error: primerError(parseo.error), definitivo: true }
   const datos = parseo.data
 
-  const kmCrudo = kmDeTrack(coordenadasDeTrack(datos.track))
+  // Antitrampa: los cortes del track no salen de lo que declare el cliente
+  // (podría ocultar una pausa mandando cortes de menos, o inventar una para
+  // recortar km de más) sino de dos señales independientes que el propio
+  // servidor deriva (`derivarCortesDeTrack`, `lib/track.ts`), y de las que
+  // toma la unión (alcanza con que una sola detecte el corte):
+  // - velocidad implícita directa sobre `datos.puntos` (alineado índice a
+  //   índice con `datos.track` — `esquemaRecorrido` lo exige y rechaza el
+  //   payload si no): si la distancia entre dos puntos consecutivos no es
+  //   alcanzable en el tiempo transcurrido a una velocidad físicamente
+  //   plausible, es una interrupción, sin importar cuán corto sea el hueco
+  //   de tiempo entre ellos.
+  // - huecos (o velocidad implausible) de `datos.cadencia`: la cadencia real
+  //   de fixes, muestreada por *tiempo* a partir de los puntos GPS crudos
+  //   *antes* de Douglas-Peucker (`armarPayload`, `lib/local/payload.ts`).
+  //   `datos.puntos`/`datos.track` son el mismo array ya simplificado, así
+  //   que un tramo recto real puede colapsar a dos vértices separados por
+  //   kilómetros y minutos sin que haya pasado nada — la velocidad implícita
+  //   sola no alcanza para distinguir eso de una pausa real que cubrió la
+  //   misma distancia en el mismo tiempo. La cadencia sí: mientras hubo
+  //   grabación real nunca le falta una entrada por más de
+  //   `UMBRAL_INTERRUPCION_MS`, así que un hueco ahí es una interrupción real
+  //   (se mapea a un índice de `datos.puntos` por timestamp, no por índice).
+  const trackCoords = coordenadasDeTrack(datos.track)
+  const cortes = derivarCortesDeTrack(datos.puntos, datos.cadencia)
+  const kmCrudo = kmDeTrack(trackCoords, cortes)
   const plausibilidad = evaluarPlausibilidad({
     km: kmCrudo,
     inicio: new Date(datos.inicio),

@@ -5,6 +5,59 @@ versionado según [SemVer](https://semver.org/lang/es/).
 
 ## [Sin publicar]
 
+## [0.8.0] - 2026-09-08
+
+### Cierre de rama `feat/pendientes`
+
+- Lecturas firmadas en GCS (`lib/almacenamiento/gcs.ts`): antes servía las
+  evidencias como URL pública fija, lo que exigía un bucket público y
+  exponía las evidencias de todos los municipios a quien adivinara una
+  ruta. Ahora firma lecturas con `getSignedUrl({ action: 'read' })` V4,
+  mismo vencimiento (1 h) y mismo contrato que Supabase Storage;
+  `ProveedorAlmacenamiento.urlsLectura` firma en lote (Supabase agrupa con
+  `createSignedUrls`, GCS con concurrencia acotada vía `lib/concurrencia.ts`
+  al no tener API de lote); `envServidor()` valida
+  `GCS_SERVICE_ACCOUNT_KEY` al arrancar en vez de en la primera firma.
+- Difuminado de privacidad en los cuadros (`lib/privacidad/`): difumina
+  caras (BlazeFace) y personas/vehículos (COCO-SSD) en el dispositivo antes
+  de subir cada cuadro, dentro de la cola de subida (no durante la
+  grabación); si difuminar falla, el cuadro no se sube sin procesar y
+  reintenta con el mismo backoff. IndexedDB v6 (`cuadros.difuminado`).
+  Ajuste "Difuminar caras y vehículos" (activado por defecto) en
+  `PantallaInicio`, progreso en `ResumenRecorrido`. No cubre patentes
+  sueltas sin vehículo detectado ni caras chicas/lejanas/en ángulo raro
+  (documentado en README y en los términos).
+- Alta y edición de tramos para municipio/auditor (migración
+  `0011_alta_tramos.sql`): políticas `tramos_insert_gestion` /
+  `tramos_update_gestion`; columna `activo` en vez de `delete` (un tramo con
+  historial de cobertura no puede desaparecer; `cobertura_municipio`, el
+  listado y la capa del mapa solo cuentan/muestran tramos activos, pero
+  `rugosidad_tramos`, `cuadros_por_tramo` y el detalle nunca ocultan el
+  historial ya registrado); trigger `tramos_auditoria`. `/dashboard/tramos/
+  nuevo` y `/dashboard/tramos/[id]/editar`, con un mapa Leaflet de
+  click-to-add-vertex y km en vivo; el km siempre se recalcula en el
+  servidor desde la geometría (`kmDeGeometria`), nunca lo manda el cliente.
+- Mitigación de la interrupción de grabación en 2° plano: como una PWA no
+  puede grabar GPS con la pantalla apagada o la app en 2° plano (límite de
+  la plataforma, no de la app), una interrupción ya no queda invisible ni
+  se cuenta como recorrido cubierto. Se detecta con un watchdog de
+  `UMBRAL_INTERRUPCION_MS` (30 s: por encima del timeout de 20 s de cada
+  lectura de GPS, para no confundir una lectura lenta con una
+  interrupción) reforzado por `visibilitychange`/`pageshow`/`pagehide` y la
+  pérdida inesperada del wake lock (`hooks/useGrabadorGps.ts`,
+  `hooks/useWakeLock.ts`). Al detectarla, corta la grabación igual que una
+  pausa manual (reusa `cortes`/`pausarGrabador`/`reanudarGrabador`, sin un
+  mecanismo paralelo) y avisa en vivo ("Se interrumpió la grabación: el
+  tramo entre las X y las Y no quedó registrado") y en `ResumenRecorrido`.
+  `retomar` (recorrido retomado tras cerrar la app) aplica el mismo umbral
+  contra el último punto guardado. Verificado contra `lib/cobertura.ts`:
+  el cálculo de cobertura del servidor ya compara cada punto real contra
+  las muestras del tramo (índice espacial), sin unir el track con una
+  línea, así que un hueco nunca cuenta como cubierto — no hizo falta
+  cambiarlo, solo se agregó una prueba que lo fija (`__tests__/cobertura.test.ts`).
+  `PantallaInicio` avisa antes de arrancar que hay que dejar la pantalla
+  encendida y la app en primer plano.
+
 ### Ola 2: producto (0.7.0)
 
 - Migración `0010_estado_observaciones.sql`: enum `estado_observacion`

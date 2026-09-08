@@ -1,7 +1,12 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { prepararSubida, registrarCuadros } from '@/app/dashboard/recorrido/actions'
+import {
+  leerPreferenciaPrivacidad,
+  PREFERENCIA_PRIVACIDAD_DEFECTO,
+  suscribirPreferenciaPrivacidad,
+} from '@/lib/camara/privacidad-pref'
 import {
   conexionActual,
   leerPreferenciaRed,
@@ -10,6 +15,8 @@ import {
 } from '@/lib/camara/red'
 import { procesarColaCuadros, type DepsCuadros } from '@/lib/local/cola-cuadros'
 import { baseCuadros } from '@/lib/local/db'
+import { difuminarCuadro } from '@/lib/privacidad/difuminar'
+import { detectorReal } from '@/lib/privacidad/modelo'
 import { subirArchivo } from '@/lib/subida'
 import { useEnLinea } from './useEnLinea'
 
@@ -28,6 +35,14 @@ export type EstadoSincronizacionCuadros = {
    * confirmar que sea WiFi.
    */
   red: EstadoRed
+  /**
+   * Si la cola está corriendo ahora mismo (difuminando y/o subiendo): la
+   * pantalla de resumen lo usa para no dejar un "pendientes de subir" mudo
+   * mientras en realidad está trabajando.
+   */
+  procesando: boolean
+  /** Si el ajuste de difuminado está activado en este dispositivo. */
+  privacidadActivada: boolean
   /** Sube ya mismo aunque la preferencia sea "solo con WiFi" (una sola pasada). */
   forzarConDatos: () => void
 }
@@ -45,6 +60,15 @@ export function useSincronizacionCuadros(usuarioId: string): EstadoSincronizacio
   const [subidos, setSubidos] = useState(0)
   const [errorCuadros, setErrorCuadros] = useState<Record<string, number>>({})
   const [red, setRed] = useState<EstadoRed>(RED_INICIAL)
+  const [procesando, setProcesando] = useState(false)
+  // `localStorage` es un sistema externo: mismo patrón que `PantallaInicio`
+  // con la preferencia de red, para no desalinear el render del servidor
+  // con el del cliente.
+  const privacidadActivada = useSyncExternalStore(
+    suscribirPreferenciaPrivacidad,
+    leerPreferenciaPrivacidad,
+    () => PREFERENCIA_PRIVACIDAD_DEFECTO,
+  )
   const enLinea = useEnLinea()
   const corriendo = useRef(false)
   const forzar = useRef(false)
@@ -52,6 +76,7 @@ export function useSincronizacionCuadros(usuarioId: string): EstadoSincronizacio
   const sincronizar = useCallback(async () => {
     if (corriendo.current) return
     corriendo.current = true
+    setProcesando(true)
     // El forzado vale para esta pasada nada más: después vuelve la preferencia.
     const preferencia = forzar.current ? 'siempre' : leerPreferenciaRed()
     forzar.current = false
@@ -63,6 +88,8 @@ export function useSincronizacionCuadros(usuarioId: string): EstadoSincronizacio
         registrarCuadros,
         ahora: () => Date.now(),
         red: () => redPermitida(preferencia, conexionActual()),
+        difuminar: (blob) => difuminarCuadro(blob, detectorReal),
+        privacidadActivada: leerPreferenciaPrivacidad,
       }
       const resultado = await procesarColaCuadros(deps, usuarioId)
       setPendientes(resultado.pendientes)
@@ -72,6 +99,7 @@ export function useSincronizacionCuadros(usuarioId: string): EstadoSincronizacio
       console.error('[cuadros]', error)
     } finally {
       corriendo.current = false
+      setProcesando(false)
     }
   }, [usuarioId])
 
@@ -103,5 +131,13 @@ export function useSincronizacionCuadros(usuarioId: string): EstadoSincronizacio
     return () => clearInterval(id)
   }, [pendientes, sincronizar])
 
-  return { pendientes, subidos, errorCuadros, red, forzarConDatos }
+  return {
+    pendientes,
+    subidos,
+    errorCuadros,
+    red,
+    procesando,
+    privacidadActivada,
+    forzarConDatos,
+  }
 }

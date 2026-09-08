@@ -29,10 +29,16 @@ const LIMITE_CUADROS = 20000
  */
 async function obtenerTramosResumenAdmin(municipio: string): Promise<TramoResumen[]> {
   const admin = crearClienteAdmin()
+  // `activo = true`: un tramo dado de baja (0011) no aparece en la lista de
+  // gestión, mismo criterio que el denominador de `cobertura_municipio` y la
+  // capa de tramos del mapa (`cobertura-consultas.ts`) — sigue accesible por
+  // link directo en `/dashboard/tramos/<id>` para reactivarlo o consultar su
+  // historial.
   const { data: tramos, error: errorTramos } = await admin
     .from('tramos')
     .select('id, nombre_codigo, localidad, km')
     .eq('municipio', municipio)
+    .eq('activo', true)
 
   if (errorTramos) {
     console.error('[tramos-consultas]', errorTramos.message)

@@ -53,6 +53,13 @@ const nextConfig: NextConfig = {
         source: '/icons/:path*',
         headers: [{ key: 'Cache-Control', value: CACHE_INMUTABLE }],
       },
+      {
+        // Pesos del modelo de privacidad (`lib/privacidad/modelo.ts`): varios
+        // MB que no cambian salvo un redeploy explícito, cacheados agresivo
+        // para que solo se descarguen una vez por dispositivo.
+        source: '/modelos/:path*',
+        headers: [{ key: 'Cache-Control', value: CACHE_INMUTABLE }],
+      },
     ]
   },
 }

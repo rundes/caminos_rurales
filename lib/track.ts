@@ -129,13 +129,241 @@ export function partirEnSegmentos<T>(puntos: readonly T[], cortes: readonly numb
   return segmentos.filter((s) => s.length > 0)
 }
 
-/** Suma de distancias haversine entre puntos consecutivos del track, en km. */
-export function kmDeTrack(puntos: readonly { lat: number; lng: number }[]): number {
+/**
+ * Umbral de "sin señal" para tratar un hueco entre dos puntos consecutivos
+ * como una interrupción real de la grabación (app en 2° plano, pantalla
+ * bloqueada, o zona sin GPS) y no como una demora normal de una lectura.
+ * `useGrabadorGps.OPCIONES_GPS.timeout` ya le da 20 s a cada lectura antes de
+ * que `watchPosition` reporte un error de timeout (y siga reintentando); 30 s
+ * deja un margen de 10 s por encima de eso para no marcar como interrupción
+ * una única lectura lenta pero real, y es corto en relación a la duración
+ * típica de un recorrido para no dejar pasar huecos grandes sin cortar.
+ *
+ * Es también el umbral que usa el servidor para derivar los cortes del track
+ * a partir de los timestamps de los puntos crudos (`derivarCortes`): no
+ * confía en los cortes que pudiera declarar el cliente, los recalcula él
+ * mismo con este mismo umbral, así hay una sola definición de "corte" en vez
+ * de dos que puedan desalinearse.
+ */
+export const UMBRAL_INTERRUPCION_MS = 30_000
+
+/**
+ * Deriva los índices de corte de un track a partir del tiempo entre puntos
+ * consecutivos: un hueco mayor a `umbralMs` es una interrupción real (no se
+ * grabó nada mientras tanto), así que el punto siguiente arranca un segmento
+ * nuevo (mismo formato que espera `partirEnSegmentos`/`kmDeTrack`). Puntos
+ * fuera de orden (`t` no creciente) no generan corte: la resta da negativa o
+ * cero, nunca supera el umbral.
+ */
+export function derivarCortes(
+  puntos: readonly { t: number }[],
+  umbralMs: number = UMBRAL_INTERRUPCION_MS,
+): number[] {
+  const cortes: number[] = []
+  for (let i = 1; i < puntos.length; i += 1) {
+    if (puntos[i].t - puntos[i - 1].t > umbralMs) cortes.push(i)
+  }
+  return cortes
+}
+
+/**
+ * Deriva los índices de corte de un track a partir de la velocidad implícita
+ * entre puntos consecutivos: si la distancia recorrida no es alcanzable en
+ * el tiempo transcurrido a una velocidad físicamente plausible, hay una
+ * interrupción real entre medio (aunque el hueco de tiempo por sí solo no
+ * supere `UMBRAL_INTERRUPCION_MS` — un salto corto en el reloj pero enorme
+ * en el espacio también delata una pausa, o un intento de esconderla).
+ *
+ * A diferencia de un umbral de distancia fijo (la versión anterior de esta
+ * función), esto nunca corta de más un tramo recto real por más
+ * compresible que sea con Douglas-Peucker: un camino recto real recorrido a
+ * velocidad normal tarda más cuanto más largo es, así que dos vértices
+ * sobrevivientes muy separados en el espacio también están separados en el
+ * tiempo, y la velocidad implícita entre ellos se mantiene baja (ver el test
+ * de un tramo recto de 20 km en `track.test.ts`). Lo que sí corta es que la
+ * distancia crezca sin que el tiempo transcurrido lo justifique — exactamente
+ * lo que separa una pausa real (o una fabricada) de un tramo recto genuino.
+ *
+ * Reutiliza `LIMITES_PLAUSIBILIDAD.velocidadMaximaMax`, el mismo límite que
+ * ya usa `evaluarPlausibilidad`/`velocidadMaximaKmh` para rechazar un
+ * recorrido entero: una sola definición de "velocidad físicamente imposible"
+ * en todo el archivo, no dos que puedan desalinearse.
+ *
+ * Fail-closed ante timestamps fuera de orden o comprimidos a cero: un
+ * desplazamiento real no puede tomar un tiempo nulo o negativo, así que ese
+ * caso se trata como velocidad infinita (corta) en vez de ignorarse — de lo
+ * contrario, comprimir dos timestamps al mismo instante esquivaría esta
+ * señal por completo (aunque no la vuelve indetectable: sigue siendo un
+ * salto de posición sin tiempo transcurrido, y `evaluarPlausibilidad` lo
+ * rechaza igual si termina acreditándose sin cortar). Sin desplazamiento
+ * (`distanciaM` ~0) un tiempo nulo o negativo no corta: no hay nada que
+ * evaluar.
+ */
+export function derivarCortesPorVelocidad(
+  puntos: readonly { lat: number; lng: number; t: number }[],
+  velocidadMaxKmh: number = LIMITES_PLAUSIBILIDAD.velocidadMaximaMax,
+): number[] {
+  const cortes: number[] = []
+  for (let i = 1; i < puntos.length; i += 1) {
+    const dtMs = puntos[i].t - puntos[i - 1].t
+    const distanciaM = distanciaKm(puntos[i - 1], puntos[i]) * 1000
+    if (dtMs <= 0) {
+      if (distanciaM > 0) cortes.push(i)
+      continue
+    }
+    const velocidadKmh = (distanciaM / 1000) / (dtMs / MS_POR_HORA)
+    if (velocidadKmh > velocidadMaxKmh) cortes.push(i)
+  }
+  return cortes
+}
+
+/**
+ * Une varias listas de índices de corte (ver `derivarCortes`/
+ * `derivarCortesPorVelocidad`) en una sola, sin duplicados y ordenada —
+ * el formato que espera `partirEnSegmentos`/`kmDeTrack`. Cada señal puede
+ * fallar por separado (un hueco corto en el reloj con un salto enorme no
+ * corta por tiempo, pero sí por velocidad; un hueco largo con un salto chico
+ * es al revés), así que lo que cuenta como interrupción real es la unión:
+ * alcanza con que una sola señal la detecte.
+ */
+export function unionCortes(...listas: readonly (readonly number[])[]): number[] {
+  const union = new Set<number>()
+  for (const lista of listas) {
+    for (const indice of lista) union.add(indice)
+  }
+  return [...union].sort((a, b) => a - b)
+}
+
+/**
+ * Cortes de un array de muestras que trae su propia posición y su propio
+ * timestamp (una muestra de sensores, por ejemplo): combina la señal de
+ * tiempo (`derivarCortes`) y la de velocidad implícita
+ * (`derivarCortesPorVelocidad`) sobre el mismo array. A diferencia del track
+ * del recorrido —donde el timestamp viene en `datos.puntos` y la geometría
+ * en `datos.track`, dos arrays que `esquemaRecorrido` obliga a mantener
+ * alineados—, acá no hace falta reconciliar nada: cada muestra ya trae las
+ * dos señales consigo misma, así que es la misma unión aplicada a un solo
+ * array.
+ */
+export function derivarCortesDeMuestras(
+  puntos: readonly { lat: number; lng: number; t: number }[],
+  opciones: { umbralMs?: number; velocidadMaxKmh?: number } = {},
+): number[] {
+  const umbralMs = opciones.umbralMs ?? UMBRAL_INTERRUPCION_MS
+  const velocidadMaxKmh = opciones.velocidadMaxKmh ?? LIMITES_PLAUSIBILIDAD.velocidadMaximaMax
+  return unionCortes(derivarCortes(puntos, umbralMs), derivarCortesPorVelocidad(puntos, velocidadMaxKmh))
+}
+
+/**
+ * Primer índice de `puntosTrack` cuyo `t` es mayor o igual a `t` (búsqueda
+ * binaria: `puntosTrack` siempre está ordenado por tiempo, es el orden en
+ * que lo arma `armarPayload`). `-1` si ni el último punto llega a `t` — el
+ * hueco termina después de que el track se acaba, así que no hay nada que
+ * cortar de él.
+ */
+function primerIndiceDesde(puntosTrack: readonly { t: number }[], t: number): number {
+  let desde = 0
+  let hasta = puntosTrack.length
+  while (desde < hasta) {
+    const medio = (desde + hasta) >> 1
+    if (puntosTrack[medio].t < t) desde = medio + 1
+    else hasta = medio
+  }
+  return desde < puntosTrack.length ? desde : -1
+}
+
+/**
+ * Deriva los cortes de la cadencia real de fixes (`cadencia`, ver
+ * `armarPayload` en `lib/local/payload.ts`) y los mapea a un índice de
+ * `puntosTrack` (`datos.puntos`, alineado índice a índice con `datos.track`
+ * por el `.refine` de `esquemaRecorrido`).
+ *
+ * La cadencia es un array aparte, muestreado por tiempo a partir de los
+ * puntos GPS crudos (antes de Douglas-Peucker) — a diferencia de `track`/
+ * `puntos`, que son el mismo array simplificado con y sin timestamp, y por
+ * eso no sirven para detectar un corte por tiempo: un tramo recto real
+ * puede colapsar a dos vértices separados por varios kilómetros y varios
+ * minutos sin que haya pasado nada (ver el test del tramo recto de 20 km en
+ * `track.test.ts`). La cadencia, en cambio, siempre tiene una entrada cada
+ * pocos segundos (`INTERVALO_CADENCIA_MS`) mientras hay grabación real, así
+ * que un hueco entre dos entradas consecutivas —o una velocidad implícita
+ * implausible entre ellas, cortesía de reusar `derivarCortesDeMuestras`— es
+ * una interrupción real, exista o no un vértice de `track` justo ahí.
+ *
+ * Cada corte de la cadencia se ubica en `puntosTrack` por timestamp: el
+ * primer punto del track cuyo `t` es mayor o igual al del punto que abre el
+ * hueco (`primerIndiceDesde`), no por índice — la cadencia y el track no
+ * tienen la misma cantidad de entradas. Un hueco que termina después de que
+ * el track ya se acabó no aporta ningún índice (nada que cortar del lado
+ * del track).
+ */
+export function derivarCortesDeCadencia(
+  cadencia: readonly { lat: number; lng: number; t: number }[],
+  puntosTrack: readonly { t: number }[],
+  opciones: { umbralMs?: number; velocidadMaxKmh?: number } = {},
+): number[] {
+  const cortesCadencia = derivarCortesDeMuestras(cadencia, opciones)
+  const cortes: number[] = []
+  for (const i of cortesCadencia) {
+    const indice = primerIndiceDesde(puntosTrack, cadencia[i].t)
+    if (indice !== -1) cortes.push(indice)
+  }
+  return cortes
+}
+
+/**
+ * Deriva los cortes finales que usa `finalizarRecorrido` para segmentar el
+ * track de un recorrido: la unión de dos señales independientes entre sí (ver
+ * `unionCortes`), ninguna de las cuales confía en cortes que declare el
+ * cliente:
+ * - velocidad implícita directa sobre `puntosTrack` (`derivarCortesPorVelocidad`):
+ *   un salto de posición que no es alcanzable en el tiempo transcurrido a una
+ *   velocidad físicamente plausible, sin importar cuán corto sea el hueco de
+ *   reloj entre esos dos puntos del track;
+ * - huecos (o velocidad implausible) de la cadencia real de fixes
+ *   (`derivarCortesDeCadencia`), mapeados a un índice de `puntosTrack` por
+ *   timestamp: la única señal que puede detectar una pausa real que un tramo
+ *   recto simplificado esconde (ver el comentario de `derivarCortesDeCadencia`).
+ *
+ * Exportada aparte de `finalizarRecorrido` para poder testear la combinación
+ * completa (incluida la conversión de índices de la cadencia a índices del
+ * track) sin duplicar esta lógica en `__tests__/track.test.ts`.
+ */
+export function derivarCortesDeTrack(
+  puntosTrack: readonly { lat: number; lng: number; t: number }[],
+  cadencia: readonly { lat: number; lng: number; t: number }[],
+  opciones: { umbralMs?: number; velocidadMaxKmh?: number } = {},
+): number[] {
+  const cortesVelocidad = derivarCortesPorVelocidad(puntosTrack, opciones.velocidadMaxKmh)
+  const cortesCadencia = derivarCortesDeCadencia(cadencia, puntosTrack, opciones)
+  return unionCortes(cortesVelocidad, cortesCadencia)
+}
+
+/** Suma de distancias haversine entre puntos consecutivos de un segmento, en km. */
+function kmDeSegmento(puntos: readonly { lat: number; lng: number }[]): number {
   let km = 0
   for (let i = 1; i < puntos.length; i += 1) {
     km += distanciaKm(puntos[i - 1], puntos[i])
   }
   return km
+}
+
+/**
+ * Suma de distancias haversine entre puntos consecutivos del track, en km.
+ * Con `cortes` (índices, ver `partirEnSegmentos`) no cruza un corte: la
+ * distancia entre el último punto de un segmento y el primero del siguiente
+ * no se suma, así una pausa o interrupción de la grabación no se acredita
+ * como si se hubiera recorrido en línea recta. Sin `cortes` (el valor por
+ * defecto) suma el track de punta a punta, igual que antes — es lo que
+ * corresponde para una geometría que nunca tiene pausas, como un tramo
+ * dibujado a mano (`lib/tramos.ts`, `TramoForm`).
+ */
+export function kmDeTrack(
+  puntos: readonly { lat: number; lng: number }[],
+  cortes: readonly number[] = [],
+): number {
+  if (cortes.length === 0) return kmDeSegmento(puntos)
+  return partirEnSegmentos(puntos, cortes).reduce((suma, segmento) => suma + kmDeSegmento(segmento), 0)
 }
 
 const MS_POR_HORA = 3600 * 1000

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useCamara } from '@/hooks/useCamara'
 import { useEnLinea } from '@/hooks/useEnLinea'
-import { useGrabadorGps } from '@/hooks/useGrabadorGps'
+import { useGrabadorGps, type Interrupcion } from '@/hooks/useGrabadorGps'
 import { useSensores, type ControlSensores } from '@/hooks/useSensores'
 import { useSincronizacion } from '@/hooks/useSincronizacion'
 import { useSincronizacionCuadros } from '@/hooks/useSincronizacionCuadros'
@@ -29,7 +29,12 @@ type Props = {
   centro: [number, number]
 }
 
-type Cerrado = { recorridoId: string; km: number; puntosGps: number }
+type Cerrado = {
+  recorridoId: string
+  km: number
+  puntosGps: number
+  interrupciones: readonly Interrupcion[]
+}
 
 const ERROR_LOCAL = 'No pudimos leer los recorridos guardados en este dispositivo.'
 const ERROR_ACCION = 'No pudimos completar la acción en este dispositivo.'
@@ -212,7 +217,9 @@ export function RecorridoView({ usuarioId, municipio, capas, limites, centro }: 
         setErrorLocal(resultado.mensaje)
         return
       }
-      if (recorridoId) setCerrado({ recorridoId, km, puntosGps: cantidad })
+      if (recorridoId) {
+        setCerrado({ recorridoId, km, puntosGps: cantidad, interrupciones: grabador.interrupciones })
+      }
       await sincronizar()
     } finally {
       finalizandoRef.current = false
@@ -267,10 +274,13 @@ export function RecorridoView({ usuarioId, municipio, capas, limites, centro }: 
         puntosGps={cerrado.puntosGps}
         resumen={resumenes[cerrado.recorridoId] ?? null}
         sinConexion={!enLinea}
+        interrupciones={cerrado.interrupciones}
         cuadros={totalCuadros.capturados}
         cuadrosPendientes={totalCuadros.pendientes}
         cuadrosError={cuadros.errorCuadros[cerrado.recorridoId] ?? 0}
         redVerificada={cuadros.red.verificada}
+        procesandoCuadros={cuadros.procesando}
+        privacidadActivada={cuadros.privacidadActivada}
         onSubirCuadros={cuadros.forzarConDatos}
         error={fallaSubida?.ultimoError ?? null}
         onReintentar={fallaSubida ? () => correr(() => reintentar(fallaSubida.recorridoId)) : undefined}
@@ -292,6 +302,7 @@ export function RecorridoView({ usuarioId, municipio, capas, limites, centro }: 
             centro={centroInicial(centro, limites)}
             capas={capas}
             error={grabador.error ?? errorLocal}
+            interrupcionActual={grabador.interrupcionActual}
             sensores={{
               estado: sensores.estado,
               impactos: sensores.impactos,

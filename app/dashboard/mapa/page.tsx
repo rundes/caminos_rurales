@@ -1,6 +1,7 @@
 import { Suspense } from 'react'
 import { FiltrosObservaciones } from '@/components/FiltrosObservaciones'
 import { MapaCliente } from '@/components/MapaCliente'
+import { obtenerProveedor } from '@/lib/almacenamiento'
 import { capasDe } from '@/lib/capas'
 import { limitesDe } from '@/lib/capas-servidor'
 import { obtenerRugosidadTramos, obtenerTramosConEstadoCacheado } from '@/lib/cobertura-consultas'
@@ -12,7 +13,6 @@ import { crearClienteServidor } from '@/lib/supabase/server'
 type Props = { searchParams: Promise<FiltrosFallas> }
 
 const CENTRO_PROVINCIA: [number, number] = [-36.6, -60.0]
-const SEGUNDOS_URL_FIRMADA = 60 * 60
 const LIMITE_FALLAS = 1000
 const AVISO_LIMITE_FALLAS = `Mostrando las últimas ${LIMITE_FALLAS} observaciones.`
 
@@ -61,17 +61,9 @@ export default async function MapaPage({ searchParams }: Props) {
   const alcanzoLimiteFallas = todos.length >= LIMITE_FALLAS
 
   const rutasImagen = puntos.map((p) => p.url_evidencia_imagen).filter((r): r is string => Boolean(r))
-  const rutasVideo = puntos
-    .map((p) => p.url_evidencia_video)
-    .filter((r): r is string => r !== null && !r.startsWith('https://'))
+  const rutasVideo = puntos.map((p) => p.url_evidencia_video).filter((r): r is string => Boolean(r))
   const rutas = [...new Set([...rutasImagen, ...rutasVideo])]
-  const urlsEvidencia: Record<string, string> = {}
-  if (rutas.length > 0) {
-    const { data: firmadas } = await supabase.storage.from('evidencia-vial').createSignedUrls(rutas, SEGUNDOS_URL_FIRMADA)
-    for (const f of firmadas ?? []) {
-      if (f.path && f.signedUrl) urlsEvidencia[f.path] = f.signedUrl
-    }
-  }
+  const urlsEvidencia = rutas.length > 0 ? await obtenerProveedor().urlsLectura(rutas) : {}
 
   const centro: [number, number] = partidoActual
     ? [partidoActual.lat, partidoActual.lng]

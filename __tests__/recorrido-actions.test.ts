@@ -237,13 +237,66 @@ function trackSobreElTramo(): [number, number][] {
   return Array.from({ length: 21 }, (_, i) => [0, i * 0.0005] as [number, number])
 }
 
+type PuntoPayload = { lat: number; lng: number; t: number; precision: number }
+type PuntoCadenciaPayload = { lat: number; lng: number; t: number }
+
+const INICIO_DEFAULT = '2026-09-03T10:00:00.000Z'
+const FIN_DEFAULT = '2026-09-03T11:00:00.000Z'
+
+/**
+ * `puntos` por defecto, alineado índice a índice con `track` (como los arma
+ * siempre `armarPayload`): a 5 s de paso entre vértices consecutivos la
+ * velocidad implícita entre ellos (~55 m en 5 s, ~40 km/h) queda cómoda bajo
+ * el límite físico, así que nunca dispara `derivarCortesPorVelocidad` por sí
+ * sola en un test que no busca probar justamente eso.
+ */
+function puntosSobre(track: readonly [number, number][], inicioMs: number, pasoMs = 5_000): PuntoPayload[] {
+  return track.map(([lat, lng], i) => ({ lat, lng, t: inicioMs + i * pasoMs, precision: 8 }))
+}
+
+/**
+ * Cadencia por defecto: entradas cada 25 s (por debajo de `UMBRAL_INTERRUPCION_MS`,
+ * 30 s) cubriendo toda la ventana `inicio`-`fin`, sin ningún hueco ni salto de
+ * posición — así nunca dispara `derivarCortesDeCadencia` por sí sola en un
+ * test que no busca probar justamente eso, y siempre pasa el `.refine` de
+ * cobertura de `esquemaRecorrido` (los extremos caen justo en `inicio`/`fin`).
+ */
+function cadenciaSobre(inicioMs: number, finMs: number, pasoMs = 25_000): PuntoCadenciaPayload[] {
+  // Siempre al menos 2 entradas (los dos extremos), incluso si `finMs` no es
+  // posterior a `inicioMs`: algunos tests pasan un `fin` anterior a `inicio`
+  // a propósito para probar ESE rechazo específico, y no queremos que una
+  // cadencia de un solo elemento dispare antes una falla de forma no
+  // relacionada (el mínimo de 2 elementos del esquema) y tape el mensaje que
+  // el test realmente busca.
+  const entradas: PuntoCadenciaPayload[] = [{ lat: 0, lng: 0, t: inicioMs }]
+  for (let t = inicioMs + pasoMs; t < finMs; t += pasoMs) entradas.push({ lat: 0, lng: 0, t })
+  if (entradas[entradas.length - 1].t !== finMs) entradas.push({ lat: 0, lng: 0, t: finMs })
+  return entradas
+}
+
+/**
+ * `puntos`/`cadencia` se derivan de `track`/`inicio`/`fin` efectivos
+ * (incluido lo que pise `extra`), no de constantes fijas: si un test cambia
+ * `track` (longitud distinta) o la ventana `inicio`/`fin`, ambos arrays
+ * tienen que seguirlos para no violar los `.refine` de `esquemaRecorrido`
+ * por una razón ajena a lo que ese test quiere probar. Un test que necesita
+ * un `puntos`/`cadencia` particular (para probar justamente la derivación de
+ * cortes) los pasa explícitos en `extra` y pisan estos valores por defecto.
+ */
 function payload(extra: Record<string, unknown> = {}): Record<string, unknown> {
+  const inicio = (extra.inicio as string | undefined) ?? INICIO_DEFAULT
+  const fin = (extra.fin as string | undefined) ?? FIN_DEFAULT
+  const inicioMs = Date.parse(inicio)
+  const finMs = Date.parse(fin)
+  const track = (extra.track as [number, number][] | undefined) ?? trackSobreElTramo()
   return {
     id: ID_RECORRIDO,
-    inicio: '2026-09-03T10:00:00.000Z',
-    fin: '2026-09-03T11:00:00.000Z',
+    inicio,
+    fin,
     puntosGps: 120,
-    track: trackSobreElTramo(),
+    track,
+    puntos: puntosSobre(track, inicioMs),
+    cadencia: cadenciaSobre(inicioMs, finMs),
     observaciones: [],
     ...extra,
   }
@@ -252,9 +305,20 @@ function payload(extra: Record<string, unknown> = {}): Record<string, unknown> {
 const SIN_SENSORES = { sin_dato: 0, bueno: 0, regular: 0, malo: 0, intransitable: 0 }
 
 /** Muestra sobre el tramo w1 (lat 0, lng 0..0.01), a `lng` del origen. */
+/**
+ * `t` por defecto separado por `lng`, no constante: `derivarCortesDeMuestras`
+ * (que sigue combinando tiempo y velocidad implícita, sin cambios de esta
+ * rama) trata dos muestras con el mismo `t` pero distinta posición como
+ * velocidad infinita (fail-closed) y las corta — real para muestras crudas
+ * (siempre tienen timestamps distintos), pero no para este helper si no se
+ * lo pedimos explícitamente. El paso (5.000.000 por grado de `lng`) da ~80
+ * km/h entre muestras separadas 0,002 (el paso típico en estos tests): por
+ * debajo del límite físico y del umbral de hueco de tiempo, así que no corta
+ * de más un test que no busca probar precisamente eso.
+ */
 function muestra(lng: number, extra: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    t: 1_756_900_000_000,
+    t: 1_756_900_000_000 + Math.round(lng * 5_000_000),
     lat: 0,
     lng,
     velocidadKmh: 40,
@@ -268,6 +332,81 @@ function muestra(lng: number, extra: Record<string, unknown> = {}): Record<strin
     calidad: 'bueno',
     ...extra,
   }
+}
+
+// --- Track con una pausa real: dos clusters de puntos separados por un
+// salto de 50 km y una pausa de 30 min, lejos (lat 10) de los tramos de
+// prueba (que están cerca del ecuador) para que la cobertura no interfiera.
+// Dentro de cada cluster los puntos van cada 20 s (bien por debajo de
+// `UMBRAL_INTERRUPCION_MS`, 30 s) a 90 km/h — no cortan y no disparan la
+// antitrampa de velocidad. El salto entre clusters, en cambio, tiene 30 min
+// de por medio: a 100 km/h (bajo el límite de 160) es la única forma
+// plausible de cubrir esa distancia, así que sin cortar el recorrido entero
+// se rechazaría por implausible en vez de aceptarse con el km recortado.
+const KM_POR_GRADO = (Math.PI / 180) * 6371
+function offsetLatKm(km: number): number {
+  return km / KM_POR_GRADO
+}
+const LAT_LEJOS = 10
+const LNG_LEJOS = 50
+const T_PAUSA = 1_756_950_000_000
+const DURACION_TRACK_CON_PAUSA_MS = 1_950_000
+
+/**
+ * Cluster 1: 6 puntos (0 a 2,5 km, hops de 0,5 km cada 20 s). Salto de 50 km
+ * con una pausa real de 30 min. Cluster 2: 3 puntos más (otros 1 km, mismo
+ * ritmo). Total real (segmentado): 3,5 km; bridgeado (sin cortar): 53,5 km.
+ */
+function trackConPausa(): { track: [number, number][]; puntos: PuntoPayload[] } {
+  const offsetsKmYms: [number, number][] = [
+    [0, 0],
+    [0.5, 20_000],
+    [1, 40_000],
+    [1.5, 60_000],
+    [2, 80_000],
+    [2.5, 100_000],
+    [52.5, 1_900_000],
+    [53, 1_920_000],
+    [53.5, 1_940_000],
+  ]
+  const track: [number, number][] = offsetsKmYms.map(([km]) => [LAT_LEJOS + offsetLatKm(km), LNG_LEJOS])
+  const puntos: PuntoPayload[] = offsetsKmYms.map(([km, ms]) => ({
+    lat: LAT_LEJOS + offsetLatKm(km),
+    lng: LNG_LEJOS,
+    t: T_PAUSA + ms,
+    precision: 8,
+  }))
+  return { track, puntos }
+}
+
+/**
+ * Cadencia real de fixes para `trackConPausa`: entradas cada 20 s (mismo
+ * ritmo que `puntos`) dentro de cada cluster, y ningún dato durante los 30
+ * min de pausa real entre medio — así lo armaría `armarPayload` a partir de
+ * los puntos crudos: durante la pausa no hay nada que muestrear. Es esta
+ * señal, no `derivarCortesPorVelocidad` sobre `puntos` (que ve 50 km en 30
+ * min, ~100 km/h, perfectamente plausible), la que corta el salto: ver
+ * `derivarCortesDeCadencia` en `lib/track.ts`.
+ */
+function cadenciaConPausa(): PuntoCadenciaPayload[] {
+  const entradas: PuntoCadenciaPayload[] = []
+  for (let ms = 0; ms <= 100_000; ms += 20_000) entradas.push({ lat: LAT_LEJOS, lng: LNG_LEJOS, t: T_PAUSA + ms })
+  for (let ms = 1_900_000; ms <= 1_940_000; ms += 20_000) entradas.push({ lat: LAT_LEJOS, lng: LNG_LEJOS, t: T_PAUSA + ms })
+  return entradas
+}
+
+/** `payload()` con el track/puntos/cadencia de `trackConPausa`, ventana horaria acorde. */
+function payloadConPausa(extra: Record<string, unknown> = {}): Record<string, unknown> {
+  const { track, puntos } = trackConPausa()
+  return payload({
+    inicio: new Date(T_PAUSA).toISOString(),
+    fin: new Date(T_PAUSA + DURACION_TRACK_CON_PAUSA_MS).toISOString(),
+    track,
+    puntos,
+    cadencia: cadenciaConPausa(),
+    puntosGps: track.length,
+    ...extra,
+  })
 }
 
 function escrituraDe(tabla: string): Escritura | undefined {
@@ -654,13 +793,18 @@ describe('finalizarRecorrido', () => {
   test('rechaza un recorrido implausible sin escribir ni crear el cliente admin', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
-    // ~1113 km en una hora: velocidad media y km fuera de todo rango
+    // 3 km en 1 minuto (180 km/h): sin ningún hueco de cadencia de por medio
+    // (`payload()` genera una cadencia por defecto sin huecos para esta
+    // ventana), el track no se segmenta como si fuera una pausa — sigue
+    // siendo un único segmento, y su velocidad (muy por encima del límite)
+    // es lo que dispara el rechazo por implausibilidad.
     const r = await finalizarRecorrido(
       payload({
         track: [
           [0, 0],
-          [0, 10],
+          [offsetLatKm(3), 0],
         ],
+        fin: '2026-09-03T10:01:00.000Z',
       }),
     )
 
@@ -681,6 +825,10 @@ describe('finalizarRecorrido', () => {
 
     const r = await finalizarRecorrido(
       payload({
+        track: [
+          [0, 0],
+          [0, 0.02],
+        ],
         puntos: [
           { lat: 0, lng: 0, t: 1756900000000, precision: 8 },
           { lat: 0, lng: 0.02, t: 1756900010000, precision: 8 }, // ~2,2 km en 10 s
@@ -696,6 +844,10 @@ describe('finalizarRecorrido', () => {
   test('acepta puntos crudos plausibles', async () => {
     const r = await finalizarRecorrido(
       payload({
+        track: [
+          [0, 0],
+          [0, 0.005],
+        ],
         puntos: [
           { lat: 0, lng: 0, t: 1756900000000, precision: 8 },
           { lat: 0, lng: 0.005, t: 1756900060000, precision: 12 },
@@ -754,7 +906,7 @@ describe('finalizarRecorrido', () => {
       recorrido_id: ID_RECORRIDO,
       usuario_id: 'u1',
       tramo_id: 'w1',
-      t: new Date(1_756_900_000_000).toISOString(),
+      t: new Date(1_756_900_010_000).toISOString(),
       latitud: 0,
       longitud: 0.002,
       velocidad_kmh: 40,
@@ -900,6 +1052,181 @@ describe('finalizarRecorrido', () => {
     expect(r.ok && r.data.kmPorCalidad.bueno).toBeCloseTo(0.222, 3)
     expect(escrituras).toEqual([])
     expect(mutaciones).toEqual([])
+  })
+})
+
+describe('finalizarRecorrido: los km no cruzan una pausa (0012)', () => {
+  test('un recorrido con una pausa real acredita solo la suma de los clusters, no el salto', async () => {
+    const r = await finalizarRecorrido(payloadConPausa())
+
+    expect(r.ok).toBe(true)
+    // 2,5 km (cluster 1) + 1 km (cluster 2): el salto de 50 km entre ellos,
+    // aunque el track lo atraviese, no se acredita.
+    expect(r.ok && r.data.km).toBeCloseTo(3.5, 0)
+    expect(r.ok && r.data.km).toBeLessThan(10)
+    // lo persistido en `recorridos.km` es el mismo valor segmentado que se devuelve.
+    expect(escrituraDe('recorridos')?.filas).toMatchObject({ km: r.ok ? r.data.km : undefined })
+  })
+
+  test('el corte sale de la cadencia real de fixes, no de nada que declare el cliente', async () => {
+    // El payload no tiene ningún campo `cortes`: no existe en el esquema. La
+    // velocidad implícita sobre `puntos` sola no alcanza (50 km en 30 min es
+    // perfectamente plausible, ~100 km/h) — lo que corta el salto es el
+    // hueco real en `cadencia` durante la pausa (`cadenciaConPausa`).
+    const r = await finalizarRecorrido(payloadConPausa())
+    expect(r.ok && r.data.km).toBeLessThan(10)
+  })
+
+  test('un salto espacial grande con timestamps de `puntos` comprimidos (simulando continuidad) igual se corta, y lo que dispara el rechazo es la velocidad instantánea', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { track, puntos } = trackConPausa()
+    // Mismo salto de 50 km, pero declarado en 5 s en vez de 30 min: al
+    // comprimir el tiempo en `puntos`, `derivarCortesPorVelocidad` sobre
+    // `puntos` corta igual (50 km en 5 s es implausible por sí solo, sin
+    // necesitar la cadencia) — pero antes de llegar a acreditar nada,
+    // `evaluarPlausibilidad` ya rechaza el recorrido entero por esa misma
+    // velocidad instantánea (chequea el máximo entre TODO `datos.puntos`,
+    // corte o no corte de por medio): falsificar el tiempo para esconder la
+    // pausa no sirve para inflar el km acreditado, entre otras cosas porque
+    // ni siquiera llega a acreditarse nada.
+    const puntosSinPausa: PuntoPayload[] = puntos.map((p, i) =>
+      i < 6 ? p : { ...p, t: puntos[5].t + 5_000 + (i - 6) * 20_000 },
+    )
+
+    const r = await finalizarRecorrido(
+      payloadConPausa({ puntos: puntosSinPausa, track }),
+    )
+
+    expect(r).toEqual({ ok: false, error: expect.stringMatching(/no pudo validarse/i), definitivo: true })
+    expect(escrituras).toEqual([])
+    spy.mockRestore()
+  })
+
+  test('si `puntos` no coincide en longitud con `track`, el recorrido se rechaza como no verificable (fail-closed)', async () => {
+    const { track, puntos } = trackConPausa()
+
+    const r = await finalizarRecorrido(
+      payloadConPausa({ track, puntos: puntos.slice(0, -1) }),
+    )
+
+    // Antes (attempt 1/2) esto bridgeaba de menos gracias a un corte por
+    // distancia que operaba directo sobre `track`. Ahora no hay ninguna señal
+    // que pueda operar sobre `track` solo sin `puntos` alineado (ni la
+    // velocidad implícita —necesita timestamps por índice— ni la cadencia
+    // —hay que mapear sus cortes a un índice de `track` vía `puntos`—), así
+    // que un payload que desalinea `puntos` a propósito para esquivar la
+    // derivación de cortes ya ni siquiera llega a evaluarse: se rechaza de
+    // plano como no verificable (ver el `.refine` de `esquemaRecorrido`).
+    expect(r).toEqual({
+      ok: false,
+      error: expect.stringMatching(/no pudo verificarse.*no coinciden con el track/i),
+      definitivo: true,
+    })
+    expect(escrituras).toEqual([])
+  })
+
+  test('sin `puntos` en absoluto, el recorrido se rechaza como no verificable (fail-closed)', async () => {
+    const { track } = trackConPausa()
+
+    const r = await finalizarRecorrido(payloadConPausa({ track, puntos: undefined }))
+
+    // Mismo caso que el anterior, llevado al extremo: ni siquiera hace falta
+    // mandar `puntos` desalineado, alcanza con omitirlo — `esquemaRecorrido`
+    // ya lo exige (mínimo 2, obligatorio).
+    expect(r).toEqual({
+      ok: false,
+      error: expect.stringMatching(/no pudo verificarse/i),
+      definitivo: true,
+    })
+    expect(escrituras).toEqual([])
+  })
+
+  test('el km segmentado (no el bridgeado) es el que se usa para el premio por sensores', async () => {
+    const { puntos } = trackConPausa()
+    const muestrasCluster1 = puntos.slice(0, 6).map((p) => ({
+      t: p.t,
+      lat: p.lat,
+      lng: p.lng,
+      velocidadKmh: 40,
+      rumbo: null,
+      altitud: null,
+      rmsVertical: 0.5,
+      picoVertical: 2,
+      frenadas: 0,
+      laterales: 0,
+      muestras: 50,
+      calidad: 'bueno',
+    }))
+
+    const r = await finalizarRecorrido(payloadConPausa({ muestras: muestrasCluster1 }))
+
+    expect(r.ok).toBe(true)
+    // 2,5 km con sensores sobre 3,5 km reales (corregidos): supera el 50%
+    // mínimo (`FRACCION_SENSOR_MINIMA`). Sobre el km bridgeado (53,5) no lo
+    // hubiera alcanzado.
+    expect(r.ok && r.data.kmPorCalidad.bueno).toBeCloseTo(2.5, 0)
+    expect(escrituraDe('puntos_eventos')?.filas).toEqual(
+      expect.arrayContaining([expect.objectContaining({ motivo: 'km_sensor' })]),
+    )
+  })
+})
+
+describe('finalizarRecorrido: los km de sensores tampoco cruzan una pausa propia', () => {
+  const T0 = 1_756_900_000_000
+
+  test('una pausa en las muestras de sensores (sin pausa en el track) no se bridgea, y el premio usa el km corregido', async () => {
+    // El track (`trackSobreElTramo`) no tiene ninguna pausa: son ~1,112 km
+    // seguidos. Las muestras de sensores, en cambio, sí tienen un hueco real
+    // de tiempo (40 s, por encima de `UMBRAL_INTERRUPCION_MS`) entre 0,002 y
+    // 0,008 — como si el teléfono hubiera perdido el sensor un rato en medio
+    // del recorrido. Sin la corrección, `kmConSensores`/`kmPorCalidad`
+    // sumarían ese salto igual que cualquier otro segmento (~1,112 km, el
+    // 100% del recorrido) y el premio `km_sensor` se otorgaría de sobra. Con
+    // el corte derivado de las propias muestras (`derivarCortesDeMuestras`,
+    // mismo umbral que usa el track), sólo cuentan los dos clusters
+    // (~0,445 km), que quedan por debajo del 50% mínimo (`FRACCION_SENSOR_MINIMA`)
+    // y no otorgan el premio.
+    // 8 s dentro de cada cluster (0,222 km ≈ 100 km/h: plausible, sin
+    // disparar la velocidad implícita) y 40 s en el salto entre clusters
+    // (0,667 km ≈ 60 km/h si se manejara de un tirón — también plausible en
+    // velocidad, pero muy por encima del umbral de tiempo, 30 s: lo que
+    // corta acá es el hueco, no una velocidad implausible).
+    const muestrasConPausa = [
+      muestra(0, { t: T0 }),
+      muestra(0.002, { t: T0 + 8_000 }),
+      muestra(0.008, { t: T0 + 8_000 + 40_000 }),
+      muestra(0.01, { t: T0 + 8_000 + 40_000 + 8_000 }),
+    ]
+
+    const r = await finalizarRecorrido(payload({ muestras: muestrasConPausa }))
+
+    expect(r.ok).toBe(true)
+    expect(r.ok && r.data.kmPorCalidad.bueno).toBeCloseTo(0.445, 2)
+    expect(r.ok && r.data.puntos).toBe(20) // sólo los 20 de km_nuevos, sin el punto extra de km_sensor
+    expect(escrituraDe('puntos_eventos')?.filas).toEqual([expect.objectContaining({ motivo: 'km_nuevos' })])
+  })
+
+  test('sin esa pausa (mismas muestras, mismo hueco por debajo del umbral) sí se acredita todo y se otorga el premio', async () => {
+    // Control: mismas posiciones, pero el hueco entre 0,002 y 0,008 dura sólo
+    // 29 s (por debajo del umbral de 30 s, y a una velocidad implícita de
+    // ~83 km/h, también plausible): no hay corte, se acredita el recorrido
+    // completo con sensores y el premio se otorga — así se confirma que lo
+    // que evita el premio arriba es el corte, no alguna otra diferencia.
+    const muestrasSinPausa = [
+      muestra(0, { t: T0 }),
+      muestra(0.002, { t: T0 + 8_000 }),
+      muestra(0.008, { t: T0 + 8_000 + 29_000 }),
+      muestra(0.01, { t: T0 + 8_000 + 29_000 + 8_000 }),
+    ]
+
+    const r = await finalizarRecorrido(payload({ muestras: muestrasSinPausa }))
+
+    expect(r.ok).toBe(true)
+    expect(r.ok && r.data.kmPorCalidad.bueno).toBeCloseTo(1.112, 3)
+    expect(escrituraDe('puntos_eventos')?.filas).toEqual([
+      expect.objectContaining({ motivo: 'km_nuevos' }),
+      expect.objectContaining({ motivo: 'km_sensor' }),
+    ])
   })
 })
 

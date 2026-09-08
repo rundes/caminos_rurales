@@ -33,8 +33,14 @@ export const NOMBRE_DB = 'visiovial'
  * índice compuesto `porRecorridoEstado` (`[recorridoId, estadoSubida]`) para
  * poder leer o contar los pendientes de un recorrido sin recorrer todos sus
  * cuadros. La migración mueve los blobs existentes con un cursor.
+ *
+ * v6 agrega `cuadros.difuminado` (difuminado de privacidad, `lib/
+ * privacidad/`): `false` para los cuadros ya guardados de una sesión
+ * anterior, así la cola los trata como "todavía sin procesar" y los
+ * difumina antes de subirlos igual que a los nuevos, en vez de dejarlos
+ * pasar sin pixelar por venir de antes de esta versión.
  */
-export const VERSION_DB = 5
+export const VERSION_DB = 6
 
 const ERROR_SIN_INDEXEDDB = 'Este navegador no puede guardar el recorrido en el dispositivo.'
 
@@ -133,9 +139,24 @@ export function abrirDb(): Promise<DbVisiovial> {
               estadoSubida: fila.estadoSubida,
               ...(fila.ruta ? { ruta: fila.ruta } : {}),
               tieneBlob,
+              difuminado: fila.difuminado ?? false,
             }
             await cursor.update(sinBlob)
             cursor = await cursor.continue()
+          }
+        }
+        if (anterior < 6) {
+          // Cursor aparte (no se puede reusar el de arriba: la transacción
+          // de upgrade sigue viva, pero el cursor de v5 ya se agotó). Los
+          // cuadros de antes de esta versión no tienen `difuminado`: quedan
+          // en `false`, así la cola los trata como pendientes de procesar.
+          let cursorDifuminado = await cuadros.openCursor()
+          while (cursorDifuminado) {
+            const fila = cursorDifuminado.value as CuadroLocal
+            if (fila.difuminado === undefined) {
+              await cursorDifuminado.update({ ...fila, difuminado: false })
+            }
+            cursorDifuminado = await cursorDifuminado.continue()
           }
         }
       },
@@ -289,7 +310,7 @@ export async function guardarCuadro(cuadro: CuadroNuevo): Promise<number> {
   const db = await abrirDb()
   const { blob, ...resto } = cuadro
   const tx = db.transaction(['cuadros', 'blobs'], 'readwrite')
-  const id = await tx.objectStore('cuadros').add({ ...resto, tieneBlob: true })
+  const id = await tx.objectStore('cuadros').add({ ...resto, tieneBlob: true, difuminado: false })
   await tx.objectStore('blobs').put({ id, blob })
   await tx.done
   return id
@@ -344,6 +365,22 @@ export async function marcarCuadro(id: number, estado: EstadoSubida, ruta?: stri
   const cuadro = await db.get('cuadros', id)
   if (!cuadro) return
   await db.put('cuadros', { ...cuadro, estadoSubida: estado, ...(ruta ? { ruta } : {}) })
+}
+
+/**
+ * Guarda el cuadro ya difuminado (blob nuevo, resultado de `lib/privacidad/`)
+ * y lo marca `difuminado: true`, en una única transacción: fila y blob nunca
+ * quedan desincronizados, igual que en `guardarCuadro`. Un cuadro que ya no
+ * está (se descartó entre que se leyó y se difuminó) no rompe nada: el `put`
+ * de `blobs` simplemente no tiene fila que acompañar.
+ */
+export async function marcarDifuminado(id: number, blob: Blob): Promise<void> {
+  const db = await abrirDb()
+  const tx = db.transaction(['cuadros', 'blobs'], 'readwrite')
+  const cuadro = await tx.objectStore('cuadros').get(id)
+  if (cuadro) await tx.objectStore('cuadros').put({ ...cuadro, difuminado: true })
+  await tx.objectStore('blobs').put({ id, blob })
+  await tx.done
 }
 
 /**
@@ -452,6 +489,7 @@ export const baseCuadros: BaseCuadros = {
   listarCuadrosPendientes,
   contarCuadros,
   marcarCuadro,
+  marcarDifuminado,
   borrarCuadrosSubidos,
   marcarCuadrosEnError,
   encolarCuadros,

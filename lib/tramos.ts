@@ -1,9 +1,22 @@
 import type { RugosidadTramo } from './sensores/tipos'
+import { kmDeTrack } from './track'
 import type { TramoResumen } from './tramos-consultas'
 
 export type TramoListado = TramoResumen & { calidad: RugosidadTramo['calidad'] }
 
 export type OrdenTramos = 'km' | 'visita'
+
+/**
+ * Km de una geometría `[lng, lat][]` (formato de `tramos.geometria`), con el
+ * mismo haversine que el resto de la app (`kmDeTrack`, `lib/track.ts`) en vez
+ * de un tercero — usado tanto en vivo mientras se dibuja el tramo (cliente)
+ * como para calcular el `km` real al guardar (servidor, `actions.ts`): el
+ * cliente nunca manda un `km`, siempre se deriva acá de los puntos dibujados.
+ */
+export function kmDeGeometria(geometria: readonly [number, number][]): number {
+  const puntos = geometria.map(([lng, lat]) => ({ lat, lng }))
+  return Number(kmDeTrack(puntos).toFixed(3))
+}
 
 /** Cruza el resumen por tramo con la rugosidad estimada (calidad "sin_dato" si no hay muestras todavía). */
 export function combinarTramos(

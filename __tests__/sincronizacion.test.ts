@@ -230,6 +230,7 @@ describe('sincronizarRecorrido', () => {
       puntosGps: number
       track: [number, number][]
       puntos: { lat: number; lng: number; t: number; precision: number }[]
+      cadencia: { lat: number; lng: number; t: number }[]
       observaciones: { evidencia?: { ruta: string; tipo: string } }[]
       muestras?: unknown[]
       impactos?: unknown[]
@@ -241,6 +242,11 @@ describe('sincronizarRecorrido', () => {
     expect(payload.track.length).toBe(payload.puntos.length)
     expect(payload.puntos[0]).toEqual({ lat: -36.85, lng: -57.88, t: AHORA, precision: 8 })
     expect(payload.puntos.every((p) => typeof p.t === 'number' && typeof p.precision === 'number')).toBe(true)
+    // La cadencia se arma aparte, muestreando por tiempo los puntos crudos
+    // (no el `simplificado`): conserva siempre el primero y el último.
+    expect(payload.cadencia.length).toBeGreaterThanOrEqual(2)
+    expect(payload.cadencia[0]).toEqual({ lat: -36.85, lng: -57.88, t: AHORA })
+    expect(payload.cadencia[payload.cadencia.length - 1].t).toBe(AHORA + 2_000)
     expect(payload.observaciones[0].evidencia).toEqual({ ruta: DESTINO.ruta, tipo: 'imagen' })
     // Sin sensores el payload no lleva las claves nuevas.
     expect(payload.muestras).toBeUndefined()

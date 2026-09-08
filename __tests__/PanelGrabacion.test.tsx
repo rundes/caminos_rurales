@@ -128,4 +128,14 @@ describe('PanelGrabacion', () => {
 
     expect(screen.getByRole('alert')).toHaveTextContent('No se pudo guardar el punto.')
   })
+
+  test('pausado por una interrupción muestra el hueco en vez del aviso genérico', () => {
+    render_({
+      estado: { ...ESTADO, estado: 'pausado' },
+      interrupcionActual: { desde: T0, hasta: T0 + 60_000 },
+    })
+
+    expect(screen.getByRole('alert')).toHaveTextContent(/se interrumpió la grabación/i)
+    expect(screen.queryByText(/no se están registrando puntos/i)).not.toBeInTheDocument()
+  })
 })

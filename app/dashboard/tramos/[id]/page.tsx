@@ -1,5 +1,7 @@
+import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { MapaTramoCliente } from '@/components/MapaTramoCliente'
+import { obtenerProveedor } from '@/lib/almacenamiento'
 import { obtenerRugosidadTramos } from '@/lib/cobertura-consultas'
 import { formatearKm } from '@/lib/cobertura-resumen'
 import { formatearFecha, formatearFechaHora } from '@/lib/fechas'
@@ -9,10 +11,8 @@ import { crearClienteServidor } from '@/lib/supabase/server'
 
 type Props = { params: Promise<{ id: string }> }
 
-const SEGUNDOS_URL_FIRMADA = 60 * 60
 const LIMITE_OBSERVACIONES = 200
 const LIMITE_CUADROS = 200
-const BUCKET_EVIDENCIA = 'evidencia-vial'
 
 export default async function TramoDetallePage({ params }: Props) {
   const { id } = await params
@@ -24,12 +24,21 @@ export default async function TramoDetallePage({ params }: Props) {
   // hace falta comparar `tramo.municipio` a mano.
   const { data: tramo, error: errorTramo } = await supabase
     .from('tramos')
-    .select('id, nombre_codigo, localidad, km, geometria, municipio')
+    .select('id, nombre_codigo, localidad, km, geometria, municipio, activo')
     .eq('id', id)
     .maybeSingle()
 
   if (errorTramo) console.error('[tramos]', errorTramo.message)
   if (!tramo) notFound()
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  const { data: perfil, error: errorPerfil } = user
+    ? await supabase.from('perfiles').select('rol').eq('id', user.id).maybeSingle()
+    : { data: null, error: null }
+  if (errorPerfil) console.error('[tramos]', errorPerfil.message)
+  const puedeGestionar = perfil?.rol === 'municipio' || perfil?.rol === 'auditor'
 
   // Cuatro consultas independientes entre sí: veces cubierto, última visita,
   // rugosidad estimada (RPC de sesión, no cacheada) y las observaciones y
@@ -76,21 +85,30 @@ export default async function TramoDetallePage({ params }: Props) {
   const rutas = [
     ...new Set([
       ...filasObservaciones.map((o) => o.url_evidencia_imagen).filter((r): r is string => Boolean(r)),
-      ...filasCuadros.map((c) => c.ruta).filter((r) => !r.startsWith('https://')),
+      ...filasCuadros.map((c) => c.ruta),
     ]),
   ]
-  const urls: Record<string, string> = {}
-  if (rutas.length > 0) {
-    const { data: firmadas } = await supabase.storage.from(BUCKET_EVIDENCIA).createSignedUrls(rutas, SEGUNDOS_URL_FIRMADA)
-    for (const f of firmadas ?? []) {
-      if (f.path && f.signedUrl) urls[f.path] = f.signedUrl
-    }
-  }
+  const urls = rutas.length > 0 ? await obtenerProveedor().urlsLectura(rutas) : {}
 
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-bold">{tramo.nombre_codigo}</h1>
+        <div className="flex items-center justify-between gap-2">
+          <h1 className="text-2xl font-bold">{tramo.nombre_codigo}</h1>
+          {puedeGestionar && (
+            <Link
+              href={`/dashboard/tramos/${tramo.id}/editar`}
+              className="flex min-h-11 items-center rounded-xl border-2 border-green-700 px-4 text-sm font-semibold text-green-800"
+            >
+              Editar
+            </Link>
+          )}
+        </div>
+        {!tramo.activo && (
+          <span className="inline-flex w-fit rounded-full bg-gray-200 px-2 py-0.5 text-xs font-semibold text-gray-700">
+            Inactivo
+          </span>
+        )}
         <p className="text-sm text-gray-600">
           {tramo.localidad} · {formatearKm(Number(tramo.km))} km · cubierto {veces ?? 0} {veces === 1 ? 'vez' : 'veces'}
         </p>
@@ -159,7 +177,7 @@ export default async function TramoDetallePage({ params }: Props) {
         ) : (
           <ul className="divide-y rounded-2xl bg-white shadow-sm">
             {filasCuadros.map((c) => {
-              const url = c.ruta.startsWith('https://') ? c.ruta : urls[c.ruta]
+              const url = urls[c.ruta]
               return (
                 <li key={c.id} className="flex items-center justify-between px-4 py-3 text-sm">
                   <span>{formatearFechaHora(c.t)}</span>

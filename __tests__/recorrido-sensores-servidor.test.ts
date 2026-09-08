@@ -18,9 +18,18 @@ const TRAMOS: TramoGeometria[] = [{ id: 'w1', km: 1.1, geometria: [[0, 0], [0.01
 
 const asignador = crearAsignadorTramos(TRAMOS)
 
+/**
+ * `t` por defecto separado por `lng` (no constante): `guardarSensores` deriva
+ * los cortes de las propias muestras (`derivarCortesDeMuestras`), que trata
+ * dos muestras con el mismo `t` pero distinta posición como velocidad
+ * infinita (fail-closed) y las corta. El paso (5.000.000 por grado de `lng`)
+ * da ~80 km/h entre muestras separadas 0,002 (el paso típico en estos
+ * tests): plausible y sin disparar ningún corte que el test no esté
+ * buscando probar.
+ */
 function muestra(lng: number, calidad: CalidadSegmento = 'bueno'): MuestraPayload {
   return {
-    t: 1_756_900_000_000,
+    t: 1_756_900_000_000 + Math.round(lng * 5_000_000),
     lat: 0,
     lng,
     velocidadKmh: 42,
@@ -53,6 +62,24 @@ describe('kmPorCalidad', () => {
     })
     expect(kmPorCalidad([muestra(0)]).bueno).toBe(0)
   })
+
+  test('con cortes, no reparte distancia entre segmentos (no bridgea una pausa)', () => {
+    // 4 muestras: dos clusters de una muestra "malo" cada uno (0 y 0.01),
+    // unidos por un salto de 0.002 a 0.008 que cierra en una muestra "bueno".
+    // Sin cortes ese salto se reparte igual que cualquier otro segmento. Con
+    // un corte justo ahí, el salto desaparece entero — la misma regla que ya
+    // usa `kmDeTrack` (`lib/track.ts`) para los km del track y
+    // `kmConSensores` (`lib/juego.ts`) para el premio por sensores.
+    const muestras = [muestra(0, 'malo'), muestra(0.002, 'malo'), muestra(0.008), muestra(0.01, 'malo')]
+
+    const sinCorte = kmPorCalidad(muestras)
+    expect(sinCorte.malo).toBeCloseTo(0.445, 3) // los dos segmentos "malo" (0->0.002 y 0.008->0.01)
+    expect(sinCorte.bueno).toBeCloseTo(0.667, 3) // el salto de 0.002 a 0.008, que cierra en "bueno"
+
+    const conCorte = kmPorCalidad(muestras, [2])
+    expect(conCorte.malo).toBeCloseTo(0.445, 3) // no cambia: ninguno de los dos segmentos cruza el corte
+    expect(conCorte.bueno).toBe(0) // el salto que cruzaba el corte ya no se reparte
+  })
 })
 
 describe('descripcionImpacto', () => {
@@ -71,7 +98,7 @@ describe('filasMuestras', () => {
         recorrido_id: 'r1',
         usuario_id: 'u1',
         tramo_id: 'w1',
-        t: new Date(1_756_900_000_000).toISOString(),
+        t: new Date(1_756_900_020_000).toISOString(),
         latitud: 0,
         longitud: 0.004,
         velocidad_kmh: 42,

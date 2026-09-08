@@ -72,6 +72,8 @@ function control(estado: Grabador, extra: Partial<ControlGrabador> = {}): Contro
     error: null,
     precision: 7,
     obtenerPuntos: () => [punto(0), punto(1)],
+    interrupcionActual: null,
+    interrupciones: [],
     iniciar: vi.fn(async () => {}),
     retomar: vi.fn(async () => {}),
     pausar: vi.fn(),
@@ -164,6 +166,8 @@ beforeEach(() => {
     subidos: 0,
     errorCuadros: {},
     red: { permitida: true, verificada: true },
+    procesando: false,
+    privacidadActivada: true,
     forzarConDatos: vi.fn(),
   })
 })
@@ -333,6 +337,8 @@ describe('RecorridoView', () => {
       subidos: 0,
       errorCuadros: { [RECORRIDO]: 7 },
       red: { permitida: true, verificada: false },
+      procesando: false,
+      privacidadActivada: true,
       forzarConDatos: vi.fn(),
     })
     vi.mocked(contarCuadros).mockResolvedValue(9)

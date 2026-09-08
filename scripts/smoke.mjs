@@ -90,6 +90,7 @@ const puntosIds = []
 const fallasIds = []
 const muestrasIds = []
 const cuadrosIds = []
+const tramoIds = []
 
 try {
   // 1. Crear usuario (autoconfirmado) con código de invitación de maipu → trigger crea perfil
@@ -173,6 +174,95 @@ try {
     estado: 'finalizado',
   })
   ok(Boolean(insAjeno.error), 'RLS bloquea insert de recorrido con usuario_id ajeno', insAjeno.error?.message)
+
+  // 5b. km de un recorrido con una pausa grande entre dos clusters de puntos:
+  // `finalizarRecorrido` (Server Action, no accesible desde este script, ver
+  // encabezado) calcula `recorridos.km` sumando distancia dentro de cada
+  // segmento del track y nunca a través de un corte. Deriva esos cortes de
+  // la unión de dos señales independientes (`derivarCortesDeTrack`,
+  // `lib/track.ts`): velocidad implícita sobre `datos.puntos` (alineado con
+  // `track`) y huecos/velocidad de `datos.cadencia` (la cadencia real de
+  // fixes, muestreada por tiempo a partir de los puntos crudos antes de
+  // simplificar — la señal que distingue un tramo recto real, colapsado por
+  // Douglas-Peucker a dos vértices lejanos en espacio y tiempo, de una pausa
+  // real). Ninguna de las dos se puede ejercitar desde acá: requieren un
+  // payload armado por `armarPayload` (cliente), no accesible desde este
+  // script de solo-DB. Todo esto está cubierto en detalle por
+  // `__tests__/track.test.ts` y `__tests__/recorrido-actions.test.ts`.
+  // Acá se verifica la mitad que sí es alcanzable desde este script: que la
+  // base guarda y devuelve fielmente el km segmentado (no el bridgeado) que
+  // ese cálculo produciría para un track con una pausa grande entre dos
+  // clusters — independiente de qué señal haya derivado el corte.
+  const haversineKm = (a, b) => {
+    const R = 6371
+    const rad = (g) => (g * Math.PI) / 180
+    const dLat = rad(b[0] - a[0])
+    const dLng = rad(b[1] - a[1])
+    const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a[0])) * Math.cos(rad(b[0])) * Math.sin(dLng / 2) ** 2
+    return 2 * R * Math.asin(Math.sqrt(h))
+  }
+  // Cluster 1 (2 puntos, ~1,1 km) — salto de ~55 km (pausa real) — cluster 2 (2 puntos, ~1,1 km).
+  const clusterA = [
+    [-36.85, -57.88],
+    [-36.86, -57.88],
+  ]
+  const clusterB = [
+    [-37.35, -57.88],
+    [-37.36, -57.88],
+  ]
+  const trackConPausa = [...clusterA, ...clusterB]
+  const kmSegmentado = Number(
+    (
+      haversineKm(clusterA[0], clusterA[1]) + haversineKm(clusterB[0], clusterB[1])
+    ).toFixed(3),
+  )
+  const kmBridgeado = Number(
+    trackConPausa.slice(1).reduce((suma, p, i) => suma + haversineKm(trackConPausa[i], p), 0).toFixed(3),
+  )
+  ok(
+    kmBridgeado > kmSegmentado * 10,
+    'el track de control salta ~55 km entre clusters (bridgeado >> segmentado)',
+    `segmentado=${kmSegmentado} bridgeado=${kmBridgeado}`,
+  )
+
+  // Nota: la versión anterior de este script verificaba acá un umbral fijo
+  // de corte por distancia (5 km, `UMBRAL_INTERRUPCION_DISTANCIA_M`). Esa
+  // señal ya no existe (`lib/track.ts`): un umbral de distancia fijo corta
+  // de más cualquier tramo recto real de más de 5 km (frecuente en caminos
+  // rurales bonaerenses), así que se reemplazó por velocidad implícita +
+  // cadencia real de fixes (ver el comentario de arriba). Ninguna de las dos
+  // depende sólo de la geometría de `track`, así que no hay nada análogo que
+  // verificar contra las coordenadas puras de `clusterA`/`clusterB` desde
+  // este script — queda cubierto por los tests unitarios/de integración.
+
+  const recorridoPausaId = randomUUID()
+  const insRecorridoPausa = await maipu.c
+    .from('recorridos')
+    .insert({
+      id: recorridoPausaId,
+      usuario_id: uid,
+      municipio: 'maipu',
+      inicio,
+      fin,
+      km: kmSegmentado,
+      track: trackConPausa,
+      estado: 'finalizado',
+    })
+    .select('id')
+    .single()
+  ok(
+    !insRecorridoPausa.error && insRecorridoPausa.data?.id === recorridoPausaId,
+    'insert recorrido con pausa (km segmentado, no bridgeado)',
+    insRecorridoPausa.error?.message,
+  )
+  recorridoIds.push(recorridoPausaId)
+
+  const leidoPausa = await maipu.c.from('recorridos').select('km').eq('id', recorridoPausaId).single()
+  ok(
+    !leidoPausa.error && Number(leidoPausa.data?.km) === kmSegmentado,
+    'recorridos.km guarda el segmentado (suma de los dos clusters), no el salto entre ellos',
+    JSON.stringify(leidoPausa.data),
+  )
 
   // 6. cobertura_tramos: sin política de insert para el usuario; sí para la clave secreta.
   // cobertura_municipio agrega por localidad y respeta el municipio del usuario.
@@ -596,6 +686,154 @@ try {
     String(rAuthConfirm.status),
   )
 
+  // 13. Alta de tramos (0011): alta/edición para municipio/auditor dentro del
+  // municipio propio, sin política de delete; `activo` gobierna el
+  // denominador de `cobertura_municipio` sin borrar ni ocultar el tramo.
+  const geometriaSmoke = [
+    [-57.9, -36.99],
+    [-57.89, -36.98],
+  ]
+
+  const tramoInsertProductor = await maipu.c.from('tramos').insert({
+    id: `smoke-productor-${Date.now()}`,
+    municipio: 'maipu',
+    nombre_codigo: 'CR-SMOKE productor',
+    localidad: 'Maipú',
+    km: 1,
+    geometria: geometriaSmoke,
+  })
+  ok(Boolean(tramoInsertProductor.error), 'RLS bloquea insert de tramo como productor', tramoInsertProductor.error?.message)
+
+  // `/dashboard/tramos/nuevo` usa `notFound()` (no un 403/redirect) para no
+  // mostrarle un formulario a alguien que igual no va a poder guardar nada
+  // (ver el comentario del propio `app/dashboard/tramos/nuevo/page.tsx`): el
+  // gate real es RLS, esto solo evita el 200 con un formulario inútil.
+  const rNuevoProductor = await fetch(`${DEV}/dashboard/tramos/nuevo`, { headers: { Cookie: cookie }, redirect: 'manual' })
+  ok(rNuevoProductor.status === 404, 'GET /dashboard/tramos/nuevo como productor → 404', String(rNuevoProductor.status))
+
+  const tramoUpdateProductor = await maipu.c
+    .from('tramos')
+    .update({ nombre_codigo: 'hackeado' })
+    .eq('id', tramo?.id)
+    .select('id')
+  ok(
+    Boolean(tramoUpdateProductor.error) || tramoUpdateProductor.data?.length === 0,
+    'RLS bloquea update de tramo como productor',
+    tramoUpdateProductor.error?.message ?? JSON.stringify(tramoUpdateProductor.data),
+  )
+
+  const idTramoAdmin = `smoke-admin-${Date.now()}`
+  const tramoInsertAdmin = await admin
+    .from('tramos')
+    .insert({
+      id: idTramoAdmin,
+      municipio: 'maipu',
+      nombre_codigo: 'CR-SMOKE admin',
+      localidad: 'Maipú',
+      km: 1,
+      geometria: geometriaSmoke,
+    })
+    .select('id')
+    .single()
+  ok(
+    !tramoInsertAdmin.error && tramoInsertAdmin.data?.id === idTramoAdmin,
+    'la clave secreta inserta un tramo (siembra)',
+    tramoInsertAdmin.error?.message,
+  )
+  if (tramoInsertAdmin.data?.id) tramoIds.push(tramoInsertAdmin.data.id)
+
+  // Promueve al usuario de maipu a rol 'municipio' (solo la clave secreta
+  // puede: 0008, trigger perfiles_no_escalar) para probar el alta/edición de
+  // tramos como gestión.
+  const promover = await admin.from('perfiles').update({ rol: 'municipio' }).eq('id', uid).select('rol')
+  ok(
+    !promover.error && promover.data?.[0]?.rol === 'municipio',
+    'la clave secreta promueve al usuario a rol municipio',
+    promover.error?.message ?? JSON.stringify(promover.data),
+  )
+
+  const rNuevoMunicipio = await fetch(`${DEV}/dashboard/tramos/nuevo`, { headers: { Cookie: cookie }, redirect: 'manual' })
+  ok(rNuevoMunicipio.status === 200, 'GET /dashboard/tramos/nuevo como municipio → 200', String(rNuevoMunicipio.status))
+
+  const idTramoMunicipio = `smoke-municipio-${Date.now()}`
+  const tramoInsertMunicipio = await maipu.c
+    .from('tramos')
+    .insert({
+      id: idTramoMunicipio,
+      municipio: 'maipu',
+      nombre_codigo: 'CR-SMOKE municipio',
+      localidad: 'Maipú',
+      km: 1,
+      geometria: geometriaSmoke,
+    })
+    .select('id, activo, creado_por')
+    .single()
+  ok(
+    !tramoInsertMunicipio.error &&
+      tramoInsertMunicipio.data?.id === idTramoMunicipio &&
+      tramoInsertMunicipio.data?.activo === true &&
+      tramoInsertMunicipio.data?.creado_por === uid,
+    'municipio inserta un tramo propio (activo=true, creado_por sellado por el trigger tramos_auditoria)',
+    tramoInsertMunicipio.error?.message ?? JSON.stringify(tramoInsertMunicipio.data),
+  )
+  if (tramoInsertMunicipio.data?.id) tramoIds.push(tramoInsertMunicipio.data.id)
+
+  const tramoInsertOtroMunicipio = await maipu.c.from('tramos').insert({
+    id: `smoke-otro-municipio-${Date.now()}`,
+    municipio: 'bahia-blanca',
+    nombre_codigo: 'CR-SMOKE otro municipio',
+    localidad: 'Bahía',
+    km: 1,
+    geometria: geometriaSmoke,
+  })
+  ok(
+    Boolean(tramoInsertOtroMunicipio.error),
+    'RLS bloquea a un municipio insertar un tramo en otro municipio',
+    tramoInsertOtroMunicipio.error?.message,
+  )
+
+  // Semántica de `activo` (0011): el denominador de cobertura cuenta solo
+  // tramos activos; desactivar uno no lo borra ni lo oculta del historial.
+  const coberturaAntes = await maipu.c.rpc('cobertura_municipio', { p_municipio: 'maipu' })
+  const totalAntes = coberturaAntes.data?.reduce((acc, f) => acc + f.tramos, 0) ?? -1
+
+  const desactivar = await maipu.c
+    .from('tramos')
+    .update({ activo: false })
+    .eq('id', idTramoMunicipio)
+    .select('id, activo')
+  ok(
+    !desactivar.error && desactivar.data?.[0]?.activo === false,
+    'municipio desactiva su propio tramo',
+    desactivar.error?.message ?? JSON.stringify(desactivar.data),
+  )
+
+  const coberturaDespues = await maipu.c.rpc('cobertura_municipio', { p_municipio: 'maipu' })
+  const totalDespues = coberturaDespues.data?.reduce((acc, f) => acc + f.tramos, 0) ?? -1
+  ok(
+    !coberturaDespues.error && totalDespues === totalAntes - 1,
+    'cobertura_municipio ya no cuenta el tramo desactivado en el denominador',
+    `${totalAntes} -> ${totalDespues}`,
+  )
+
+  const tramoInactivoVisible = await maipu.c
+    .from('tramos')
+    .select('id, activo')
+    .eq('id', idTramoMunicipio)
+    .maybeSingle()
+  ok(
+    !tramoInactivoVisible.error && tramoInactivoVisible.data?.activo === false,
+    'el tramo inactivo sigue siendo legible directamente (no se borra ni se oculta)',
+    tramoInactivoVisible.error?.message ?? JSON.stringify(tramoInactivoVisible.data),
+  )
+
+  const borrarTramo = await maipu.c.from('tramos').delete().eq('id', idTramoMunicipio).select('id')
+  ok(
+    !borrarTramo.error && borrarTramo.data?.length === 0,
+    'no hay política de delete: el intento de borrado no afecta filas',
+    borrarTramo.error?.message ?? JSON.stringify(borrarTramo.data),
+  )
+
   // 10. Rutas públicas y PWA
   const sinCookie = await fetch(`${DEV}/dashboard`, { redirect: 'manual' })
   ok(sinCookie.status === 307, 'GET /dashboard sin sesión → 307', String(sinCookie.status))
@@ -612,6 +850,7 @@ try {
   // Limpieza: hijos antes que padres, aunque las FK son on delete cascade.
   try {
     if (ruta) await admin.storage.from('evidencia-vial').remove([ruta])
+    for (const id of tramoIds) await sql(`delete from public.tramos where id = '${id}'`)
     for (const id of cuadrosIds) await sql(`delete from public.cuadros where id = '${id}'`)
     for (const id of muestrasIds) await sql(`delete from public.muestras_sensor where id = '${id}'`)
     for (const id of fallasIds) await sql(`delete from public.fallas_deteccion where id = '${id}'`)
