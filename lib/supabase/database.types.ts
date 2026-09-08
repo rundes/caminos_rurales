@@ -173,6 +173,10 @@ export type Database = {
         Row: {
           created_at: string | null
           descripcion: string | null
+          estado: Database["public"]["Enums"]["estado_observacion"]
+          estado_at: string | null
+          estado_nota: string | null
+          estado_por: string | null
           id: string
           latitud: number
           longitud: number
@@ -188,6 +192,10 @@ export type Database = {
         Insert: {
           created_at?: string | null
           descripcion?: string | null
+          estado?: Database["public"]["Enums"]["estado_observacion"]
+          estado_at?: string | null
+          estado_nota?: string | null
+          estado_por?: string | null
           id?: string
           latitud: number
           longitud: number
@@ -203,6 +211,10 @@ export type Database = {
         Update: {
           created_at?: string | null
           descripcion?: string | null
+          estado?: Database["public"]["Enums"]["estado_observacion"]
+          estado_at?: string | null
+          estado_nota?: string | null
+          estado_por?: string | null
           id?: string
           latitud?: number
           longitud?: number
@@ -216,6 +228,13 @@ export type Database = {
           url_evidencia_video?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "fallas_deteccion_estado_por_fkey"
+            columns: ["estado_por"]
+            isOneToOne: false
+            referencedRelation: "perfiles"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "fallas_deteccion_recorrido_id_fkey"
             columns: ["recorrido_id"]
@@ -557,6 +576,13 @@ export type Database = {
           usuario_id: string
         }[]
       }
+      resumen_observaciones: {
+        Args: { p_municipio: string }
+        Returns: {
+          estado: Database["public"]["Enums"]["estado_observacion"]
+          total: number
+        }[]
+      }
       rol_actual: {
         Args: never
         Returns: Database["public"]["Enums"]["rol_usuario"]
@@ -581,6 +607,7 @@ export type Database = {
         | "malo"
         | "intransitable"
       estado_camino: "bueno" | "regular" | "malo" | "intransitable"
+      estado_observacion: "pendiente" | "en_obra" | "resuelta" | "descartada"
       nivel_severidad: "baja" | "media" | "alta"
       origen_datos: "app_sensor" | "camara_dashcam" | "formulario"
       origen_observacion: "manual" | "sensor"
@@ -730,6 +757,7 @@ export const Constants = {
         "intransitable",
       ],
       estado_camino: ["bueno", "regular", "malo", "intransitable"],
+      estado_observacion: ["pendiente", "en_obra", "resuelta", "descartada"],
       nivel_severidad: ["baja", "media", "alta"],
       origen_datos: ["app_sensor", "camara_dashcam", "formulario"],
       origen_observacion: ["manual", "sensor"],

@@ -14,6 +14,7 @@ describe('NavDashboard', () => {
     expect(screen.getByRole('link', { name: 'Inicio' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Caminos' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Mapa' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Obs.' })).toHaveAttribute('href', '/dashboard/observaciones')
     expect(screen.getByRole('link', { name: 'Ranking' })).toBeInTheDocument()
     expect(screen.queryByText(/grabando/i)).not.toBeInTheDocument()
   })

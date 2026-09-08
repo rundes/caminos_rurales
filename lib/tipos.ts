@@ -46,3 +46,12 @@ export const ETIQUETA_SEVERIDAD: Record<Severidad, string> = {
   media: 'Media',
   alta: 'Alta',
 }
+
+export type EstadoObservacion = 'pendiente' | 'en_obra' | 'resuelta' | 'descartada'
+
+export const ETIQUETA_ESTADO_OBSERVACION: Record<EstadoObservacion, string> = {
+  pendiente: 'Pendiente',
+  en_obra: 'En obra',
+  resuelta: 'Resuelta',
+  descartada: 'Descartada',
+}

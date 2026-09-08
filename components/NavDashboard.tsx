@@ -12,6 +12,7 @@ const ENLACES = [
   { href: '/dashboard', etiqueta: 'Inicio' },
   { href: '/dashboard/caminos', etiqueta: 'Caminos' },
   { href: '/dashboard/mapa', etiqueta: 'Mapa' },
+  { href: '/dashboard/observaciones', etiqueta: 'Obs.' },
   { href: '/dashboard/ranking', etiqueta: 'Ranking' },
 ] as const
 
@@ -50,7 +51,7 @@ export function NavDashboard() {
   return (
     <nav
       aria-label="Navegación principal"
-      className="fixed inset-x-0 bottom-0 z-10 grid grid-cols-4 border-t bg-white"
+      className="fixed inset-x-0 bottom-0 z-10 grid grid-cols-5 border-t bg-white"
     >
       {ENLACES.map((e) => (
         <Link key={e.href} href={e.href} className="py-4 text-center text-sm font-medium text-green-800">

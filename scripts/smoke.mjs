@@ -492,6 +492,49 @@ try {
     JSON.stringify(perfilInvalido[0]),
   )
 
+  // 11. Estados de observación (0010): solo municipio/auditor cambian el
+  // estado; la clave secreta también puede (bypasea RLS y el trigger, que
+  // solo corta cuando hay auth.uid()); resumen_observaciones respeta el
+  // municipio del usuario.
+  const estadoProductor = await maipu.c
+    .from('fallas_deteccion')
+    .update({ estado: 'en_obra', estado_at: new Date().toISOString(), estado_por: uid })
+    .eq('id', fallaManual.data?.id)
+    .select('id')
+  ok(
+    Boolean(estadoProductor.error) || estadoProductor.data?.length === 0,
+    'productor NO puede cambiar el estado de una observación (trigger fallas_estado_no_escalar)',
+    estadoProductor.error?.message ?? JSON.stringify(estadoProductor.data),
+  )
+
+  const estadoAdmin = await admin
+    .from('fallas_deteccion')
+    .update({ estado: 'en_obra', estado_at: new Date().toISOString(), estado_por: uid })
+    .eq('id', fallaManual.data?.id)
+    .select('id')
+  ok(
+    !estadoAdmin.error && estadoAdmin.data?.length === 1,
+    'la clave secreta SI puede cambiar el estado de una observación',
+    estadoAdmin.error?.message ?? JSON.stringify(estadoAdmin.data),
+  )
+
+  const resumenMaipu = await maipu.c.rpc('resumen_observaciones', { p_municipio: 'maipu' })
+  ok(
+    !resumenMaipu.error && Array.isArray(resumenMaipu.data) && resumenMaipu.data.length > 0,
+    "resumen_observaciones('maipu') devuelve filas para un usuario de maipu",
+    resumenMaipu.error?.message ?? JSON.stringify(resumenMaipu.data),
+  )
+
+  const resumenBahia = await bahia.c.rpc('resumen_observaciones', { p_municipio: 'maipu' })
+  ok(
+    !resumenBahia.error && resumenBahia.data?.length === 0,
+    "resumen_observaciones('maipu') devuelve 0 filas para un usuario de otro municipio",
+    resumenBahia.error?.message ?? JSON.stringify(resumenBahia.data),
+  )
+
+  const rObservaciones = await fetch(`${DEV}/dashboard/observaciones`, { headers: { Cookie: cookie }, redirect: 'manual' })
+  ok(rObservaciones.status === 200, 'GET /dashboard/observaciones con sesión → 200', String(rObservaciones.status))
+
   // 10. Rutas públicas y PWA
   const sinCookie = await fetch(`${DEV}/dashboard`, { redirect: 'manual' })
   ok(sinCookie.status === 307, 'GET /dashboard sin sesión → 307', String(sinCookie.status))
