@@ -12,7 +12,10 @@ const CSP = [
   "default-src 'self'",
   "img-src 'self' data: blob: https://storage.googleapis.com https://*.supabase.co https://wms.ign.gob.ar https://tile.openstreetmap.org",
   "media-src 'self' blob: https://storage.googleapis.com https://*.supabase.co",
-  "connect-src 'self' https://*.supabase.co https://wms.ign.gob.ar https://tile.openstreetmap.org",
+  // `storage.googleapis.com` también acá (no solo en img/media): la subida de
+  // evidencia y de cuadros hace `fetch(PUT)` contra la URL firmada, y con
+  // `ALMACENAMIENTO=gcs` ese host es el destino del PUT.
+  "connect-src 'self' https://storage.googleapis.com https://*.supabase.co https://wms.ign.gob.ar https://tile.openstreetmap.org",
   "style-src 'self' 'unsafe-inline'",
   "font-src 'self' data:",
   "worker-src 'self'",
