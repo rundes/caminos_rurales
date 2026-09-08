@@ -28,6 +28,7 @@ export type PuntoFalla = {
   municipio: string
   origen: OrigenObservacion
   magnitud: number | null
+  estado: EstadoObservacion
 }
 
 export const ETIQUETA_TIPO_FALLA: Record<TipoFalla, string> = {

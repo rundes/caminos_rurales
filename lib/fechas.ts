@@ -14,3 +14,13 @@ export function formatearHora(iso: string): string {
 export function formatearFechaHora(iso: string): string {
   return new Date(iso).toLocaleString('es-AR', { timeZone: ZONA_HORARIA })
 }
+
+/**
+ * Último instante de una fecha `aaaa-mm-dd` (el valor crudo de un
+ * `<input type="date">`), como ISO de fin de día. Usado para que un filtro
+ * "hasta" en una consulta a la base incluya toda la jornada en vez de
+ * cortar a medianoche.
+ */
+export function finDeDia(fecha: string): string {
+  return `${fecha}T23:59:59.999`
+}

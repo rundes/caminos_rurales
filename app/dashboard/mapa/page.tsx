@@ -1,15 +1,15 @@
 import { Suspense } from 'react'
+import { FiltrosObservaciones } from '@/components/FiltrosObservaciones'
 import { MapaCliente } from '@/components/MapaCliente'
 import { capasDe } from '@/lib/capas'
 import { limitesDe } from '@/lib/capas-servidor'
 import { obtenerRugosidadTramos, obtenerTramosConEstadoCacheado } from '@/lib/cobertura-consultas'
 import { obtenerCuadrosPorTramoCacheado } from '@/lib/cuadros-consultas'
-import { aPuntos, filtrarPuntos, municipiosDe, type FilaFalla } from '@/lib/fallas'
+import { aPuntos, filtrarPuntos, type FilaFalla, type FiltrosFallas } from '@/lib/fallas'
 import { buscarPartido } from '@/lib/partidos'
 import { crearClienteServidor } from '@/lib/supabase/server'
-import { Filtros } from './Filtros'
 
-type Props = { searchParams: Promise<{ tipo?: string; municipio?: string }> }
+type Props = { searchParams: Promise<FiltrosFallas> }
 
 const CENTRO_PROVINCIA: [number, number] = [-36.6, -60.0]
 const SEGUNDOS_URL_FIRMADA = 60 * 60
@@ -29,8 +29,7 @@ export default async function MapaPage({ searchParams }: Props) {
   if (errorPerfil) console.error('[mapa]', errorPerfil.message)
   const municipioActual = perfil?.municipio_id ?? null
   const capas = capasDe(municipioActual)
-  const partidoFiltro = filtros.municipio ? buscarPartido(filtros.municipio) : undefined
-  const partidoActual = !filtros.municipio && capas ? buscarPartido(municipioActual ?? '') : undefined
+  const partidoActual = capas ? buscarPartido(municipioActual ?? '') : undefined
 
   // Cinco consultas independientes entre sí (ninguna depende del resultado de
   // otra): fallas, tramos, rugosidad, cuadros por tramo y límites del
@@ -42,7 +41,7 @@ export default async function MapaPage({ searchParams }: Props) {
     supabase
       .from('fallas_deteccion')
       .select(
-        'id, tipo_falla, severidad, latitud, longitud, url_evidencia_imagen, url_evidencia_video, created_at, origen, magnitud, recorridos(inicio, municipio)',
+        'id, tipo_falla, severidad, latitud, longitud, url_evidencia_imagen, url_evidencia_video, created_at, origen, magnitud, estado, recorridos(inicio, municipio)',
       )
       .order('created_at', { ascending: false })
       .limit(LIMITE_FALLAS),
@@ -59,7 +58,6 @@ export default async function MapaPage({ searchParams }: Props) {
 
   const todos = aPuntos((data ?? []) as FilaFalla[])
   const puntos = filtrarPuntos(todos, filtros)
-  const municipios = municipiosDe(todos)
   const alcanzoLimiteFallas = todos.length >= LIMITE_FALLAS
 
   const rutasImagen = puntos.map((p) => p.url_evidencia_imagen).filter((r): r is string => Boolean(r))
@@ -75,19 +73,17 @@ export default async function MapaPage({ searchParams }: Props) {
     }
   }
 
-  const centro: [number, number] = partidoFiltro
-    ? [partidoFiltro.lat, partidoFiltro.lng]
-    : partidoActual
-      ? [partidoActual.lat, partidoActual.lng]
-      : puntos[0]
-        ? [puntos[0].latitud, puntos[0].longitud]
-        : CENTRO_PROVINCIA
+  const centro: [number, number] = partidoActual
+    ? [partidoActual.lat, partidoActual.lng]
+    : puntos[0]
+      ? [puntos[0].latitud, puntos[0].longitud]
+      : CENTRO_PROVINCIA
 
   return (
     <div className="flex flex-col gap-4">
       <h1 className="text-2xl font-bold">Mapa de observaciones</h1>
       <Suspense fallback={null}>
-        <Filtros municipios={municipios} />
+        <FiltrosObservaciones />
       </Suspense>
       <p className="text-sm text-gray-600">
         {puntos.length} observación(es). Observaciones: rojo alta · amarillo media · verde baja.

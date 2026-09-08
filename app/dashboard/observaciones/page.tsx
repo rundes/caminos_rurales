@@ -1,13 +1,21 @@
 import Link from 'next/link'
-import { formatearFechaHora } from '@/lib/fechas'
+import { Suspense } from 'react'
+import { FiltrosObservaciones } from '@/components/FiltrosObservaciones'
+import { filtroValido, type FiltrosFallas } from '@/lib/fallas'
+import { finDeDia, formatearFechaHora } from '@/lib/fechas'
 import { crearClienteServidor } from '@/lib/supabase/server'
 import {
   ETIQUETA_ESTADO_OBSERVACION,
   ETIQUETA_SEVERIDAD,
   ETIQUETA_TIPO_FALLA,
   type EstadoObservacion,
+  type OrigenObservacion,
+  type Severidad,
+  type TipoFalla,
 } from '@/lib/tipos'
 import { EstadoSelect } from './EstadoSelect'
+
+const ORIGENES: readonly OrigenObservacion[] = ['manual', 'sensor']
 
 const SEGUNDOS_URL_FIRMADA = 60 * 60
 const LIMITE_OBSERVACIONES = 500
@@ -19,7 +27,10 @@ const ETIQUETA_ORIGEN: Record<'manual' | 'sensor', string> = {
   sensor: 'Sensor',
 }
 
-export default async function ObservacionesPage() {
+type Props = { searchParams: Promise<FiltrosFallas> }
+
+export default async function ObservacionesPage({ searchParams }: Props) {
+  const filtros = await searchParams
   const supabase = await crearClienteServidor()
   const {
     data: { user },
@@ -43,14 +54,26 @@ export default async function ObservacionesPage() {
 
   const puedeGestionar = perfil.rol === 'municipio' || perfil.rol === 'auditor'
 
+  // Filtros aplicados en la propia consulta (no se trae todo para filtrar en
+  // el navegador): cada uno se agrega solo si vino en la URL.
+  let consulta = supabase
+    .from('fallas_deteccion')
+    .select(
+      'id, tipo_falla, severidad, origen, estado, created_at, url_evidencia_imagen, tramo_id, recorridos(inicio), tramos(nombre_codigo)',
+    )
+  const tipo = filtroValido(filtros.tipo, Object.keys(ETIQUETA_TIPO_FALLA) as TipoFalla[])
+  const severidad = filtroValido(filtros.severidad, Object.keys(ETIQUETA_SEVERIDAD) as Severidad[])
+  const origen = filtroValido(filtros.origen, ORIGENES)
+  const estado = filtroValido(filtros.estado, Object.keys(ETIQUETA_ESTADO_OBSERVACION) as EstadoObservacion[])
+  if (tipo) consulta = consulta.eq('tipo_falla', tipo)
+  if (severidad) consulta = consulta.eq('severidad', severidad)
+  if (origen) consulta = consulta.eq('origen', origen)
+  if (estado) consulta = consulta.eq('estado', estado)
+  if (filtros.desde) consulta = consulta.gte('created_at', filtros.desde)
+  if (filtros.hasta) consulta = consulta.lte('created_at', finDeDia(filtros.hasta))
+
   const [{ data, error }, { data: resumen, error: errorResumen }] = await Promise.all([
-    supabase
-      .from('fallas_deteccion')
-      .select(
-        'id, tipo_falla, severidad, origen, estado, created_at, url_evidencia_imagen, tramo_id, recorridos(inicio), tramos(nombre_codigo)',
-      )
-      .order('created_at', { ascending: false })
-      .limit(LIMITE_OBSERVACIONES),
+    consulta.order('created_at', { ascending: false }).limit(LIMITE_OBSERVACIONES),
     supabase.rpc('resumen_observaciones', { p_municipio: perfil.municipio_id }),
   ])
 
@@ -77,6 +100,10 @@ export default async function ObservacionesPage() {
   return (
     <div className="flex flex-col gap-6">
       <h1 className="text-2xl font-bold">Observaciones</h1>
+
+      <Suspense fallback={null}>
+        <FiltrosObservaciones />
+      </Suspense>
 
       <section className="flex flex-wrap gap-2">
         {(Object.keys(ETIQUETA_ESTADO_OBSERVACION) as EstadoObservacion[]).map((estado) => (

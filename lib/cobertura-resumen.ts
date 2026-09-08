@@ -58,3 +58,22 @@ export function resumirCobertura(filas: readonly FilaCoberturaMunicipio[]): Resu
 
   return { porLocalidad, total: { tramos, cubiertos, km, kmCubiertos, fraccion } }
 }
+
+/** % de kilómetros cubiertos sobre el total (0-100, redondeado), sin dividir por cero. */
+export function porcentajeCobertura(kmCubiertos: number, km: number): number {
+  if (km <= 0) return 0
+  return Math.round((kmCubiertos / km) * 100)
+}
+
+const FORMATO_KM = new Intl.NumberFormat('es-AR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })
+const FORMATO_PORCENTAJE_COBERTURA = new Intl.NumberFormat('es-AR', { maximumFractionDigits: 0 })
+
+/** Kilómetros con un decimal, formato es-AR (ej. "45,0"). */
+export function formatearKm(km: number): string {
+  return FORMATO_KM.format(km)
+}
+
+/** Porcentaje sin decimales, formato es-AR. Espera un valor ya en 0-100 (ver `porcentajeCobertura`). */
+export function formatearPorcentaje(porcentaje: number): string {
+  return FORMATO_PORCENTAJE_COBERTURA.format(porcentaje)
+}

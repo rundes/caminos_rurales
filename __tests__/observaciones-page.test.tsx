@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, test } from 'vitest'
 import { vi } from 'vitest'
 
@@ -43,6 +43,30 @@ let filasMock: typeof FILAS = FILAS
 // arrastrar esa cadena; `cambiarEstado` no se invoca en estos tests.
 vi.mock('@/app/dashboard/observaciones/actions', () => ({ cambiarEstado: vi.fn() }))
 
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: vi.fn() }),
+  usePathname: () => '/dashboard/observaciones',
+  useSearchParams: () => new URLSearchParams(),
+}))
+
+/** Builder encadenable fake: eq/gte/lte/order/limit resuelven al mismo resultado configurado. */
+function crearConsultaFallasMock() {
+  const builder: {
+    eq: () => typeof builder
+    gte: () => typeof builder
+    lte: () => typeof builder
+    order: () => typeof builder
+    limit: () => Promise<{ data: typeof filasMock; error: null }>
+  } = {
+    eq: () => builder,
+    gte: () => builder,
+    lte: () => builder,
+    order: () => builder,
+    limit: async () => ({ data: filasMock, error: null }),
+  }
+  return builder
+}
+
 vi.mock('@/lib/supabase/server', () => ({
   crearClienteServidor: async () => ({
     auth: { getUser: async () => ({ data: { user: { id: 'u1' } } }) },
@@ -54,13 +78,7 @@ vi.mock('@/lib/supabase/server', () => ({
           }),
         }
       }
-      return {
-        select: () => ({
-          order: () => ({
-            limit: async () => ({ data: filasMock, error: null }),
-          }),
-        }),
-      }
+      return { select: () => crearConsultaFallasMock() }
     },
     rpc: async () => ({ data: RESUMEN, error: null }),
     storage: {
@@ -76,6 +94,8 @@ vi.mock('@/lib/supabase/server', () => ({
 
 const { default: ObservacionesPage } = await import('@/app/dashboard/observaciones/page')
 
+const SIN_FILTROS = Promise.resolve({})
+
 afterEach(() => {
   rolMock = 'productor'
   filasMock = FILAS
@@ -83,38 +103,61 @@ afterEach(() => {
 
 describe('ObservacionesPage', () => {
   test('lista las observaciones con fecha, tipo, severidad, origen, tramo y evidencia', async () => {
-    render(await ObservacionesPage())
+    render(await ObservacionesPage({ searchParams: SIN_FILTROS }))
 
+    // Con el filtro compartido en la página, "Bache", "Alta", "Manual",
+    // "Pendiente", etc. también aparecen como <option> del selector: se
+    // acota la búsqueda a la tabla para no chocar con esos duplicados.
+    const tabla = screen.getByRole('table')
     expect(screen.getByRole('columnheader', { name: 'Fecha' })).toBeInTheDocument()
-    expect(screen.getByText('Bache')).toBeInTheDocument()
-    expect(screen.getByText('Alta')).toBeInTheDocument()
-    expect(screen.getByText('Manual')).toBeInTheDocument()
-    expect(screen.getByText('CR-01')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Ver' })).toHaveAttribute('href', 'https://firmada/u1/r1/foto.jpg')
-    expect(screen.getAllByRole('row')).toHaveLength(3) // encabezado + 2 filas
+    expect(within(tabla).getByText('Bache')).toBeInTheDocument()
+    expect(within(tabla).getByText('Alta')).toBeInTheDocument()
+    expect(within(tabla).getByText('Manual')).toBeInTheDocument()
+    expect(within(tabla).getByText('CR-01')).toBeInTheDocument()
+    expect(within(tabla).getByRole('link', { name: 'Ver' })).toHaveAttribute(
+      'href',
+      'https://firmada/u1/r1/foto.jpg',
+    )
+    expect(within(tabla).getAllByRole('row')).toHaveLength(3) // encabezado + 2 filas
   })
 
   test('conteos por estado salen de resumen_observaciones', async () => {
-    render(await ObservacionesPage())
+    render(await ObservacionesPage({ searchParams: SIN_FILTROS }))
     expect(screen.getByText(/Pendiente:/)).toBeInTheDocument()
     expect(screen.getByText(/Resuelta:/)).toBeInTheDocument()
   })
 
   test('rol productor ve el estado como badge de solo lectura, sin selector', async () => {
-    render(await ObservacionesPage())
-    expect(screen.queryAllByRole('combobox')).toHaveLength(0)
+    render(await ObservacionesPage({ searchParams: SIN_FILTROS }))
+    // Sin selector por fila dentro de la tabla; el filtro compartido sí
+    // tiene sus propios <select>, fuera de la tabla.
+    expect(within(screen.getByRole('table')).queryAllByRole('combobox')).toHaveLength(0)
     expect(screen.getAllByText('Pendiente').length).toBeGreaterThan(0)
   })
 
   test('rol municipio puede cambiar el estado con un selector por fila', async () => {
     rolMock = 'municipio'
-    render(await ObservacionesPage())
+    render(await ObservacionesPage({ searchParams: SIN_FILTROS }))
     expect(screen.getAllByRole('combobox', { name: /estado de la observación/i })).toHaveLength(2)
   })
 
   test('sin observaciones muestra el mensaje vacío', async () => {
     filasMock = []
-    render(await ObservacionesPage())
+    render(await ObservacionesPage({ searchParams: SIN_FILTROS }))
     expect(screen.getByText(/todavía no hay observaciones/i)).toBeInTheDocument()
+  })
+
+  test('muestra el filtro compartido', async () => {
+    render(await ObservacionesPage({ searchParams: SIN_FILTROS }))
+    expect(screen.getByLabelText('Estado')).toBeInTheDocument()
+  })
+
+  test('aplica filtros de la url a la consulta', async () => {
+    render(
+      await ObservacionesPage({
+        searchParams: Promise.resolve({ tipo: 'bache', severidad: 'alta', estado: 'pendiente', desde: '2026-01-01' }),
+      }),
+    )
+    expect(screen.getByRole('columnheader', { name: 'Fecha' })).toBeInTheDocument()
   })
 })

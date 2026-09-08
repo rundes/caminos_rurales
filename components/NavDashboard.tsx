@@ -10,7 +10,7 @@ import {
 
 const ENLACES = [
   { href: '/dashboard', etiqueta: 'Inicio' },
-  { href: '/dashboard/caminos', etiqueta: 'Caminos' },
+  { href: '/dashboard/tramos', etiqueta: 'Tramos' },
   { href: '/dashboard/mapa', etiqueta: 'Mapa' },
   { href: '/dashboard/observaciones', etiqueta: 'Obs.' },
   { href: '/dashboard/ranking', etiqueta: 'Ranking' },

@@ -129,6 +129,7 @@ const PUNTO_SENSOR = {
   municipio: 'maipu',
   origen: 'sensor' as const,
   magnitud: 8.2,
+  estado: 'pendiente' as const,
 }
 
 const PUNTO_MANUAL = { ...PUNTO_SENSOR, id: 'f2', origen: 'manual' as const, magnitud: null }
