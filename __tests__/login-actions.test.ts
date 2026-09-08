@@ -3,10 +3,11 @@ import { beforeEach, describe, expect, test, vi } from 'vitest'
 const signInWithPassword = vi.fn()
 const signUp = vi.fn()
 const signOut = vi.fn()
+const resend = vi.fn()
 
 vi.mock('@/lib/supabase/server', () => ({
   crearClienteServidor: async () => ({
-    auth: { signInWithPassword, signUp, signOut },
+    auth: { signInWithPassword, signUp, signOut, resend },
   }),
 }))
 
@@ -18,7 +19,12 @@ vi.mock('next/navigation', () => ({ redirect }))
 const revalidatePath = vi.fn()
 vi.mock('next/cache', () => ({ revalidatePath }))
 
-const { signIn, signUpAction, signOut: signOutAction } = await import('@/app/login/actions')
+const {
+  signIn,
+  signUpAction,
+  signOut: signOutAction,
+  reenviarConfirmacion,
+} = await import('@/app/login/actions')
 
 function formulario(datos: Record<string, string>): FormData {
   const fd = new FormData()
@@ -58,6 +64,46 @@ describe('signIn', () => {
       signIn(undefined, formulario({ email: 'a@b.com', password: '12345678' })),
     ).rejects.toThrow('NEXT_REDIRECT:/dashboard')
     expect(redirect).toHaveBeenCalledWith('/dashboard')
+  })
+
+  test('email sin confirmar: devuelve el código para ofrecer reenvío', async () => {
+    signInWithPassword.mockResolvedValue({ error: { message: 'Email not confirmed' } })
+    const r = await signIn(undefined, formulario({ email: 'a@b.com', password: '12345678' }))
+    expect(r).toEqual({
+      ok: false,
+      error: 'Confirmá tu email antes de ingresar',
+      codigo: 'email_no_confirmado',
+    })
+  })
+
+  test('otros errores no llevan código', async () => {
+    signInWithPassword.mockResolvedValue({ error: { message: 'Invalid login credentials' } })
+    const r = await signIn(undefined, formulario({ email: 'a@b.com', password: '12345678' }))
+    expect(r?.ok).toBe(false)
+    expect(r && 'codigo' in r ? r.codigo : undefined).toBeUndefined()
+  })
+})
+
+describe('reenviarConfirmacion', () => {
+  test('devuelve error de validación sin llamar a Supabase', async () => {
+    const r = await reenviarConfirmacion(undefined, formulario({ email: 'no-es-un-email' }))
+    expect(r).toEqual({ ok: false, error: expect.stringMatching(/email/i) })
+    expect(resend).not.toHaveBeenCalled()
+  })
+
+  test('reenvía la confirmación de la cuenta', async () => {
+    resend.mockResolvedValue({ error: null })
+    const r = await reenviarConfirmacion(undefined, formulario({ email: 'a@b.com' }))
+    expect(resend).toHaveBeenCalledWith({ type: 'signup', email: 'a@b.com' })
+    expect(r).toEqual({ ok: true, data: undefined })
+  })
+
+  test('traduce el error de Supabase (rate limit) al español', async () => {
+    resend.mockResolvedValue({
+      error: { message: 'For security purposes, you can only request this after 57 seconds.' },
+    })
+    const r = await reenviarConfirmacion(undefined, formulario({ email: 'a@b.com' }))
+    expect(r).toEqual({ ok: false, error: expect.stringMatching(/demasiados intentos/i) })
   })
 })
 

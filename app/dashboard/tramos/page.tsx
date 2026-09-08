@@ -65,19 +65,28 @@ export default async function TramosPage({ searchParams }: Props) {
           defaultValue={q}
           placeholder="Buscar por nombre o código"
           aria-label="Buscar tramos"
-          className="w-full rounded-xl border border-gray-300 px-4 py-3 text-lg"
+          className="w-full min-h-11 rounded-xl border border-gray-300 px-4 py-3 text-lg"
         />
         {orden && <input type="hidden" name="orden" value={orden} />}
-        <button type="submit" className="rounded-xl bg-green-700 px-4 text-white">
+        <button
+          type="submit"
+          className="min-h-11 shrink-0 rounded-xl bg-green-700 px-4 font-semibold text-white"
+        >
           Buscar
         </button>
       </form>
 
       <div className="flex flex-wrap gap-2 text-sm">
-        <Link href={enlaceOrden(q, 'km')} className="rounded-full border border-gray-300 px-3 py-1.5">
+        <Link
+          href={enlaceOrden(q, 'km')}
+          className="inline-flex min-h-11 items-center rounded-full border border-gray-300 px-3"
+        >
           Ordenar por km
         </Link>
-        <Link href={enlaceOrden(q, 'visita')} className="rounded-full border border-gray-300 px-3 py-1.5">
+        <Link
+          href={enlaceOrden(q, 'visita')}
+          className="inline-flex min-h-11 items-center rounded-full border border-gray-300 px-3"
+        >
           Ordenar por última visita
         </Link>
       </div>

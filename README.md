@@ -130,6 +130,76 @@ Variables:
   [Almacenamiento de evidencia](#almacenamiento-de-evidencia).
 - `GCS_BUCKET`, `GCS_SERVICE_ACCOUNT_KEY`: requeridas solo si
   `ALMACENAMIENTO=gcs`.
+- `SITE_URL`: opcional, origen público fijo (por ejemplo
+  `https://visiovial.example`, sin `/` final) para armar el `redirectTo` del
+  email de recuperación de contraseña. Sin definirla, `lib/url-origen.ts` la
+  arma con los headers `host` + `x-forwarded-proto` de la propia petición
+  (nunca del body/formData que manda el cliente). Recomendado en producción
+  para no depender de esos headers si hay un proxy intermedio que no los
+  reenvía tal cual.
+
+## Recuperar contraseña
+
+- `/recuperar` pide el email y llama `supabase.auth.resetPasswordForEmail`
+  con `redirectTo` armado desde `SITE_URL` (o los headers de la petición, ver
+  arriba) apuntando a `/auth/confirm?next=/nueva-clave`. La respuesta es
+  siempre la misma **sin importar si el email existe o no** (`app/recuperar/actions.ts`):
+  nunca se revela si una cuenta está registrada.
+- `@supabase/ssr` usa el flujo **PKCE** por defecto, así que el enlace del
+  email llega con un `?code=...` en la query string, no con un token en el
+  fragmento (`#`) de la URL — se puede resolver enteramente del lado del
+  servidor. `app/auth/confirm/route.ts` (Route Handler) exchangea ese código
+  por una sesión con `exchangeCodeForSession`, escribe las cookies `sb-*` en
+  la respuesta (algo que un Server Component no puede hacer) y redirige a
+  `next` (`/nueva-clave` por defecto; solo se acepta una ruta relativa
+  propia, nunca una URL absoluta ajena).
+- `/nueva-clave` es un Server Component: al llegar ya tiene la sesión de
+  recuperación en las cookies gracias al paso anterior, así que le alcanza
+  con `supabase.auth.getUser()` para confirmarlo. Si no hay sesión (enlace
+  vencido, ya usado, o se entró directo a la URL) muestra un aviso con un
+  enlace de vuelta a `/recuperar` en vez del formulario. El formulario llama
+  `supabase.auth.updateUser({ password })`.
+- Contraseña mínima de 8 caracteres, validada con el mismo esquema zod
+  (`esquemaNuevaClave` en `lib/validaciones.ts`) en el cliente (`minLength`
+  + texto de ayuda) y en el servidor, con el mismo mensaje en los dos lados.
+- `/recuperar`, `/nueva-clave` y `/auth/confirm` son alcanzables sin sesión a
+  propósito: no están en `RUTAS_PROTEGIDAS` de `lib/supabase/proxy.ts` (ver
+  el comentario ahí).
+
+**Configuración necesaria en Supabase** (Authentication → URL Configuration):
+
+- Agregar el origen de producción a la lista de **Redirect URLs** permitidas,
+  incluyendo `https://tu-dominio/auth/confirm` (y `http://localhost:3000/auth/confirm`
+  para desarrollo). Supabase rechaza cualquier `redirectTo` que no esté en
+  esa lista, sin importar lo que mande la app.
+- Traducir al español la plantilla de email **"Reset Password"** (Authentication
+  → Email Templates): el asunto y el cuerpo los define Supabase, la app no
+  los controla.
+- El plan gratuito de Supabase **rate-limita el envío de emails de auth**
+  (recuperación, confirmación de registro) de forma agresiva y por proyecto,
+  no por usuario: en pruebas seguidas conviene esperar unos minutos entre
+  intentos. Para un volumen real de producción, configurar un proveedor SMTP
+  propio (Authentication → SMTP Settings) en vez de depender del límite del
+  plan gratuito.
+
+## Reenviar confirmación
+
+Si `signIn` falla porque el email todavía no fue confirmado, `LoginForm`
+ofrece "Reenviar correo de confirmación" (`supabase.auth.resend`). El botón
+entra en un cooldown de 60 s con cuenta regresiva después de cada click
+(`lib/reenvio-cooldown.ts`, función pura) para no poder espamearlo desde la
+UI; Supabase también rate-limita el reenvío del lado del servidor.
+
+## Mensajes de error de auth en castellano
+
+Supabase Auth devuelve los mensajes de error en inglés ("Invalid login
+credentials", "Email not confirmed", límites de envío, etc.). `lib/auth-mensajes.ts`
+centraliza la traducción al español para las cuatro Server Actions de auth
+(login, registro, recuperar contraseña, reenvío de confirmación): cualquier
+mensaje sin mapear cae en un genérico ("No se pudo completar la operación...")
+en vez de filtrar texto en inglés a la UI, y el original queda logueado en el
+servidor para poder mapearlo después. Ningún mensaje revela si una cuenta
+existe o no.
 
 ## Códigos de invitación
 

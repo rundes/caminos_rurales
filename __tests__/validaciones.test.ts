@@ -6,9 +6,12 @@ import {
   esquemaImpacto,
   esquemaLogin,
   esquemaMuestra,
+  esquemaNuevaClave,
   esquemaObservacion,
   esquemaRecorrido,
+  esquemaRecuperar,
   esquemaRegistro,
+  MENSAJE_PASSWORD_CORTA,
   primerError,
 } from '@/lib/validaciones'
 
@@ -19,6 +22,31 @@ describe('esquemaLogin', () => {
   test('rechaza email inválido', () => {
     const r = esquemaLogin.safeParse({ email: 'no', password: '12345678' })
     expect(r.success).toBe(false)
+  })
+  test('rechaza password corta con el mensaje compartido', () => {
+    const r = esquemaLogin.safeParse({ email: 'a@b.com', password: '1234567' })
+    expect(r.success).toBe(false)
+    if (!r.success) expect(primerError(r.error)).toBe(MENSAJE_PASSWORD_CORTA)
+  })
+})
+
+describe('esquemaRecuperar', () => {
+  test('acepta un email válido', () => {
+    expect(esquemaRecuperar.safeParse({ email: 'a@b.com' }).success).toBe(true)
+  })
+  test('rechaza un email inválido', () => {
+    expect(esquemaRecuperar.safeParse({ email: 'no' }).success).toBe(false)
+  })
+})
+
+describe('esquemaNuevaClave', () => {
+  test('acepta una contraseña de 8 caracteres o más', () => {
+    expect(esquemaNuevaClave.safeParse({ password: '12345678' }).success).toBe(true)
+  })
+  test('rechaza una contraseña corta con el mismo mensaje que esquemaLogin', () => {
+    const r = esquemaNuevaClave.safeParse({ password: '1234567' })
+    expect(r.success).toBe(false)
+    if (!r.success) expect(primerError(r.error)).toBe(MENSAJE_PASSWORD_CORTA)
   })
 })
 

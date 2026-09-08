@@ -3,13 +3,20 @@
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
+import { traducirAuth } from '@/lib/auth-mensajes'
 import { crearClienteServidor } from '@/lib/supabase/server'
 import type { ResultadoAccion } from '@/lib/tipos'
 import { esquemaLogin, esquemaRegistro, primerError } from '@/lib/validaciones'
 
-export type EstadoAuth = ResultadoAccion | undefined
+/**
+ * `codigo` es opcional y solo lo usa el formulario para decidir cuándo
+ * ofrecer "Reenviar correo de confirmación": no cambia el contrato de
+ * `ResultadoAccion` que usa el resto de la app.
+ */
+export type EstadoAuth = (ResultadoAccion & { codigo?: 'email_no_confirmado' }) | undefined
 
 const ERROR_CODIGO = 'El código de invitación no es válido'
+const ERROR_EMAIL_NO_CONFIRMADO = 'Email not confirmed'
 
 /**
  * El municipio ya no lo elige quien se registra: lo determina el código de
@@ -24,24 +31,6 @@ const esquemaRegistroConCodigo = esquemaRegistro.omit({ municipio_id: true }).ex
     .max(40, { message: ERROR_CODIGO }),
 })
 
-const MENSAJES: Record<string, string> = {
-  'Invalid login credentials': 'Email o contraseña incorrectos',
-  'User already registered': 'Ese email ya está registrado',
-  'Email not confirmed': 'Confirmá tu email antes de ingresar',
-  'Password should be at least 6 characters': 'La contraseña debe tener al menos 8 caracteres',
-  'Email rate limit exceeded': 'Demasiados intentos. Esperá unos minutos.',
-}
-
-const MENSAJE_GENERICO = 'No se pudo completar la operación. Intentá de nuevo.'
-
-function traducir(mensaje: string): string {
-  const traducido = MENSAJES[mensaje]
-  if (traducido) return traducido
-
-  console.error('[auth]', mensaje)
-  return MENSAJE_GENERICO
-}
-
 export async function signIn(_prev: EstadoAuth, formData: FormData): Promise<EstadoAuth> {
   const parseo = esquemaLogin.safeParse({
     email: formData.get('email'),
@@ -51,9 +40,33 @@ export async function signIn(_prev: EstadoAuth, formData: FormData): Promise<Est
 
   const supabase = await crearClienteServidor()
   const { error } = await supabase.auth.signInWithPassword(parseo.data)
-  if (error) return { ok: false, error: traducir(error.message) }
+  if (error) {
+    const codigo = error.message === ERROR_EMAIL_NO_CONFIRMADO ? 'email_no_confirmado' : undefined
+    return { ok: false, error: traducirAuth(error.message), codigo }
+  }
 
   redirect('/dashboard')
+}
+
+const esquemaReenvio = z.object({
+  email: z.email({ message: 'Email inválido' }),
+})
+
+/**
+ * Reenvía el correo de confirmación de una cuenta sin confirmar
+ * (`supabase.auth.resend`). El botón del login lo limita a un intento cada
+ * ~60 s en la UI (`lib/reenvio-cooldown.ts`); Supabase también rate-limita
+ * el reenvío en el servidor.
+ */
+export async function reenviarConfirmacion(_prev: EstadoAuth, formData: FormData): Promise<EstadoAuth> {
+  const parseo = esquemaReenvio.safeParse({ email: formData.get('email') })
+  if (!parseo.success) return { ok: false, error: primerError(parseo.error) }
+
+  const supabase = await crearClienteServidor()
+  const { error } = await supabase.auth.resend({ type: 'signup', email: parseo.data.email })
+  if (error) return { ok: false, error: traducirAuth(error.message) }
+
+  return { ok: true, data: undefined }
 }
 
 export async function signUpAction(_prev: EstadoAuth, formData: FormData): Promise<EstadoAuth> {
@@ -72,7 +85,7 @@ export async function signUpAction(_prev: EstadoAuth, formData: FormData): Promi
     password,
     options: { data: { nombre, codigo_invitacion } },
   })
-  if (error) return { ok: false, error: traducir(error.message) }
+  if (error) return { ok: false, error: traducirAuth(error.message) }
 
   if (!data.session) {
     return { ok: true, data: undefined }

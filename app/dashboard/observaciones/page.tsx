@@ -159,7 +159,12 @@ export default async function ObservacionesPage({ searchParams }: Props) {
                     <td className="px-3 py-2">{f.tramos?.nombre_codigo ?? '—'}</td>
                     <td className="px-3 py-2">
                       {url ? (
-                        <a href={url} target="_blank" rel="noopener noreferrer" className="text-green-800 underline">
+                        <a
+                          href={url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex min-h-11 items-center px-2 text-green-800 underline"
+                        >
                           Ver
                         </a>
                       ) : (

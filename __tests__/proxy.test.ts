@@ -45,4 +45,17 @@ describe('actualizarSesion', () => {
     expect(respuesta.status).toBe(200)
     expect(respuesta.headers.get('x-middleware-next')).toBe('1')
   })
+
+  test.each(['/recuperar', '/nueva-clave', '/auth/confirm'])(
+    '%s sin claims: deja pasar (recuperación de contraseña alcanzable sin sesión)',
+    async (ruta) => {
+      getClaims.mockResolvedValue({ data: null })
+      const request = new NextRequest(`http://localhost${ruta}`)
+
+      const respuesta = await actualizarSesion(request)
+
+      expect(respuesta.status).toBe(200)
+      expect(respuesta.headers.get('x-middleware-next')).toBe('1')
+    },
+  )
 })

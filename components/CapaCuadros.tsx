@@ -80,10 +80,20 @@ export const CapaCuadros = memo(function CapaCuadros({ cuadros, urls }: Props) {
                   )}
                   Tramo: {c.tramo_id ?? 'sin tramo'}
                   <br />
-                  <button type="button" disabled={!anterior} onClick={() => irA(anterior?.id)}>
+                  <button
+                    type="button"
+                    disabled={!anterior}
+                    onClick={() => irA(anterior?.id)}
+                    className="inline-flex min-h-11 items-center px-2 disabled:opacity-50"
+                  >
                     Anterior
                   </button>{' '}
-                  <button type="button" disabled={!siguiente} onClick={() => irA(siguiente?.id)}>
+                  <button
+                    type="button"
+                    disabled={!siguiente}
+                    onClick={() => irA(siguiente?.id)}
+                    className="inline-flex min-h-11 items-center px-2 disabled:opacity-50"
+                  >
                     Siguiente
                   </button>
                 </>

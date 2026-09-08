@@ -132,7 +132,12 @@ export default async function TramoDetallePage({ params }: Props) {
                   </div>
                   <div className="flex items-center gap-3">
                     {url && (
-                      <a href={url} target="_blank" rel="noopener noreferrer" className="text-green-800 underline">
+                      <a
+                        href={url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex min-h-11 items-center px-2 text-green-800 underline"
+                      >
                         Ver
                       </a>
                     )}
@@ -159,7 +164,12 @@ export default async function TramoDetallePage({ params }: Props) {
                 <li key={c.id} className="flex items-center justify-between px-4 py-3 text-sm">
                   <span>{formatearFechaHora(c.t)}</span>
                   {url && (
-                    <a href={url} target="_blank" rel="noopener noreferrer" className="text-green-800 underline">
+                    <a
+                      href={url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex min-h-11 items-center px-2 text-green-800 underline"
+                    >
                       Ver
                     </a>
                   )}

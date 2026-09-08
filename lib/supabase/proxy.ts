@@ -1,6 +1,14 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
+/**
+ * Rutas que exigen sesión. Todo lo que no está acá es alcanzable sin login:
+ * además de `/login`, eso incluye a propósito el flujo de recuperación de
+ * contraseña completo — `/recuperar` (pide el email antes de tener sesión),
+ * `/auth/confirm` (exchangea el `code` del enlace emailado por la sesión de
+ * recuperación) y `/nueva-clave` (recién tiene sesión propia una vez que ese
+ * exchange terminó, así que tampoco puede exigirla de entrada).
+ */
 const RUTAS_PROTEGIDAS = ['/dashboard', '/terminos', '/pendiente']
 
 export async function actualizarSesion(request: NextRequest) {

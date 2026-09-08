@@ -13,6 +13,7 @@ function limpiarEntorno() {
   delete process.env.ALMACENAMIENTO
   delete process.env.GCS_BUCKET
   delete process.env.GCS_SERVICE_ACCOUNT_KEY
+  delete process.env.SITE_URL
 }
 
 beforeEach(() => {
@@ -96,5 +97,19 @@ describe('envServidor', () => {
   test('un ALMACENAMIENTO fuera del enum falla', () => {
     process.env.ALMACENAMIENTO = 'otro'
     expect(() => envServidor()).toThrow()
+  })
+
+  test('SITE_URL es opcional', () => {
+    expect(envServidor().SITE_URL).toBeUndefined()
+  })
+
+  test('SITE_URL inválida falla con un mensaje que la nombra', () => {
+    process.env.SITE_URL = 'no-es-una-url'
+    expect(() => envServidor()).toThrow(/SITE_URL/)
+  })
+
+  test('SITE_URL válida pasa', () => {
+    process.env.SITE_URL = 'https://visiovial.example'
+    expect(envServidor().SITE_URL).toBe('https://visiovial.example')
   })
 })

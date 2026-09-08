@@ -3,7 +3,7 @@
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { ETIQUETA_ESTADO_OBSERVACION, ETIQUETA_SEVERIDAD, ETIQUETA_TIPO_FALLA, type EstadoObservacion, type Severidad, type TipoFalla } from '@/lib/tipos'
 
-const CAMPO = 'w-full rounded-xl border border-gray-300 px-3 py-2'
+const CAMPO = 'w-full min-h-11 rounded-xl border border-gray-300 px-3 py-2'
 
 const ETIQUETA_ORIGEN: Record<'manual' | 'sensor', string> = {
   manual: 'Manual',
@@ -105,7 +105,7 @@ export function FiltrosObservaciones() {
         <button
           type="button"
           onClick={() => router.push(pathname)}
-          className="self-start text-sm font-medium text-green-800 underline"
+          className="inline-flex min-h-11 items-center self-start px-1 text-sm font-medium text-green-800 underline"
         >
           Limpiar filtros
         </button>
