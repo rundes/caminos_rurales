@@ -10,7 +10,12 @@ export type Posicion = [number, number]
 
 type Props = {
   centro: Posicion
-  track: Posicion[]
+  /**
+   * Uno o más tramos de la traza, en segmentos separados: cada pausa/reanudación
+   * abre un segmento nuevo, así el dibujo no une con una recta el punto de
+   * antes de pausar con el de después de reanudar.
+   */
+  tracks: Posicion[][]
   posicion: Posicion | null
   capas?: CapasMunicipioTipo | null
   seguir?: boolean
@@ -51,7 +56,7 @@ function DetectorArrastre({ onArrastrar }: { onArrastrar?: () => void }) {
 /** Mapa en vivo del recorrido: base IGN, capas del municipio, traza y posición. */
 export function MapaRecorrido({
   centro,
-  track,
+  tracks,
   posicion,
   capas,
   seguir = true,
@@ -73,9 +78,16 @@ export function MapaRecorrido({
         maxZoom={TESELAS_IGN.maxZoom}
       />
       {capas && <CapasMunicipio capas={capas} />}
-      {track.length > 1 && (
-        <Polyline positions={track} pathOptions={{ color: COLOR_TRACK, weight: PESO_TRACK }} />
-      )}
+      {tracks
+        .filter((segmento) => segmento.length > 1)
+        .map((segmento, indice) => (
+          // El índice es estable acá: los segmentos solo se agregan al final, nunca se reordenan.
+          <Polyline
+            key={indice}
+            positions={segmento}
+            pathOptions={{ color: COLOR_TRACK, weight: PESO_TRACK }}
+          />
+        ))}
       {impactos.map(([lat, lng]) => (
         <CircleMarker
           key={`${lat},${lng}`}

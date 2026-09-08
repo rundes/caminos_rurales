@@ -16,6 +16,14 @@ export type Grabador = {
   ultimo: PuntoGps | null
   km: number
   cantidad: number
+  /**
+   * Índices (sobre el array de puntos aceptados, 0-based) donde arranca un
+   * segmento nuevo del track porque hubo una pausa de por medio. El mapa usa
+   * esto para no dibujar una línea recta entre el punto de antes de pausar y
+   * el de después de reanudar: puede haber metros o cuadras de diferencia y
+   * unirlos con una recta mostraría un camino que nunca se recorrió.
+   */
+  cortes: readonly number[]
 }
 
 export const GRABADOR_INICIAL: Grabador = {
@@ -26,6 +34,7 @@ export const GRABADOR_INICIAL: Grabador = {
   ultimo: null,
   km: 0,
   cantidad: 0,
+  cortes: [],
 }
 
 /** Arranca un recorrido nuevo. `ahora` en milisegundos epoch. */
@@ -35,7 +44,9 @@ export function iniciar(recorridoId: string, ahora: number): Grabador {
 
 /**
  * Retoma un recorrido guardado en el dispositivo, reconstruyendo km y último
- * punto a partir de los puntos ya persistidos.
+ * punto a partir de los puntos ya persistidos. Los puntos ya guardados se
+ * tratan como un solo segmento: el corte real (si lo hubo) ya pasó y no hay
+ * forma de reconstruir en qué índice, así que se prioriza no cortar de más.
  */
 export function retomar(recorridoId: string, inicio: number, puntos: readonly PuntoGps[]): Grabador {
   let km = 0
@@ -48,6 +59,7 @@ export function retomar(recorridoId: string, inicio: number, puntos: readonly Pu
     ultimo: puntos.length > 0 ? puntos[puntos.length - 1] : null,
     km,
     cantidad: puntos.length,
+    cortes: [],
   }
 }
 
@@ -72,7 +84,11 @@ export function pausar(grabador: Grabador): Grabador {
 
 export function reanudar(grabador: Grabador): Grabador {
   if (grabador.estado !== 'pausado') return grabador
-  return { ...grabador, estado: 'grabando' }
+  // El corte se registra en `cantidad`: es el índice del próximo punto que se
+  // acepte, así que separa exactamente lo grabado antes de pausar de lo que
+  // venga después. Si no se aceptó ningún punto todavía no hay nada que cortar.
+  const cortes = grabador.cantidad > 0 ? [...grabador.cortes, grabador.cantidad] : grabador.cortes
+  return { ...grabador, estado: 'grabando', cortes }
 }
 
 export function finalizar(grabador: Grabador, ahora: number): Grabador {

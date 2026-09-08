@@ -1,20 +1,21 @@
-type Props = { etiqueta: string; cubiertos: number; tramos: number }
+import { formatearKm, formatearPorcentaje, porcentajeCobertura } from '@/lib/cobertura-resumen'
 
-function calcularPorcentaje(cubiertos: number, tramos: number): number {
-  if (tramos <= 0) return 0
-  return Math.round((cubiertos / tramos) * 100)
-}
+type Props = { etiqueta: string; km: number; kmCubiertos: number; cubiertos: number; tramos: number }
 
-/** Barra de progreso accesible: cubiertos/tramos de una localidad o el municipio. */
-export function BarraCobertura({ etiqueta, cubiertos, tramos }: Props) {
-  const porcentaje = calcularPorcentaje(cubiertos, tramos)
+/**
+ * Barra de progreso accesible de una localidad (o el municipio): kilómetros
+ * cubiertos/total como cifra principal, cantidad de tramos como texto
+ * secundario (ver Ola 2, "% de cobertura por km").
+ */
+export function BarraCobertura({ etiqueta, km, kmCubiertos, cubiertos, tramos }: Props) {
+  const porcentaje = porcentajeCobertura(kmCubiertos, km)
 
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-center justify-between text-sm">
         <span className="font-medium text-gray-700">{etiqueta}</span>
         <span className="text-gray-500">
-          {cubiertos}/{tramos} · {porcentaje}%
+          {formatearKm(kmCubiertos)} km de {formatearKm(km)} km · {formatearPorcentaje(porcentaje)}%
         </span>
       </div>
       <div
@@ -27,6 +28,9 @@ export function BarraCobertura({ etiqueta, cubiertos, tramos }: Props) {
       >
         <div className="h-full rounded-full bg-green-700" style={{ width: `${porcentaje}%` }} />
       </div>
+      <span className="text-xs text-gray-400">
+        {cubiertos} de {tramos} tramos
+      </span>
     </div>
   )
 }

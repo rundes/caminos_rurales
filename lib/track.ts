@@ -106,6 +106,29 @@ export function simplificar(puntos: readonly PuntoGps[], toleranciaM = 10): Punt
   return salida
 }
 
+/**
+ * Parte un track en segmentos según los índices de corte (0-based, cada uno
+ * marca dónde arranca un segmento nuevo). Se usa para no dibujar una línea
+ * recta entre el último punto antes de una pausa y el primero después de
+ * reanudar. Índices fuera de rango o desordenados se ignoran; segmentos
+ * vacíos no se incluyen.
+ */
+export function partirEnSegmentos<T>(puntos: readonly T[], cortes: readonly number[]): T[][] {
+  if (puntos.length === 0) return []
+  const limites = [...new Set(cortes)]
+    .filter((i) => i > 0 && i < puntos.length)
+    .sort((a, b) => a - b)
+
+  const segmentos: T[][] = []
+  let desde = 0
+  for (const corte of limites) {
+    segmentos.push(puntos.slice(desde, corte) as T[])
+    desde = corte
+  }
+  segmentos.push(puntos.slice(desde) as T[])
+  return segmentos.filter((s) => s.length > 0)
+}
+
 /** Suma de distancias haversine entre puntos consecutivos del track, en km. */
 export function kmDeTrack(puntos: readonly { lat: number; lng: number }[]): number {
   let km = 0

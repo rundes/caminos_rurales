@@ -181,6 +181,45 @@ describe('ResumenRecorrido', () => {
     expect(screen.queryByText(/no pudimos verificar/i)).not.toBeInTheDocument()
   })
 
+  test('un error de subida se muestra con Reintentar y no el estado de subiendo/pendiente', async () => {
+    const onReintentar = vi.fn()
+    render(
+      <ResumenRecorrido
+        km={4.5}
+        puntosGps={120}
+        resumen={null}
+        sinConexion={false}
+        error="Ese recorrido ya fue registrado por otra persona."
+        onReintentar={onReintentar}
+        onNuevo={vi.fn()}
+      />,
+    )
+
+    const alerta = screen.getByRole('alert')
+    expect(alerta).toHaveTextContent(/no pudimos subir este recorrido/i)
+    expect(alerta).toHaveTextContent(/ese recorrido ya fue registrado por otra persona/i)
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: /reintentar subida/i }))
+    expect(onReintentar).toHaveBeenCalledTimes(1)
+  })
+
+  test('un error de subida gana incluso si ya había resumen del servidor', () => {
+    render(
+      <ResumenRecorrido
+        km={4.5}
+        puntosGps={120}
+        resumen={RESUMEN}
+        sinConexion={false}
+        error="Se agotaron los reintentos."
+        onNuevo={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByRole('alert')).toHaveTextContent(/se agotaron los reintentos/i)
+    expect(screen.queryByText(/tramo\(s\) nuevo\(s\)/i)).not.toBeInTheDocument()
+  })
+
   test('sin resumen del servidor avisa que se está subiendo', async () => {
     const onNuevo = vi.fn()
     render(

@@ -5,6 +5,53 @@ versionado según [SemVer](https://semver.org/lang/es/).
 
 ## [Sin publicar]
 
+### Ola 2: producto (0.7.0)
+
+- Migración `0010_estado_observaciones.sql`: enum `estado_observacion`
+  (pendiente / en obra / resuelta / descartada) y columnas de seguimiento en
+  `fallas_deteccion`; columnas escribibles granuladas (mismo patrón que
+  `perfiles` en 0008); política `fallas_update_estado_gestion` y trigger
+  `fallas_estado_no_escalar` limitan el cambio de estado a municipio/auditor
+  sobre su propio municipio; función `resumen_observaciones(p_municipio)`.
+- `/dashboard/observaciones`: listado con estado, filtros compartidos
+  (`FiltrosObservaciones`: tipo, severidad, origen, estado, rango de
+  fechas), `EstadoSelect` para municipio/auditor (badge de solo lectura para
+  el resto), conteos por estado, export CSV y GeoJSON (`lib/exportar.ts`:
+  `aCsv` RFC 4180 con BOM UTF-8, `aGeoJson`) también disponible para
+  cobertura por tramo.
+- Cobertura expresada en kilómetros: `TarjetaCobertura`/`BarraCobertura`
+  muestran "X,X km de Y,Y km (Z%)" como cifra principal y "N de M tramos"
+  como texto secundario (`lib/cobertura-resumen.ts`, formato es-AR).
+- "Caminos" → "Tramos": baja de `app/dashboard/caminos` (tabla legacy sin
+  relación con la cobertura real); `/dashboard/tramos` (listado con km,
+  veces cubierto, estado estimado, cuadros y última visita; búsqueda y
+  orden por km/última visita) y `/dashboard/tramos/[id]` (detalle con mapa
+  enfocado, observaciones y cuadros del tramo, 404 si no es del municipio
+  propio vía RLS). Sin alta de tramos todavía: la tabla no tiene política de
+  insert para municipio/auditor.
+- Layout de grabación enfocado: se oculta la tarjeta de cobertura y el resto
+  del cromo del dashboard mientras se graba (`OcultarSiGrabando`), métricas
+  grandes y de alto contraste, botón "Observación" flotante alcanzable con
+  el pulgar y "Finalizar" con confirmación en dos pasos; corte de segmento
+  al pausar/reanudar para no unir con una recta la traza; acuse con
+  reintento visible si falla la subida al guardar.
+- Instalación como PWA: `BannerInstalar` (`lib/pwa/instalacion.ts`) escucha
+  `beforeinstallprompt` en Chromium y muestra instrucciones manuales en iOS
+  Safari (Compartir → Agregar a inicio); aviso de batería
+  (`AvisoBateria`/`lib/bateria.ts`) antes de grabar, con nivel real vía
+  Battery Status API cuando existe.
+- Interfaz solo en modo claro: `color-scheme: light` fijo y sin reglas
+  `prefers-color-scheme` (la app se usa a pleno sol manejando y nunca tuvo
+  un modo oscuro completo). Barrido de accesibilidad táctil: `:focus-visible`
+  global y targets reales de 44 px en toda la app.
+- Recuperar contraseña (`/recuperar`, `/nueva-clave`,
+  `app/auth/confirm/route.ts`: exchange del `code` PKCE por sesión, flujo
+  server-only) y reenvío de confirmación desde el login (`lib/reenvio-cooldown.ts`,
+  cooldown de 60 s); `lib/auth-mensajes.ts` traduce los mensajes de Supabase
+  Auth al castellano en las cuatro Server Actions de auth.
+- `scripts/smoke.mjs`: sección 11 (estados de observación) y cobertura
+  nueva de tramos, exportes, `/recuperar`, `/nueva-clave` y `/auth/confirm`.
+
 ### Ola 1: endurecimiento (0.6.0)
 
 - CI (`ci.yml`): tipos (`tsc --noEmit`), lint (`eslint --max-warnings=0`), tests

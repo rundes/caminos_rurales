@@ -2,11 +2,24 @@ import { z } from 'zod'
 import { buscarPartido } from './partidos'
 import type { CalidadSegmento } from './sensores/tipos'
 import { MAX_IMPACTOS, MAX_MUESTRAS, PICO_IMPACTO } from './sensores/umbrales'
-import type { Severidad, TipoFalla } from './tipos'
+import type { EstadoObservacion, Severidad, TipoFalla } from './tipos'
+
+/** Mensaje único de la regla de contraseña: mismo texto en el zod del servidor y en la ayuda del formulario. */
+export const MENSAJE_PASSWORD_CORTA = 'La contraseña debe tener al menos 8 caracteres'
 
 export const esquemaLogin = z.object({
   email: z.email({ message: 'Email inválido' }),
-  password: z.string().min(8, { message: 'La contraseña debe tener al menos 8 caracteres' }),
+  password: z.string().min(8, { message: MENSAJE_PASSWORD_CORTA }),
+})
+
+/** Pedido de recuperación de contraseña: solo el email. */
+export const esquemaRecuperar = z.object({
+  email: z.email({ message: 'Email inválido' }),
+})
+
+/** Nueva contraseña, ya con la sesión de recuperación establecida. */
+export const esquemaNuevaClave = z.object({
+  password: z.string().min(8, { message: MENSAJE_PASSWORD_CORTA }),
 })
 
 export const esquemaRegistro = esquemaLogin.extend({
@@ -202,6 +215,24 @@ export const esquemaCuadros = z.object({
     .max(MAX_CUADROS_LOTE, { message: 'Demasiados cuadros en una sola llamada' }),
 })
 
+const ESTADOS_OBSERVACION = [
+  'pendiente',
+  'en_obra',
+  'resuelta',
+  'descartada',
+] as const satisfies readonly EstadoObservacion[]
+
+/** Cambio de estado de gestión de una observación (municipio/auditor). */
+export const esquemaCambioEstado = z.object({
+  observacionId: z.uuid({ message: 'Observación sin identificador válido' }),
+  estado: z.enum(ESTADOS_OBSERVACION, { message: 'Elegí un estado válido' }),
+  nota: z
+    .string()
+    .trim()
+    .max(500, { message: 'La nota no puede superar los 500 caracteres' })
+    .optional(),
+})
+
 export type PuntoGpsPayload = z.infer<typeof puntoGpsTrack>
 export type CuadroPayload = z.infer<typeof esquemaCuadro>
 export type CuadrosPayload = z.infer<typeof esquemaCuadros>
@@ -209,3 +240,6 @@ export type MuestraPayload = z.infer<typeof esquemaMuestra>
 export type ImpactoPayload = z.infer<typeof esquemaImpacto>
 export type Observacion = z.infer<typeof esquemaObservacion>
 export type RecorridoPayload = z.infer<typeof esquemaRecorrido>
+export type CambioEstadoPayload = z.infer<typeof esquemaCambioEstado>
+export type RecuperarPayload = z.infer<typeof esquemaRecuperar>
+export type NuevaClavePayload = z.infer<typeof esquemaNuevaClave>

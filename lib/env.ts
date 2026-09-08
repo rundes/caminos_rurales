@@ -16,6 +16,14 @@ const esquemaBase = z.object({
   ALMACENAMIENTO: z.enum(['supabase', 'gcs']).default('supabase'),
   GCS_BUCKET: z.string().optional(),
   GCS_SERVICE_ACCOUNT_KEY: z.string().optional(),
+  /**
+   * Origen público fijo (por ejemplo `https://visiovial.example`), opcional.
+   * Lo usan los flujos de auth (recuperar contraseña) para construir
+   * `redirectTo` sin depender de los headers de la petición. Si no está
+   * definida, `lib/url-origen.ts` cae a los headers `host`/`x-forwarded-proto`
+   * de la petición entrante (nunca del body/formData que manda el cliente).
+   */
+  SITE_URL: z.string().url({ message: 'debe ser una URL válida' }).optional(),
 })
 
 const esquemaServidor = esquemaBase.superRefine((valores, ctx) => {

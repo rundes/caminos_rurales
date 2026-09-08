@@ -22,6 +22,10 @@ type Props = {
   redVerificada?: boolean
   /** Fuerza la subida de cuadros con datos móviles, saltando el ajuste de WiFi. */
   onSubirCuadros?: () => void
+  /** Motivo por el que la subida del recorrido falló del todo (agotó los reintentos). */
+  error?: string | null
+  /** Reintenta subir el recorrido que quedó en error. */
+  onReintentar?: () => void
   onNuevo: () => void
 }
 
@@ -88,19 +92,33 @@ export function ResumenRecorrido({
   cuadrosError = 0,
   redVerificada = true,
   onSubirCuadros,
+  error = null,
+  onReintentar,
   onNuevo,
 }: Props) {
   return (
     <section className="flex flex-col gap-4 rounded-2xl bg-white p-5 shadow-sm">
-      <h2 className="text-lg font-semibold text-gray-900">Recorrido finalizado</h2>
+      <h2 className="flex items-center gap-2 text-xl font-bold text-gray-900">
+        <span aria-hidden="true">{error ? '⚠️' : '✅'}</span>
+        Recorrido finalizado
+      </h2>
 
       <div className="grid grid-cols-3 gap-2">
         <Dato etiqueta="km" valor={formatearKm(resumen?.km ?? km)} />
         <Dato etiqueta="puntos GPS" valor={puntosGps} />
-        <Dato etiqueta="puntos" valor={resumen?.puntos ?? 0} />
+        <Dato etiqueta="puntos ganados" valor={resumen?.puntos ?? 0} />
       </div>
 
-      {resumen ? (
+      {error ? (
+        <div role="alert" className="flex flex-col gap-3 rounded-xl bg-red-50 p-4 text-sm text-red-900">
+          <p className="font-semibold">No pudimos subir este recorrido: {error}</p>
+          {onReintentar && (
+            <Boton variante="secundario" onClick={onReintentar}>
+              Reintentar subida
+            </Boton>
+          )}
+        </div>
+      ) : resumen ? (
         <>
           <p className="text-sm text-gray-600">
             {resumen.tramosNuevos} tramo(s) nuevo(s) · {resumen.tramosRepetidos} repetido(s)

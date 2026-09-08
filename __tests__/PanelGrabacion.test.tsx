@@ -21,6 +21,7 @@ const ESTADO: Grabador = {
   ultimo: { lat: -36.85, lng: -57.88, t: T0, precision: 7 },
   km: 1.23,
   cantidad: 5,
+  cortes: [],
 }
 
 const SENSORES: EstadoPanelSensores = { estado: 'activo', impactos: 0, posiciones: [] }
@@ -40,6 +41,7 @@ function render_(extra: Partial<Parameters<typeof PanelGrabacion>[0]> = {}) {
     <PanelGrabacion
       estado={ESTADO}
       precision={7}
+      velocidadKmh={null}
       obtenerPuntos={() => []}
       centro={[-36.85, -57.88]}
       capas={null}
@@ -94,7 +96,7 @@ describe('PanelGrabacion', () => {
     expect(boton).toHaveAttribute('aria-busy', 'true')
   })
 
-  test('sin finalizando el botón Finalizar dispara onFinalizar', async () => {
+  test('tocar Finalizar pide confirmación antes de disparar onFinalizar', async () => {
     const onFinalizar = vi.fn()
     render_({ onFinalizar })
 
@@ -102,7 +104,23 @@ describe('PanelGrabacion', () => {
     expect(boton).not.toBeDisabled()
     await userEvent.click(boton)
 
+    expect(onFinalizar).not.toHaveBeenCalled()
+    expect(screen.getByText(/¿finalizar el recorrido\?/i)).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: /sí, finalizar/i }))
     expect(onFinalizar).toHaveBeenCalledTimes(1)
+  })
+
+  test('se puede cancelar la confirmación de Finalizar y seguir grabando', async () => {
+    const onFinalizar = vi.fn()
+    render_({ onFinalizar })
+
+    await userEvent.click(screen.getByRole('button', { name: /^finalizar$/i }))
+    await userEvent.click(screen.getByRole('button', { name: /seguir grabando/i }))
+
+    expect(onFinalizar).not.toHaveBeenCalled()
+    expect(screen.queryByText(/¿finalizar el recorrido\?/i)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^finalizar$/i })).toBeInTheDocument()
   })
 
   test('un error se muestra en un rol alert', () => {

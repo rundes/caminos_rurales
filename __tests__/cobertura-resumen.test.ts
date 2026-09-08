@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { resumirCobertura } from '@/lib/cobertura-resumen'
+import { formatearKm, formatearPorcentaje, porcentajeCobertura, resumirCobertura } from '@/lib/cobertura-resumen'
 
 describe('resumirCobertura', () => {
   test('normaliza filas numéricas que llegan como string y calcula los totales', () => {
@@ -31,5 +31,38 @@ describe('resumirCobertura', () => {
       { localidad: 'Maipú', tramos: 3, cubiertos: 1, km: 'no-es-numero', km_cubiertos: null as unknown as string },
     ])
     expect(resumen.porLocalidad[0]).toEqual({ localidad: 'Maipú', tramos: 3, cubiertos: 1, km: 0, kmCubiertos: 0 })
+  })
+})
+
+describe('porcentajeCobertura', () => {
+  test('calcula el % de km cubiertos, redondeado', () => {
+    expect(porcentajeCobertura(45, 70)).toBe(64)
+    expect(porcentajeCobertura(20, 20)).toBe(100)
+    expect(porcentajeCobertura(0, 20)).toBe(0)
+  })
+
+  test('sin km totales, no divide por cero', () => {
+    expect(porcentajeCobertura(0, 0)).toBe(0)
+    expect(porcentajeCobertura(5, 0)).toBe(0)
+  })
+
+  test('km totales negativo se trata como sin datos', () => {
+    expect(porcentajeCobertura(5, -1)).toBe(0)
+  })
+})
+
+describe('formatearKm', () => {
+  test('formatea con un decimal en es-AR', () => {
+    expect(formatearKm(45)).toBe('45,0')
+    expect(formatearKm(45.678)).toBe('45,7')
+    expect(formatearKm(0)).toBe('0,0')
+  })
+})
+
+describe('formatearPorcentaje', () => {
+  test('formatea sin decimales en es-AR', () => {
+    expect(formatearPorcentaje(64)).toBe('64')
+    expect(formatearPorcentaje(0)).toBe('0')
+    expect(formatearPorcentaje(100)).toBe('100')
   })
 })

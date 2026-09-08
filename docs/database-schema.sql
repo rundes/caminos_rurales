@@ -2,7 +2,8 @@
 -- Estado final: refleja 0001_schema.sql + 0002_storage_por_municipio.sql +
 -- 0003a_tipos_falla.sql + 0003_recorridos.sql + 0004_recorridos_procesado.sql +
 -- 0005_fallas_update.sql + 0006a_enums_sensor.sql + 0006_muestras_sensor.sql +
--- 0007_cuadros.sql + 0008_seguridad.sql + 0009_cupos.sql.
+-- 0007_cuadros.sql + 0008_seguridad.sql + 0009_cupos.sql +
+-- 0010_estado_observaciones.sql.
 -- Una instalación nueva puede
 -- correr solo este archivo. La tabla `relevamientos` ya no existe: el flujo
 -- es recorrido GPS -> cobertura de tramos -> puntos e insignias.
@@ -27,6 +28,8 @@ create type recorrido_estado as enum ('finalizado', 'descartado');
 create type calidad_segmento as enum ('sin_dato', 'bueno', 'regular', 'malo', 'intransitable');
 -- Quién originó una observación: la persona o el detector de impactos.
 create type origen_observacion as enum ('manual', 'sensor');
+-- Estado de gestión de una observación (0010).
+create type estado_observacion as enum ('pendiente', 'en_obra', 'resuelta', 'descartada');
 
 -- 2. TABLA PERFILES (sincronizada con auth.users)
 create table public.perfiles (
@@ -101,7 +104,12 @@ create table public.fallas_deteccion (
   magnitud numeric,
   -- Tramo más cercano; lo asigna el servidor al procesar el recorrido.
   tramo_id text references public.tramos(id) on delete set null,
-  created_at timestamp with time zone default now()
+  created_at timestamp with time zone default now(),
+  -- Seguimiento de gestión (0010): solo lo escriben municipio/auditor.
+  estado estado_observacion not null default 'pendiente',
+  estado_nota text,
+  estado_at timestamptz,
+  estado_por uuid references public.perfiles(id) on delete set null
 );
 
 -- 7b. TABLA MUESTRAS_SENSOR (un segmento agregado de 5 s o 100 m)
@@ -192,6 +200,7 @@ create index cobertura_usuario_fecha_idx on public.cobertura_tramos (usuario_id,
 create index cobertura_recorrido_idx on public.cobertura_tramos (recorrido_id);
 create index fallas_fecha_idx on public.fallas_deteccion (created_at desc);
 create index cuadros_t_idx on public.cuadros (t desc);
+create index fallas_estado_idx on public.fallas_deteccion (estado);
 
 -- 10. FUNCIONES AUXILIARES (security definer evita recursión de RLS sobre perfiles)
 create or replace function public.municipio_actual()
@@ -366,6 +375,27 @@ begin
 end;
 $$;
 
+-- Conteo de observaciones por estado (0010): alimenta el panel de gestión.
+create or replace function public.resumen_observaciones(p_municipio text)
+returns table (estado estado_observacion, total int)
+language plpgsql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if p_municipio is distinct from public.municipio_actual() then return; end if;
+
+  return query
+  select f.estado, count(*)::int
+  from public.fallas_deteccion f
+  join public.recorridos r on r.id = f.recorrido_id
+  where r.municipio = p_municipio
+  group by f.estado
+  order by f.estado;
+end;
+$$;
+
 -- 12. TRIGGER: crear perfil al registrarse
 -- El formulario de registro envía nombre y codigo_invitacion en options.data.
 -- El municipio sale del código (tabla `codigos_invitacion`, sección 14), nunca
@@ -481,6 +511,20 @@ create policy "fallas_update_propio" on public.fallas_deteccion
   for update to authenticated
   using (recorrido_id in (select id from public.recorridos where usuario_id = auth.uid()))
   with check (recorrido_id in (select id from public.recorridos where usuario_id = auth.uid()));
+
+-- Estado de gestión (0010): solo municipio/auditor, sobre su propio
+-- municipio. Coexiste con `fallas_update_propio`; el trigger de la sección 17
+-- es lo que impide que el dueño use esa política para tocar el estado.
+create policy "fallas_update_estado_gestion" on public.fallas_deteccion
+  for update to authenticated
+  using (
+    public.rol_actual() in ('municipio', 'auditor')
+    and recorrido_id in (select id from public.recorridos where municipio = public.municipio_actual())
+  )
+  with check (
+    public.rol_actual() in ('municipio', 'auditor')
+    and recorrido_id in (select id from public.recorridos where municipio = public.municipio_actual())
+  );
 
 -- Solo se pueden borrar las observaciones automáticas (reprocesar un recorrido
 -- las regenera); las manuales las escribió la persona y no se tocan.
@@ -712,3 +756,42 @@ grant execute on function public.consumir_cupo(text, int) to authenticated;
 -- (recorrido_id, motivo) en su lugar (ver sección 8, tabla `puntos_eventos`).
 alter table public.puntos_eventos
   add constraint puntos_eventos_recorrido_motivo_unico unique (recorrido_id, motivo);
+
+-- 17. ESTADO DE OBSERVACIONES (0010): columnas escribibles y trigger de resguardo
+-- El grant amplio que traía la tabla por defecto se reemplaza por una lista
+-- explícita: los campos propios que ya podía tocar el dueño (política
+-- `fallas_update_propio`, 0005) más los de estado, que solo puede escribir
+-- gestión (política `fallas_update_estado_gestion` de la sección 13 + el
+-- trigger de abajo, que corta cualquier otra vía).
+revoke update on public.fallas_deteccion from authenticated;
+grant update (
+  tipo_falla, severidad, latitud, longitud, descripcion,
+  url_evidencia_imagen, url_evidencia_video,
+  estado, estado_nota, estado_at, estado_por
+) on public.fallas_deteccion to authenticated;
+
+create or replace function public.fallas_estado_protegido()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if (
+    new.estado is distinct from old.estado
+    or new.estado_nota is distinct from old.estado_nota
+    or new.estado_at is distinct from old.estado_at
+    or new.estado_por is distinct from old.estado_por
+  ) and public.rol_actual() not in ('municipio', 'auditor') then
+    raise exception 'Solo municipio o auditor pueden cambiar el estado de una observación'
+      using errcode = '42501';
+  end if;
+  return new;
+end;
+$$;
+
+create trigger fallas_estado_no_escalar
+  before update on public.fallas_deteccion
+  for each row
+  when (auth.uid() is not null)
+  execute function public.fallas_estado_protegido();

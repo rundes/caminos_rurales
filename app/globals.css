@@ -1,6 +1,19 @@
 @import "tailwindcss";
 
+/*
+ * Visiovial se usa afuera, a pleno sol, mientras se maneja: la prioridad es
+ * legibilidad en exteriores, no un tema oscuro a medio hacer. El diseño
+ * (fondos blancos, texto oscuro sólido, acentos en verde/ámbar/rojo
+ * saturados) está pensado para luz de día, y nunca se probó en oscuro: dejar
+ * que `prefers-color-scheme: dark` reinterprete solo el fondo/texto de base
+ * mientras cada componente sigue con sus propios `bg-white`, `text-gray-700`,
+ * etc. es la causa típica de texto invisible sobre fondos del mismo tono. En
+ * vez de mantener un modo oscuro a medias, se fija `color-scheme: light`
+ * (los controles nativos como `<input type=file>` no cambian de paleta con
+ * el tema del sistema) y no se define ninguna regla `prefers-color-scheme`.
+ */
 :root {
+  color-scheme: light;
   --background: #ffffff;
   --foreground: #171717;
 }
@@ -12,15 +25,19 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+}
+
+/*
+ * Anillo de foco visible en toda la app: sin esto, navegar con teclado (o con
+ * el switch access de un lector de pantalla) no muestra dónde está el foco.
+ * `:focus-visible` no se dispara en un tap táctil, así que no agrega ruido
+ * visual en el uso normal a una mano.
+ */
+:focus-visible {
+  outline: 3px solid #166534;
+  outline-offset: 2px;
 }

@@ -64,7 +64,7 @@ export function VistaCamara({ estado, cuadros, videoRef, onAlternar }: Props) {
         aria-pressed={encendida}
         onClick={onAlternar}
         disabled={estado === 'no_disponible'}
-        className="shrink-0 rounded-xl border-2 border-green-700 bg-white px-4 py-2 font-semibold text-green-800 disabled:opacity-60"
+        className="min-h-11 shrink-0 rounded-xl border-2 border-green-700 bg-white px-4 font-semibold text-green-800 disabled:opacity-60"
       >
         Cámara
       </button>

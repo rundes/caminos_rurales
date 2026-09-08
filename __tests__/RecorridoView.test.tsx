@@ -62,6 +62,7 @@ const GRABANDO: Grabador = {
   ultimo: punto(1),
   km: 1.23,
   cantidad: 2,
+  cortes: [],
 }
 
 function control(estado: Grabador, extra: Partial<ControlGrabador> = {}): ControlGrabador {
@@ -125,6 +126,15 @@ function vista() {
 
 function renderVista() {
   return render(vista())
+}
+
+/**
+ * "Finalizar" pide confirmación en dos pasos (ver PanelGrabacion): un primer
+ * tap solo la arma, hay que tocar "Sí, finalizar" para que dispare de verdad.
+ */
+async function finalizarClic() {
+  await userEvent.click(await screen.findByRole('button', { name: /^finalizar$/i }))
+  await userEvent.click(await screen.findByRole('button', { name: /sí, finalizar/i }))
 }
 
 /**
@@ -283,7 +293,7 @@ describe('RecorridoView', () => {
 
     renderVista()
 
-    await userEvent.click(await screen.findByRole('button', { name: /^finalizar$/i }))
+    await finalizarClic()
 
     await waitFor(() => expect(finalizar).toHaveBeenCalledTimes(1))
     expect(screen.getByText(/recorrido finalizado/i)).toBeInTheDocument()
@@ -294,7 +304,7 @@ describe('RecorridoView', () => {
   test('finalizar libera la cámara', async () => {
     await grabandoConCamara()
 
-    await userEvent.click(screen.getByRole('button', { name: /^finalizar$/i }))
+    await finalizarClic()
 
     await waitFor(() => expect(detenerPista).toHaveBeenCalled())
     expect(screen.getByText(/recorrido finalizado/i)).toBeInTheDocument()
@@ -310,7 +320,7 @@ describe('RecorridoView', () => {
     )
     await grabandoConCamara({ finalizar })
 
-    await userEvent.click(screen.getByRole('button', { name: /^finalizar$/i }))
+    await finalizarClic()
 
     await waitFor(() => expect(detenerPista).toHaveBeenCalled())
     expect(await screen.findByRole('alert')).toHaveTextContent(/descartado/i)
@@ -329,7 +339,7 @@ describe('RecorridoView', () => {
 
     renderVista()
 
-    await userEvent.click(await screen.findByRole('button', { name: /^finalizar$/i }))
+    await finalizarClic()
 
     expect(await screen.findByText(/7 cuadros no pudieron subirse/i)).toBeInTheDocument()
     expect(screen.getByText(/no pudimos verificar si estás en wifi/i)).toBeInTheDocument()
@@ -347,7 +357,7 @@ describe('RecorridoView', () => {
 
     renderVista()
 
-    await userEvent.click(await screen.findByRole('button', { name: /^finalizar$/i }))
+    await finalizarClic()
 
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/descartado/i))
     expect(screen.queryByText(/recorrido finalizado/i)).not.toBeInTheDocument()
@@ -359,7 +369,7 @@ describe('RecorridoView', () => {
 
     renderVista()
 
-    await userEvent.click(await screen.findByRole('button', { name: /^finalizar$/i }))
+    await finalizarClic()
 
     await waitFor(() => expect(screen.getByText(/recorrido finalizado/i)).toBeInTheDocument())
     // Sin resumen propio se sigue mostrando el aviso de subida, no los datos ajenos.
@@ -373,7 +383,7 @@ describe('RecorridoView', () => {
 
     renderVista()
 
-    await userEvent.click(await screen.findByRole('button', { name: /^finalizar$/i }))
+    await finalizarClic()
 
     await waitFor(() => expect(screen.getByText(/tramo\(s\) nuevo\(s\)/i)).toBeInTheDocument())
   })
@@ -390,10 +400,11 @@ describe('RecorridoView', () => {
 
     renderVista()
 
-    const boton = await screen.findByRole('button', { name: /^finalizar$/i })
-    await userEvent.click(boton)
-    await userEvent.click(boton)
-    await userEvent.click(boton)
+    await userEvent.click(await screen.findByRole('button', { name: /^finalizar$/i }))
+    const confirmar = await screen.findByRole('button', { name: /sí, finalizar/i })
+    await userEvent.click(confirmar)
+    await userEvent.click(confirmar)
+    await userEvent.click(confirmar)
 
     expect(finalizar).toHaveBeenCalledTimes(1)
 

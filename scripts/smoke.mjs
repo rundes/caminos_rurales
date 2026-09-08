@@ -492,6 +492,110 @@ try {
     JSON.stringify(perfilInvalido[0]),
   )
 
+  // 11. Estados de observación (0010): solo municipio/auditor cambian el
+  // estado; la clave secreta también puede (bypasea RLS y el trigger, que
+  // solo corta cuando hay auth.uid()); resumen_observaciones respeta el
+  // municipio del usuario.
+  const estadoProductor = await maipu.c
+    .from('fallas_deteccion')
+    .update({ estado: 'en_obra', estado_at: new Date().toISOString(), estado_por: uid })
+    .eq('id', fallaManual.data?.id)
+    .select('id')
+  ok(
+    Boolean(estadoProductor.error) || estadoProductor.data?.length === 0,
+    'productor NO puede cambiar el estado de una observación (trigger fallas_estado_no_escalar)',
+    estadoProductor.error?.message ?? JSON.stringify(estadoProductor.data),
+  )
+
+  const estadoAdmin = await admin
+    .from('fallas_deteccion')
+    .update({ estado: 'en_obra', estado_at: new Date().toISOString(), estado_por: uid })
+    .eq('id', fallaManual.data?.id)
+    .select('id')
+  ok(
+    !estadoAdmin.error && estadoAdmin.data?.length === 1,
+    'la clave secreta SI puede cambiar el estado de una observación',
+    estadoAdmin.error?.message ?? JSON.stringify(estadoAdmin.data),
+  )
+
+  const resumenMaipu = await maipu.c.rpc('resumen_observaciones', { p_municipio: 'maipu' })
+  ok(
+    !resumenMaipu.error && Array.isArray(resumenMaipu.data) && resumenMaipu.data.length > 0,
+    "resumen_observaciones('maipu') devuelve filas para un usuario de maipu",
+    resumenMaipu.error?.message ?? JSON.stringify(resumenMaipu.data),
+  )
+
+  const resumenBahia = await bahia.c.rpc('resumen_observaciones', { p_municipio: 'maipu' })
+  ok(
+    !resumenBahia.error && resumenBahia.data?.length === 0,
+    "resumen_observaciones('maipu') devuelve 0 filas para un usuario de otro municipio",
+    resumenBahia.error?.message ?? JSON.stringify(resumenBahia.data),
+  )
+
+  const rObservaciones = await fetch(`${DEV}/dashboard/observaciones`, { headers: { Cookie: cookie }, redirect: 'manual' })
+  ok(rObservaciones.status === 200, 'GET /dashboard/observaciones con sesión → 200', String(rObservaciones.status))
+
+  // 12. Ola 2 (P2-P4): tramos, exportes, recuperar contraseña y auth/confirm.
+  const rTramos = await fetch(`${DEV}/dashboard/tramos`, { headers: { Cookie: cookie }, redirect: 'manual' })
+  ok(rTramos.status === 200, 'GET /dashboard/tramos con sesión → 200', String(rTramos.status))
+
+  const rTramoDetalle = await fetch(`${DEV}/dashboard/tramos/${tramo?.id}`, { headers: { Cookie: cookie }, redirect: 'manual' })
+  ok(
+    rTramoDetalle.status === 200,
+    'GET /dashboard/tramos/<id de un tramo de maipu> → 200',
+    String(rTramoDetalle.status),
+  )
+
+  const rCaminos = await fetch(`${DEV}/dashboard/caminos`, { headers: { Cookie: cookie }, redirect: 'manual' })
+  ok(rCaminos.status === 404, 'GET /dashboard/caminos (ruta dada de baja) → 404', String(rCaminos.status))
+
+  const rExportCsv = await fetch(`${DEV}/dashboard/observaciones/export?formato=csv`, { headers: { Cookie: cookie } })
+  const tipoCsv = rExportCsv.headers.get('content-type') ?? ''
+  const dispositionCsv = rExportCsv.headers.get('content-disposition') ?? ''
+  ok(
+    rExportCsv.status === 200 && tipoCsv.startsWith('text/csv') && dispositionCsv.includes('attachment'),
+    'GET /dashboard/observaciones/export?formato=csv → 200, text/csv, Content-Disposition attachment',
+    `${rExportCsv.status} :: ${tipoCsv} :: ${dispositionCsv}`,
+  )
+
+  const rExportGeo = await fetch(`${DEV}/dashboard/observaciones/export?formato=geojson`, { headers: { Cookie: cookie } })
+  const cuerpoGeo = await rExportGeo.text()
+  let geo
+  try {
+    geo = JSON.parse(cuerpoGeo)
+  } catch {
+    geo = null
+  }
+  ok(
+    rExportGeo.status === 200 && geo?.type === 'FeatureCollection' && Array.isArray(geo?.features),
+    'GET /dashboard/observaciones/export?formato=geojson → 200, JSON válido, FeatureCollection',
+    `${rExportGeo.status} :: ${cuerpoGeo.slice(0, 120)}`,
+  )
+
+  const rRecuperar = await fetch(`${DEV}/recuperar`, { redirect: 'manual' })
+  ok(rRecuperar.status === 200, 'GET /recuperar sin sesión → 200', String(rRecuperar.status))
+
+  // /nueva-clave nunca redirige: es un Server Component que muestra el
+  // formulario si `getUser()` devuelve usuario (sesión de recuperación ya en
+  // cookies, ver app/auth/confirm/route.ts) o, sin sesión, el mismo 200 con
+  // un aviso de enlace vencido/inválido y un link de vuelta a /recuperar en
+  // vez del formulario (no está en RUTAS_PROTEGIDAS de proxy.ts a propósito).
+  const rNuevaClave = await fetch(`${DEV}/nueva-clave`, { redirect: 'manual' })
+  ok(
+    rNuevaClave.status === 200,
+    'GET /nueva-clave sin sesión de recuperación → 200 (aviso de enlace vencido, no el formulario)',
+    String(rNuevaClave.status),
+  )
+
+  // /auth/confirm sin `code` redirige a /recuperar (NextResponse.redirect,
+  // 307) en vez de intentar exchangeCodeForSession y volar con un 500.
+  const rAuthConfirm = await fetch(`${DEV}/auth/confirm`, { redirect: 'manual' })
+  ok(
+    rAuthConfirm.status >= 300 && rAuthConfirm.status < 400,
+    'GET /auth/confirm sin code → redirect (no 500)',
+    String(rAuthConfirm.status),
+  )
+
   // 10. Rutas públicas y PWA
   const sinCookie = await fetch(`${DEV}/dashboard`, { redirect: 'manual' })
   ok(sinCookie.status === 307, 'GET /dashboard sin sesión → 307', String(sinCookie.status))

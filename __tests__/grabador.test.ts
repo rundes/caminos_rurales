@@ -104,4 +104,53 @@ describe('grabador', () => {
     expect(agregarPunto(GRABADOR_INICIAL, punto(0))).toBe(GRABADOR_INICIAL)
     expect(duracionMs(GRABADOR_INICIAL, T0)).toBe(0)
   })
+
+  test('arranca sin cortes', () => {
+    expect(iniciar(ID, T0).cortes).toEqual([])
+  })
+
+  test('reanudar tras una pausa registra un corte en la cantidad de puntos aceptados', () => {
+    let grabador = iniciar(ID, T0)
+    grabador = agregarPunto(grabador, punto(0))
+    grabador = agregarPunto(grabador, punto(1))
+    grabador = pausar(grabador)
+    grabador = reanudar(grabador)
+
+    expect(grabador.cortes).toEqual([2])
+
+    grabador = agregarPunto(grabador, punto(2))
+    grabador = pausar(grabador)
+    grabador = reanudar(grabador)
+
+    expect(grabador.cortes).toEqual([2, 3])
+  })
+
+  test('pausar y reanudar sin haber aceptado ningún punto no agrega un corte en 0', () => {
+    const grabador = reanudar(pausar(iniciar(ID, T0)))
+
+    expect(grabador.cortes).toEqual([])
+  })
+
+  test('reanudar sin estar pausado no toca los cortes', () => {
+    const grabando = agregarPunto(iniciar(ID, T0), punto(0))
+
+    expect(reanudar(grabando)).toBe(grabando)
+  })
+
+  test('el tiempo en pausa no suma kilómetros: agregarPunto se ignora hasta reanudar', () => {
+    let grabador = iniciar(ID, T0)
+    grabador = agregarPunto(grabador, punto(0))
+    const kmAntes = grabador.km
+    grabador = pausar(grabador)
+
+    // Puntos que "llegarían" durante la pausa, como si el vehículo siguiera
+    // moviéndose: ninguno debe sumar distancia mientras está pausado.
+    grabador = agregarPunto(grabador, punto(1))
+    grabador = agregarPunto(grabador, punto(2))
+    expect(grabador.km).toBe(kmAntes)
+
+    grabador = reanudar(grabador)
+    grabador = agregarPunto(grabador, punto(5))
+    expect(grabador.km).toBeGreaterThan(kmAntes)
+  })
 })

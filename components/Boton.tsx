@@ -6,7 +6,7 @@ type Props = ButtonHTMLAttributes<HTMLButtonElement> & {
 }
 
 export function Boton({ variante = 'primario', cargando = false, children, className = '', ...rest }: Props) {
-  const base = 'w-full rounded-xl px-4 py-4 text-lg font-semibold disabled:opacity-60 transition'
+  const base = 'w-full min-h-11 rounded-xl px-4 py-4 text-lg font-semibold disabled:opacity-60 transition'
   const estilos =
     variante === 'primario'
       ? 'bg-green-700 text-white active:bg-green-800'

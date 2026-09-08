@@ -11,10 +11,14 @@ const RESUMEN: ResumenCobertura = {
   total: { tramos: 14, cubiertos: 9, km: 70, kmCubiertos: 45, fraccion: 9 / 14 },
 }
 
-test('muestra el porcentaje del municipio y los km cubiertos/total', () => {
+test('los km cubiertos/total y el % son la cifra principal', () => {
   render(<TarjetaCobertura resumen={RESUMEN} />)
-  expect(screen.getByText('64%')).toBeInTheDocument()
-  expect(screen.getByText(/45 km cubiertos de 70 km/)).toBeInTheDocument()
+  expect(screen.getByText('45,0 km de 70,0 km (64%)')).toBeInTheDocument()
+})
+
+test('la cantidad de tramos aparece rotulada como texto secundario', () => {
+  render(<TarjetaCobertura resumen={RESUMEN} />)
+  expect(screen.getByText('9 de 14 tramos')).toBeInTheDocument()
 })
 
 test('renderiza una barra por localidad', () => {
@@ -24,7 +28,11 @@ test('renderiza una barra por localidad', () => {
 })
 
 test('sin localidades muestra un mensaje en vez de barras vacías', () => {
-  render(<TarjetaCobertura resumen={{ porLocalidad: [], total: { tramos: 0, cubiertos: 0, km: 0, kmCubiertos: 0, fraccion: 0 } }} />)
+  render(
+    <TarjetaCobertura
+      resumen={{ porLocalidad: [], total: { tramos: 0, cubiertos: 0, km: 0, kmCubiertos: 0, fraccion: 0 } }}
+    />,
+  )
   expect(screen.getByText('Todavía no hay tramos registrados.')).toBeInTheDocument()
   expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
 })

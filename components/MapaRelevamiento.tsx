@@ -78,7 +78,7 @@ function ControlModo({
   mostrarCuadros: boolean
   onCambiarCuadros: (mostrar: boolean) => void
 }) {
-  const base = 'px-3 py-1.5 text-sm font-medium'
+  const base = 'flex min-h-11 items-center justify-center px-3 text-sm font-medium'
   const activo = 'bg-blue-600 text-white'
   const inactivo = 'bg-white text-gray-700 hover:bg-gray-50'
 
@@ -177,7 +177,11 @@ export function MapaRelevamiento({
           className="absolute right-3 top-14 z-[1000] rounded-lg bg-red-50 px-3 py-1 text-sm text-red-800 shadow-sm"
         >
           {estadoCuadros.mensaje}{' '}
-          <button type="button" className="underline" onClick={cargarCuadros}>
+          <button
+            type="button"
+            className="inline-flex min-h-11 items-center px-2 underline"
+            onClick={cargarCuadros}
+          >
             Reintentar
           </button>
         </p>

@@ -13,6 +13,7 @@ import { formatearFecha } from '@/lib/fechas'
 import type { RecorridoEnError } from '@/lib/local/cola'
 import { MAX_INTENTOS } from '@/lib/local/deps'
 import type { RecorridoLocal } from '@/lib/local/tipos'
+import { AvisoBateria } from './AvisoBateria'
 import { formatearKm } from './formato'
 
 type Props = {
@@ -103,6 +104,7 @@ export function PantallaInicio({
 
   return (
     <section className="flex flex-col gap-4">
+      <AvisoBateria />
       {sinTerminar && (
         <div className="flex flex-col gap-3 rounded-2xl bg-amber-50 p-5">
           <p className="text-sm text-amber-900">Tenés un recorrido sin terminar en este dispositivo.</p>
@@ -136,7 +138,7 @@ export function PantallaInicio({
         />
       ))}
       {!sinTerminar && <Boton onClick={onIniciar}>Iniciar recorrido</Boton>}
-      <label className="flex items-center gap-3 rounded-xl bg-white p-3 text-sm text-gray-700 shadow-sm">
+      <label className="flex min-h-11 items-center gap-3 rounded-xl bg-white p-3 text-sm text-gray-700 shadow-sm">
         <input
           type="checkbox"
           checked={red === 'wifi'}

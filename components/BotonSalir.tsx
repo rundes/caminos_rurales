@@ -60,7 +60,7 @@ export function BotonSalir({ usuarioId }: Props) {
         type="button"
         disabled={saliendo}
         onClick={() => void pedirSalir()}
-        className="rounded-lg bg-green-700 px-3 py-2 text-sm disabled:opacity-60"
+        className="min-h-11 rounded-lg bg-green-700 px-3 text-sm disabled:opacity-60"
       >
         {saliendo ? 'Saliendo…' : 'Salir'}
       </button>
@@ -81,7 +81,7 @@ export function BotonSalir({ usuarioId }: Props) {
               <button
                 type="button"
                 onClick={() => setConfirmando(null)}
-                className="rounded-lg px-3 py-2 text-sm font-medium text-gray-700"
+                className="min-h-11 rounded-lg px-3 text-sm font-medium text-gray-700"
               >
                 Cancelar
               </button>
@@ -91,7 +91,7 @@ export function BotonSalir({ usuarioId }: Props) {
                   setConfirmando(null)
                   void salir()
                 }}
-                className="rounded-lg bg-red-700 px-3 py-2 text-sm font-medium text-white"
+                className="min-h-11 rounded-lg bg-red-700 px-3 text-sm font-medium text-white"
               >
                 Salir igual
               </button>

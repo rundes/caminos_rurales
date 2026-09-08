@@ -1,3 +1,4 @@
+import { OcultarSiGrabando } from '@/components/OcultarSiGrabando'
 import { RecorridoView } from '@/components/recorrido/RecorridoView'
 import { TarjetaCobertura } from '@/components/TarjetaCobertura'
 import { capasDe } from '@/lib/capas'
@@ -35,8 +36,10 @@ export default async function DashboardPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="text-2xl font-bold">Recorrido</h1>
-      <TarjetaCobertura resumen={cobertura} />
+      <OcultarSiGrabando>
+        <h1 className="text-2xl font-bold">Recorrido</h1>
+        <TarjetaCobertura resumen={cobertura} />
+      </OcultarSiGrabando>
       <RecorridoView
         usuarioId={user.id}
         municipio={municipio}
