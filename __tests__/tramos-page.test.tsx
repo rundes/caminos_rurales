@@ -8,6 +8,7 @@ const RESUMEN = [
 
 let municipioMock: string | null = 'maipu'
 let resumenMock: typeof RESUMEN = RESUMEN
+let rolMock: string | undefined
 
 const obtenerTramosResumenCacheado = vi.fn()
 vi.mock('@/lib/tramos-consultas', () => ({
@@ -23,7 +24,11 @@ vi.mock('@/lib/supabase/server', () => ({
   crearClienteServidor: async () => ({
     auth: { getUser: async () => ({ data: { user: municipioMock ? { id: 'u1' } : null } }) },
     from: () => ({
-      select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { municipio_id: municipioMock }, error: null }) }) }),
+      select: () => ({
+        eq: () => ({
+          maybeSingle: async () => ({ data: { municipio_id: municipioMock, rol: rolMock }, error: null }),
+        }),
+      }),
     }),
   }),
 }))
@@ -35,6 +40,7 @@ const SIN_FILTROS = Promise.resolve({})
 afterEach(() => {
   municipioMock = 'maipu'
   resumenMock = RESUMEN
+  rolMock = undefined
   vi.clearAllMocks()
 })
 
@@ -106,5 +112,38 @@ describe('TramosPage', () => {
     render(await TramosPage({ searchParams: SIN_FILTROS }))
 
     expect(screen.getByText('No hay tramos para mostrar.')).toBeInTheDocument()
+  })
+
+  test('municipio ve el link "Nuevo tramo"', async () => {
+    rolMock = 'municipio'
+    obtenerTramosResumenCacheado.mockResolvedValue(resumenMock)
+    obtenerRugosidadTramos.mockResolvedValue({})
+
+    render(await TramosPage({ searchParams: SIN_FILTROS }))
+
+    expect(screen.getByRole('link', { name: 'Nuevo tramo' })).toHaveAttribute(
+      'href',
+      '/dashboard/tramos/nuevo',
+    )
+  })
+
+  test('auditor también ve el link "Nuevo tramo"', async () => {
+    rolMock = 'auditor'
+    obtenerTramosResumenCacheado.mockResolvedValue(resumenMock)
+    obtenerRugosidadTramos.mockResolvedValue({})
+
+    render(await TramosPage({ searchParams: SIN_FILTROS }))
+
+    expect(screen.getByRole('link', { name: 'Nuevo tramo' })).toBeInTheDocument()
+  })
+
+  test('productor no ve el link "Nuevo tramo"', async () => {
+    rolMock = 'productor'
+    obtenerTramosResumenCacheado.mockResolvedValue(resumenMock)
+    obtenerRugosidadTramos.mockResolvedValue({})
+
+    render(await TramosPage({ searchParams: SIN_FILTROS }))
+
+    expect(screen.queryByRole('link', { name: 'Nuevo tramo' })).not.toBeInTheDocument()
   })
 })

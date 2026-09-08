@@ -67,10 +67,15 @@ export type TramoConEstado = {
  * cruzando `tramos` con `cobertura_tramos` (dos consultas, merge en JS).
  */
 export async function obtenerTramosConEstado(supabase: Cliente, municipio: string): Promise<TramoConEstado[]> {
+  // `activo = true`: un tramo dado de baja (0011) no se dibuja en el mapa
+  // operativo, mismo criterio que el denominador de `cobertura_municipio` y
+  // la lista de gestión (`tramos-consultas.ts`) — ver la semántica completa
+  // en `supabase/migrations/0011_alta_tramos.sql`.
   const { data: tramos, error: errorTramos } = await supabase
     .from('tramos')
     .select('id, nombre_codigo, localidad, km, geometria')
     .eq('municipio', municipio)
+    .eq('activo', true)
 
   if (errorTramos) {
     console.error('[cobertura-consultas]', errorTramos.message)
@@ -123,6 +128,7 @@ async function obtenerTramosConEstadoAdmin(municipio: string): Promise<TramoConE
     .from('tramos')
     .select('id, nombre_codigo, localidad, km, geometria')
     .eq('municipio', municipio)
+    .eq('activo', true)
 
   if (errorTramos) {
     console.error('[cobertura-consultas]', errorTramos.message)

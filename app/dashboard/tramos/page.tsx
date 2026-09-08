@@ -25,7 +25,7 @@ export default async function TramosPage({ searchParams }: Props) {
     data: { user },
   } = await supabase.auth.getUser()
   const { data: perfil, error: errorPerfil } = user
-    ? await supabase.from('perfiles').select('municipio_id').eq('id', user.id).maybeSingle()
+    ? await supabase.from('perfiles').select('municipio_id, rol').eq('id', user.id).maybeSingle()
     : { data: null, error: null }
   if (errorPerfil) console.error('[tramos]', errorPerfil.message)
 
@@ -33,6 +33,8 @@ export default async function TramosPage({ searchParams }: Props) {
   if (!municipio) {
     return <p className="rounded-xl bg-red-50 p-4 text-red-800">Tu perfil no tiene un partido asignado.</p>
   }
+
+  const puedeGestionar = perfil?.rol === 'municipio' || perfil?.rol === 'auditor'
 
   // Dos consultas independientes: el resumen por tramo (cacheado por
   // municipio, cliente admin) y la rugosidad estimada (RPC sin cachear, con
@@ -46,17 +48,17 @@ export default async function TramosPage({ searchParams }: Props) {
 
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="text-2xl font-bold">Tramos</h1>
-
-      {/*
-        Alta de tramos: sin formulario de carga en esta versión. `tramos`
-        solo tiene la política de lectura `tramos_select` (los siembra el
-        servidor con la clave secreta); no existe todavía una política de
-        inserción para los roles municipio/auditor, a diferencia de
-        `caminos_insert`. Cuando exista esa migración, el formulario debería
-        montarse acá, gateado con `perfil.rol === 'municipio' || perfil.rol
-        === 'auditor'` — nunca visible para `productor`.
-      */}
+      <div className="flex items-center justify-between gap-2">
+        <h1 className="text-2xl font-bold">Tramos</h1>
+        {puedeGestionar && (
+          <Link
+            href="/dashboard/tramos/nuevo"
+            className="flex min-h-11 items-center rounded-xl bg-green-700 px-4 text-sm font-semibold text-white"
+          >
+            Nuevo tramo
+          </Link>
+        )}
+      </div>
 
       <form method="get" className="flex gap-2">
         <input

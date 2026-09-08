@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { MapaTramoCliente } from '@/components/MapaTramoCliente'
 import { obtenerProveedor } from '@/lib/almacenamiento'
@@ -23,12 +24,21 @@ export default async function TramoDetallePage({ params }: Props) {
   // hace falta comparar `tramo.municipio` a mano.
   const { data: tramo, error: errorTramo } = await supabase
     .from('tramos')
-    .select('id, nombre_codigo, localidad, km, geometria, municipio')
+    .select('id, nombre_codigo, localidad, km, geometria, municipio, activo')
     .eq('id', id)
     .maybeSingle()
 
   if (errorTramo) console.error('[tramos]', errorTramo.message)
   if (!tramo) notFound()
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  const { data: perfil, error: errorPerfil } = user
+    ? await supabase.from('perfiles').select('rol').eq('id', user.id).maybeSingle()
+    : { data: null, error: null }
+  if (errorPerfil) console.error('[tramos]', errorPerfil.message)
+  const puedeGestionar = perfil?.rol === 'municipio' || perfil?.rol === 'auditor'
 
   // Cuatro consultas independientes entre sí: veces cubierto, última visita,
   // rugosidad estimada (RPC de sesión, no cacheada) y las observaciones y
@@ -83,7 +93,22 @@ export default async function TramoDetallePage({ params }: Props) {
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-bold">{tramo.nombre_codigo}</h1>
+        <div className="flex items-center justify-between gap-2">
+          <h1 className="text-2xl font-bold">{tramo.nombre_codigo}</h1>
+          {puedeGestionar && (
+            <Link
+              href={`/dashboard/tramos/${tramo.id}/editar`}
+              className="flex min-h-11 items-center rounded-xl border-2 border-green-700 px-4 text-sm font-semibold text-green-800"
+            >
+              Editar
+            </Link>
+          )}
+        </div>
+        {!tramo.activo && (
+          <span className="inline-flex w-fit rounded-full bg-gray-200 px-2 py-0.5 text-xs font-semibold text-gray-700">
+            Inactivo
+          </span>
+        )}
         <p className="text-sm text-gray-600">
           {tramo.localidad} · {formatearKm(Number(tramo.km))} km · cubierto {veces ?? 0} {veces === 1 ? 'vez' : 'veces'}
         </p>

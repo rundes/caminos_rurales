@@ -90,6 +90,7 @@ const puntosIds = []
 const fallasIds = []
 const muestrasIds = []
 const cuadrosIds = []
+const tramoIds = []
 
 try {
   // 1. Crear usuario (autoconfirmado) con código de invitación de maipu → trigger crea perfil
@@ -596,6 +597,144 @@ try {
     String(rAuthConfirm.status),
   )
 
+  // 13. Alta de tramos (0011): alta/edición para municipio/auditor dentro del
+  // municipio propio, sin política de delete; `activo` gobierna el
+  // denominador de `cobertura_municipio` sin borrar ni ocultar el tramo.
+  const geometriaSmoke = [
+    [-57.9, -36.99],
+    [-57.89, -36.98],
+  ]
+
+  const tramoInsertProductor = await maipu.c.from('tramos').insert({
+    id: `smoke-productor-${Date.now()}`,
+    municipio: 'maipu',
+    nombre_codigo: 'CR-SMOKE productor',
+    localidad: 'Maipú',
+    km: 1,
+    geometria: geometriaSmoke,
+  })
+  ok(Boolean(tramoInsertProductor.error), 'RLS bloquea insert de tramo como productor', tramoInsertProductor.error?.message)
+
+  const tramoUpdateProductor = await maipu.c
+    .from('tramos')
+    .update({ nombre_codigo: 'hackeado' })
+    .eq('id', tramo?.id)
+    .select('id')
+  ok(
+    Boolean(tramoUpdateProductor.error) || tramoUpdateProductor.data?.length === 0,
+    'RLS bloquea update de tramo como productor',
+    tramoUpdateProductor.error?.message ?? JSON.stringify(tramoUpdateProductor.data),
+  )
+
+  const idTramoAdmin = `smoke-admin-${Date.now()}`
+  const tramoInsertAdmin = await admin
+    .from('tramos')
+    .insert({
+      id: idTramoAdmin,
+      municipio: 'maipu',
+      nombre_codigo: 'CR-SMOKE admin',
+      localidad: 'Maipú',
+      km: 1,
+      geometria: geometriaSmoke,
+    })
+    .select('id')
+    .single()
+  ok(
+    !tramoInsertAdmin.error && tramoInsertAdmin.data?.id === idTramoAdmin,
+    'la clave secreta inserta un tramo (siembra)',
+    tramoInsertAdmin.error?.message,
+  )
+  if (tramoInsertAdmin.data?.id) tramoIds.push(tramoInsertAdmin.data.id)
+
+  // Promueve al usuario de maipu a rol 'municipio' (solo la clave secreta
+  // puede: 0008, trigger perfiles_no_escalar) para probar el alta/edición de
+  // tramos como gestión.
+  const promover = await admin.from('perfiles').update({ rol: 'municipio' }).eq('id', uid).select('rol')
+  ok(
+    !promover.error && promover.data?.[0]?.rol === 'municipio',
+    'la clave secreta promueve al usuario a rol municipio',
+    promover.error?.message ?? JSON.stringify(promover.data),
+  )
+
+  const idTramoMunicipio = `smoke-municipio-${Date.now()}`
+  const tramoInsertMunicipio = await maipu.c
+    .from('tramos')
+    .insert({
+      id: idTramoMunicipio,
+      municipio: 'maipu',
+      nombre_codigo: 'CR-SMOKE municipio',
+      localidad: 'Maipú',
+      km: 1,
+      geometria: geometriaSmoke,
+    })
+    .select('id, activo, creado_por')
+    .single()
+  ok(
+    !tramoInsertMunicipio.error &&
+      tramoInsertMunicipio.data?.id === idTramoMunicipio &&
+      tramoInsertMunicipio.data?.activo === true &&
+      tramoInsertMunicipio.data?.creado_por === uid,
+    'municipio inserta un tramo propio (activo=true, creado_por sellado por el trigger tramos_auditoria)',
+    tramoInsertMunicipio.error?.message ?? JSON.stringify(tramoInsertMunicipio.data),
+  )
+  if (tramoInsertMunicipio.data?.id) tramoIds.push(tramoInsertMunicipio.data.id)
+
+  const tramoInsertOtroMunicipio = await maipu.c.from('tramos').insert({
+    id: `smoke-otro-municipio-${Date.now()}`,
+    municipio: 'bahia-blanca',
+    nombre_codigo: 'CR-SMOKE otro municipio',
+    localidad: 'Bahía',
+    km: 1,
+    geometria: geometriaSmoke,
+  })
+  ok(
+    Boolean(tramoInsertOtroMunicipio.error),
+    'RLS bloquea a un municipio insertar un tramo en otro municipio',
+    tramoInsertOtroMunicipio.error?.message,
+  )
+
+  // Semántica de `activo` (0011): el denominador de cobertura cuenta solo
+  // tramos activos; desactivar uno no lo borra ni lo oculta del historial.
+  const coberturaAntes = await maipu.c.rpc('cobertura_municipio', { p_municipio: 'maipu' })
+  const totalAntes = coberturaAntes.data?.reduce((acc, f) => acc + f.tramos, 0) ?? -1
+
+  const desactivar = await maipu.c
+    .from('tramos')
+    .update({ activo: false })
+    .eq('id', idTramoMunicipio)
+    .select('id, activo')
+  ok(
+    !desactivar.error && desactivar.data?.[0]?.activo === false,
+    'municipio desactiva su propio tramo',
+    desactivar.error?.message ?? JSON.stringify(desactivar.data),
+  )
+
+  const coberturaDespues = await maipu.c.rpc('cobertura_municipio', { p_municipio: 'maipu' })
+  const totalDespues = coberturaDespues.data?.reduce((acc, f) => acc + f.tramos, 0) ?? -1
+  ok(
+    !coberturaDespues.error && totalDespues === totalAntes - 1,
+    'cobertura_municipio ya no cuenta el tramo desactivado en el denominador',
+    `${totalAntes} -> ${totalDespues}`,
+  )
+
+  const tramoInactivoVisible = await maipu.c
+    .from('tramos')
+    .select('id, activo')
+    .eq('id', idTramoMunicipio)
+    .maybeSingle()
+  ok(
+    !tramoInactivoVisible.error && tramoInactivoVisible.data?.activo === false,
+    'el tramo inactivo sigue siendo legible directamente (no se borra ni se oculta)',
+    tramoInactivoVisible.error?.message ?? JSON.stringify(tramoInactivoVisible.data),
+  )
+
+  const borrarTramo = await maipu.c.from('tramos').delete().eq('id', idTramoMunicipio).select('id')
+  ok(
+    !borrarTramo.error && borrarTramo.data?.length === 0,
+    'no hay política de delete: el intento de borrado no afecta filas',
+    borrarTramo.error?.message ?? JSON.stringify(borrarTramo.data),
+  )
+
   // 10. Rutas públicas y PWA
   const sinCookie = await fetch(`${DEV}/dashboard`, { redirect: 'manual' })
   ok(sinCookie.status === 307, 'GET /dashboard sin sesión → 307', String(sinCookie.status))
@@ -612,6 +751,7 @@ try {
   // Limpieza: hijos antes que padres, aunque las FK son on delete cascade.
   try {
     if (ruta) await admin.storage.from('evidencia-vial').remove([ruta])
+    for (const id of tramoIds) await sql(`delete from public.tramos where id = '${id}'`)
     for (const id of cuadrosIds) await sql(`delete from public.cuadros where id = '${id}'`)
     for (const id of muestrasIds) await sql(`delete from public.muestras_sensor where id = '${id}'`)
     for (const id of fallasIds) await sql(`delete from public.fallas_deteccion where id = '${id}'`)

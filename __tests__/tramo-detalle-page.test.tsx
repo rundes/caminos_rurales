@@ -25,6 +25,7 @@ const TRAMO = {
     [-60.11, -36.61],
   ],
   municipio: 'maipu',
+  activo: true,
 }
 
 const OBSERVACION = {
@@ -54,6 +55,8 @@ let coberturaCountResultado: Resultado = { count: 2, error: null }
 let coberturaUltimaResultado: Resultado = { data: { created_at: '2026-01-05T15:00:00Z' }, error: null }
 let observacionesResultado: Resultado = { data: [OBSERVACION], error: null }
 let cuadrosResultado: Resultado = { data: [CUADRO], error: null }
+let userMock: { id: string } | null = { id: 'u1' }
+let perfilResultado: Resultado = { data: { rol: 'municipio' }, error: null }
 
 function crearConsulta(resolver: () => Resultado) {
   const consulta: Record<string, unknown> = {
@@ -72,8 +75,10 @@ vi.mock('@/lib/supabase/server', () => ({
   crearClienteServidor: async () => {
     let coberturaLlamadas = 0
     return {
+      auth: { getUser: async () => ({ data: { user: userMock } }) },
       from: (tabla: string) => {
         if (tabla === 'tramos') return crearConsulta(() => tramoResultado)
+        if (tabla === 'perfiles') return crearConsulta(() => perfilResultado)
         if (tabla === 'cobertura_tramos') {
           coberturaLlamadas += 1
           const llamada = coberturaLlamadas
@@ -104,6 +109,8 @@ function reiniciar() {
   coberturaUltimaResultado = { data: { created_at: '2026-01-05T15:00:00Z' }, error: null }
   observacionesResultado = { data: [OBSERVACION], error: null }
   cuadrosResultado = { data: [CUADRO], error: null }
+  userMock = { id: 'u1' }
+  perfilResultado = { data: { rol: 'municipio' }, error: null }
   obtenerRugosidadTramos.mockReset()
   obtenerRugosidadTramos.mockResolvedValue({ t1: { calidad: 'malo', rms: 2, velocidad: 30, impactos: 1, segmentos: 5 } })
   notFound.mockClear()
@@ -153,5 +160,38 @@ describe('TramoDetallePage', () => {
     tramoResultado = { data: null, error: null }
 
     await expect(TramoDetallePage({ params: PARAMS })).rejects.toThrow('NEXT_NOT_FOUND')
+  })
+
+  test('municipio ve el link "Editar"', async () => {
+    reiniciar()
+    render(await TramoDetallePage({ params: PARAMS }))
+    expect(screen.getByRole('link', { name: 'Editar' })).toHaveAttribute('href', '/dashboard/tramos/t1/editar')
+  })
+
+  test('auditor también ve el link "Editar"', async () => {
+    reiniciar()
+    perfilResultado = { data: { rol: 'auditor' }, error: null }
+    render(await TramoDetallePage({ params: PARAMS }))
+    expect(screen.getByRole('link', { name: 'Editar' })).toBeInTheDocument()
+  })
+
+  test('productor no ve el link "Editar"', async () => {
+    reiniciar()
+    perfilResultado = { data: { rol: 'productor' }, error: null }
+    render(await TramoDetallePage({ params: PARAMS }))
+    expect(screen.queryByRole('link', { name: 'Editar' })).not.toBeInTheDocument()
+  })
+
+  test('un tramo inactivo muestra la etiqueta "Inactivo"', async () => {
+    reiniciar()
+    tramoResultado = { data: { ...TRAMO, activo: false }, error: null }
+    render(await TramoDetallePage({ params: PARAMS }))
+    expect(screen.getByText('Inactivo')).toBeInTheDocument()
+  })
+
+  test('un tramo activo no muestra la etiqueta "Inactivo"', async () => {
+    reiniciar()
+    render(await TramoDetallePage({ params: PARAMS }))
+    expect(screen.queryByText('Inactivo')).not.toBeInTheDocument()
   })
 })

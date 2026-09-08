@@ -11,6 +11,7 @@ import {
   esquemaRecorrido,
   esquemaRecuperar,
   esquemaRegistro,
+  esquemaTramo,
   MENSAJE_PASSWORD_CORTA,
   primerError,
 } from '@/lib/validaciones'
@@ -466,5 +467,79 @@ describe('esquemaCuadros', () => {
     expect(esquemaCuadros.safeParse(lote({ cuadros: [cuadro(), cuadro({ lat: 91 })] })).success).toBe(
       false,
     )
+  })
+})
+
+function tramo(sobrescribe: Partial<Record<string, unknown>> = {}) {
+  return {
+    nombreCodigo: 'CR-099 Camino nuevo',
+    localidad: 'Maipú',
+    geometria: [
+      [-57.9, -36.99],
+      [-57.89, -36.98],
+    ],
+    activo: true,
+    ...sobrescribe,
+  }
+}
+
+describe('esquemaTramo', () => {
+  test('acepta un tramo válido', () => {
+    expect(esquemaTramo.safeParse(tramo()).success).toBe(true)
+  })
+
+  test('rechaza un nombre_codigo de un solo caracter', () => {
+    const r = esquemaTramo.safeParse(tramo({ nombreCodigo: 'A' }))
+    expect(r.success).toBe(false)
+    expect(!r.success && primerError(r.error)).toMatch(/al menos 2 caracteres/)
+  })
+
+  test('rechaza una localidad vacía', () => {
+    const r = esquemaTramo.safeParse(tramo({ localidad: '' }))
+    expect(r.success).toBe(false)
+  })
+
+  test('rechaza una geometría con un solo punto', () => {
+    const r = esquemaTramo.safeParse(tramo({ geometria: [[-57.9, -36.99]] }))
+    expect(r.success).toBe(false)
+    expect(!r.success && primerError(r.error)).toMatch(/al menos 2 puntos/)
+  })
+
+  test('rechaza una geometría vacía', () => {
+    const r = esquemaTramo.safeParse(tramo({ geometria: [] }))
+    expect(r.success).toBe(false)
+  })
+
+  test('acepta exactamente 2000 puntos', () => {
+    const geometria = Array.from({ length: 2000 }, (_, i) => [-57.9 + i * 0.0001, -36.99])
+    expect(esquemaTramo.safeParse(tramo({ geometria })).success).toBe(true)
+  })
+
+  test('rechaza más de 2000 puntos', () => {
+    const geometria = Array.from({ length: 2001 }, (_, i) => [-57.9 + i * 0.0001, -36.99])
+    const r = esquemaTramo.safeParse(tramo({ geometria }))
+    expect(r.success).toBe(false)
+    expect(!r.success && primerError(r.error)).toMatch(/demasiados puntos/)
+  })
+
+  test('rechaza longitud fuera de rango', () => {
+    const r = esquemaTramo.safeParse(tramo({ geometria: [[-200, -36.99], [-57.89, -36.98]] }))
+    expect(r.success).toBe(false)
+  })
+
+  test('rechaza latitud fuera de rango', () => {
+    const r = esquemaTramo.safeParse(tramo({ geometria: [[-57.9, 200], [-57.89, -36.98]] }))
+    expect(r.success).toBe(false)
+  })
+
+  test('rechaza activo no booleano', () => {
+    const r = esquemaTramo.safeParse(tramo({ activo: 'si' }))
+    expect(r.success).toBe(false)
+  })
+
+  test('ignora un km enviado por el cliente: el esquema no lo declara ni lo conserva', () => {
+    const r = esquemaTramo.safeParse(tramo({ km: 999999 }))
+    expect(r.success).toBe(true)
+    expect(r.success && 'km' in r.data).toBe(false)
   })
 })

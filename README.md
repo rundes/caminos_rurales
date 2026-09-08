@@ -117,13 +117,47 @@ enfocado, y sus observaciones y cuadros de cámara; la política
 tramo de otro municipio (o inexistente) da 404 directamente, sin comparar
 `municipio` a mano.
 
-No hay alta de tramos todavía: a diferencia de `caminos` (que tenía
-`caminos_insert`), la tabla `tramos` solo tiene la política de lectura
-`tramos_select` — la siembra el servidor con la clave secreta
-(`scripts/seed-tramos.mjs`). El listado deja un comentario señalando dónde
-montar el formulario cuando exista esa migración, gateado a
-`perfil.rol === 'municipio' || perfil.rol === 'auditor'`. Ver
-[Pendiente](docs/superpowers/plans/2026-09-04-endurecimiento-y-alcance.md#pendiente).
+#### Alta y edición de tramos (0011)
+
+Solo `municipio`/`auditor` pueden crear o editar un tramo — un `productor`
+nunca ve el botón "Nuevo tramo" ni "Editar", y aunque llamara a la Server
+Action directo, las políticas `tramos_insert_gestion`/`tramos_update_gestion`
+(`rol_actual() in ('municipio', 'auditor')` + `municipio = municipio_actual()`,
+en `using` y `with check`) lo rechazan — la Server Action repite el chequeo de
+rol solo para devolver un mensaje temprano y claro, RLS es el gate real.
+
+- `/dashboard/tramos/nuevo` y `/dashboard/tramos/[id]/editar`
+  (`app/dashboard/tramos/TramoForm.tsx`, compartido por ambas rutas): nombre,
+  localidad, `activo` y la geometría dibujada a mano sobre un mapa Leaflet
+  (`components/MapaDibujarTramo.tsx`) — cada click agrega un vértice, con un
+  botón "Deshacer último punto"; sin biblioteca de dibujo. El km se muestra en
+  vivo mientras se dibuja, calculado con el mismo haversine que usa el resto
+  de la app (`kmDeTrack`, `lib/track.ts`, envuelto en `kmDeGeometria`,
+  `lib/tramos.ts`).
+- **`km` siempre se calcula en el servidor** a partir de la geometría
+  (`crearTramo`/`actualizarTramo`, `app/dashboard/tramos/actions.ts`): el
+  formulario nunca manda un `km`, y el esquema zod (`esquemaTramo`,
+  `lib/validaciones.ts`) ni siquiera lo declara — si igual llegara en el
+  payload, `z.object` lo descarta por defecto. Un `km` que mandara el cliente
+  podría inflar el denominador de cobertura o el progreso propio.
+- No hay política de `delete`: un tramo con historial de cobertura
+  (`cobertura_tramos`, `muestras_sensor`, `fallas_deteccion`, `cuadros`
+  referencian su `id`) no puede desaparecer y arrastrar ese historial con él.
+  En su lugar, columna `activo boolean default true`. **Semántica**: un tramo
+  desactivado deja de contar en todo lo que enumera "los tramos del
+  municipio" hacia adelante — el denominador de `cobertura_municipio`, la
+  lista `/dashboard/tramos` (`lib/tramos-consultas.ts`) y la capa de tramos
+  del mapa (`lib/cobertura-consultas.ts`) filtran por tramos activos. Lo que
+  **no** cambia es el historial ya registrado: `rugosidad_tramos` y
+  `cuadros_por_tramo` agregan filas ya existentes por `tramo_id` y no filtran
+  por `activo` a propósito, y `/dashboard/tramos/<id>` sigue accesible por
+  link directo (con una etiqueta "Inactivo") para reactivarlo o revisar su
+  historial. Semántica completa comentada en
+  `supabase/migrations/0011_alta_tramos.sql`.
+- Columnas de auditoría `creado_por`/`actualizado_at`, selladas por el
+  trigger `tramos_auditoria` (mismo patrón defensivo que
+  `fallas_estado_no_escalar`, 0010: RLS ya exige el rol vía `using`, el
+  trigger es la segunda barrera si una política futura amplía el update).
 
 ### Exportes CSV/GeoJSON
 
@@ -439,6 +473,8 @@ Las migraciones en `supabase/migrations/` se aplican en orden con `scripts/aplic
 9. `0007_cuadros.sql`: crea `cuadros` (cuadros georreferenciados de la cámara durante el recorrido, con `tramo_id` asignado y ruta al objeto en storage); agrega la función `cuadros_por_tramo`.
 10. `0008_seguridad.sql`: `perfiles` inmutable desde la app salvo `nombre`/`acepto_terminos_at` (trigger `perfiles_no_escalar`); altas de `recorridos` acotadas al municipio propio y sin update desde la app; altas de `fallas_deteccion` solo con `origen = 'manual'`; `search_path` fijo en las funciones `security definer`; tabla `codigos_invitacion` y `handle_new_user` resuelve el municipio por código, no por metadata del cliente; índices que faltaban (`puntos_eventos`, `cobertura_tramos`, `fallas_deteccion`, `cuadros`).
 11. `0009_cupos.sql`: tabla `uso_diario` y función `consumir_cupo` (cupos diarios de subidas y recorridos, ver [Cupos diarios](#cupos-diarios)); restricción única `(recorrido_id, motivo)` en `puntos_eventos` para que el upsert reemplace el borrado-y-reinserción anterior.
+12. `0010_estado_observaciones.sql`: estado de gestión de una observación (`pendiente`/`en_obra`/`resuelta`/`descartada`), escribible solo por `municipio`/`auditor` (grant por columna + RLS + trigger `fallas_estado_no_escalar`); función `resumen_observaciones`.
+13. `0011_alta_tramos.sql`: políticas `tramos_insert_gestion`/`tramos_update_gestion` (alta y edición para `municipio`/`auditor`, dentro de su propio municipio; sin política de delete); columna `activo` (el denominador de `cobertura_municipio` cuenta solo tramos activos, ver [Alta y edición de tramos](#alta-y-edición-de-tramos-0011)); columnas de auditoría `creado_por`/`actualizado_at` y trigger `tramos_auditoria`.
 
 ## Capas
 
@@ -602,4 +638,4 @@ Con `npm run dev` corriendo y `SUPABASE_ACCESS_TOKEN` en el entorno:
 node scripts/smoke.mjs
 ```
 
-Verifica contra el proyecto Supabase real: trigger de perfil, gate de términos (`/terminos`, `/dashboard`), RLS de `tramos`/`recorridos`/`cobertura_tramos`/`puntos_eventos`/`fallas_deteccion` por municipio y por propietario, las funciones `cobertura_municipio` y `ranking_municipio`, políticas de storage por municipio, las tres capas del estado de observación (grant de columna + RLS + trigger `fallas_estado_no_escalar`, migración 0010) y `resumen_observaciones`, las rutas `/dashboard/tramos`, `/dashboard/tramos/<id>` y la baja de `/dashboard/caminos` (404), los exportes CSV/GeoJSON de observaciones, `/recuperar`, `/nueva-clave` y `/auth/confirm`, y las rutas públicas de la PWA (`/manifest.json`, `/sw.js`, `/offline`). Crea y borra sus propios datos de prueba (usuarios, recorridos, cobertura, puntos, observaciones, archivo de storage).
+Verifica contra el proyecto Supabase real: trigger de perfil, gate de términos (`/terminos`, `/dashboard`), RLS de `tramos`/`recorridos`/`cobertura_tramos`/`puntos_eventos`/`fallas_deteccion` por municipio y por propietario, las funciones `cobertura_municipio` y `ranking_municipio`, políticas de storage por municipio, las tres capas del estado de observación (grant de columna + RLS + trigger `fallas_estado_no_escalar`, migración 0010) y `resumen_observaciones`, las rutas `/dashboard/tramos`, `/dashboard/tramos/<id>` y la baja de `/dashboard/caminos` (404), el alta/edición de tramos (0011: RLS `tramos_insert_gestion`/`tramos_update_gestion` bloquea a un `productor` y a un `municipio` insertando en otro municipio, la clave secreta puede, y el denominador de `cobertura_municipio` deja de contar un tramo apenas se lo marca `activo = false` sin borrarlo, sección 13), los exportes CSV/GeoJSON de observaciones, `/recuperar`, `/nueva-clave` y `/auth/confirm`, y las rutas públicas de la PWA (`/manifest.json`, `/sw.js`, `/offline`). Crea y borra sus propios datos de prueba (usuarios, recorridos, cobertura, puntos, observaciones, tramos, archivo de storage).

@@ -3,7 +3,7 @@
 -- 0003a_tipos_falla.sql + 0003_recorridos.sql + 0004_recorridos_procesado.sql +
 -- 0005_fallas_update.sql + 0006a_enums_sensor.sql + 0006_muestras_sensor.sql +
 -- 0007_cuadros.sql + 0008_seguridad.sql + 0009_cupos.sql +
--- 0010_estado_observaciones.sql.
+-- 0010_estado_observaciones.sql + 0011_alta_tramos.sql.
 -- Una instalación nueva puede
 -- correr solo este archivo. La tabla `relevamientos` ya no existe: el flujo
 -- es recorrido GPS -> cobertura de tramos -> puntos e insignias.
@@ -50,14 +50,23 @@ create table public.caminos (
   ultima_actualizacion timestamp with time zone default now()
 );
 
--- 4. TABLA TRAMOS (un registro por way de OSM: geometría, km y localidad)
+-- 4. TABLA TRAMOS (un registro por way de OSM, o dado de alta a mano por
+-- municipio/auditor: geometría, km y localidad)
 create table public.tramos (
   id text primary key,
   municipio text not null,
   nombre_codigo text not null,
   localidad text not null,
   km numeric(10, 3) not null,
-  geometria jsonb not null
+  geometria jsonb not null,
+  -- Alta/edición (0011): un tramo dado de baja (`activo = false`) deja de
+  -- contar en la cobertura y en las listas de gestión, pero su historial
+  -- (cobertura_tramos, muestras_sensor, fallas_deteccion, cuadros) nunca se
+  -- borra ni se oculta — no hay política de delete. Semántica completa en
+  -- `supabase/migrations/0011_alta_tramos.sql`.
+  activo boolean not null default true,
+  creado_por uuid references public.perfiles(id) on delete set null,
+  actualizado_at timestamptz
 );
 
 -- 5. TABLA RECORRIDOS (track GPS simplificado de una salida)
@@ -201,6 +210,7 @@ create index cobertura_recorrido_idx on public.cobertura_tramos (recorrido_id);
 create index fallas_fecha_idx on public.fallas_deteccion (created_at desc);
 create index cuadros_t_idx on public.cuadros (t desc);
 create index fallas_estado_idx on public.fallas_deteccion (estado);
+create index tramos_activo_idx on public.tramos (municipio, activo);
 
 -- 10. FUNCIONES AUXILIARES (security definer evita recursión de RLS sobre perfiles)
 create or replace function public.municipio_actual()
@@ -237,13 +247,17 @@ begin
   if p_municipio is distinct from public.municipio_actual() then return; end if;
 
   return query
+  -- `tr.activo` (0011): el denominador de cobertura cuenta solo tramos
+  -- activos. `rugosidad_tramos`/`cuadros_por_tramo` (abajo) NO filtran por
+  -- activo a propósito: agregan historial ya registrado por `tramo_id`, no
+  -- enumeran "los tramos del municipio" — ver 0011_alta_tramos.sql.
   with t as (
     select
       tr.localidad as loc,
       tr.km as km,
       exists (select 1 from public.cobertura_tramos c where c.tramo_id = tr.id) as cubierto
     from public.tramos tr
-    where tr.municipio = p_municipio
+    where tr.municipio = p_municipio and tr.activo
   )
   select
     t.loc,
@@ -470,10 +484,32 @@ create policy "caminos_update" on public.caminos
   using (municipio = public.municipio_actual() and public.rol_actual() in ('municipio', 'auditor'))
   with check (municipio = public.municipio_actual());
 
--- tramos: solo lectura por municipio (los siembra el servidor con la clave secreta).
+-- tramos: lectura por municipio (los siembra el servidor con la clave
+-- secreta o los da de alta municipio/auditor); alta y edición solo para
+-- municipio/auditor, dentro de su propio municipio; sin política de delete
+-- (0011: `activo` reemplaza al borrado, ver sección 4 y el comentario del
+-- trigger `tramos_auditoria` más abajo).
 create policy "tramos_select" on public.tramos
   for select to authenticated
   using (municipio = public.municipio_actual());
+
+create policy "tramos_insert_gestion" on public.tramos
+  for insert to authenticated
+  with check (
+    public.rol_actual() in ('municipio', 'auditor')
+    and municipio = public.municipio_actual()
+  );
+
+create policy "tramos_update_gestion" on public.tramos
+  for update to authenticated
+  using (
+    public.rol_actual() in ('municipio', 'auditor')
+    and municipio = public.municipio_actual()
+  )
+  with check (
+    public.rol_actual() in ('municipio', 'auditor')
+    and municipio = public.municipio_actual()
+  );
 
 -- recorridos: lectura por municipio; escritura del propio.
 create policy "recorridos_select" on public.recorridos
@@ -795,3 +831,40 @@ create trigger fallas_estado_no_escalar
   for each row
   when (auth.uid() is not null)
   execute function public.fallas_estado_protegido();
+
+-- 18. ALTA DE TRAMOS (0011): auditoría y blindaje de la fila
+-- Sella `creado_por`/`actualizado_at` en cada alta/edición y bloquea
+-- cualquier cambio de fila que no venga de municipio/auditor (RLS
+-- `tramos_update_gestion`, sección 13, ya lo exige vía `using`; esto es la
+-- segunda barrera si una política futura amplía el update — mismo patrón que
+-- `fallas_estado_protegido` arriba). Se salta el bloqueo cuando no hay sesión
+-- (`auth.uid() is null`): la clave secreta (siembra, `scripts/seed-tramos.mjs`)
+-- conserva control total.
+create or replace function public.tramos_auditoria()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if tg_op = 'INSERT' then
+    new.creado_por := auth.uid();
+    new.actualizado_at := now();
+    return new;
+  end if;
+
+  if auth.uid() is not null and public.rol_actual() not in ('municipio', 'auditor') then
+    raise exception 'Solo municipio o auditor pueden modificar un tramo'
+      using errcode = '42501';
+  end if;
+
+  new.creado_por := old.creado_por;
+  new.actualizado_at := now();
+  return new;
+end;
+$$;
+
+create trigger tramos_auditoria
+  before insert or update on public.tramos
+  for each row
+  execute function public.tramos_auditoria();

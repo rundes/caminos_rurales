@@ -33,6 +33,41 @@ export const esquemaCamino = z.object({
   nombre_codigo: z.string().trim().min(2, { message: 'El nombre o código debe tener al menos 2 caracteres' }),
 })
 
+/** Techo defensivo de vértices de un tramo dibujado a mano (un tramo real de OSM ronda unas pocas decenas). */
+const MAX_PUNTOS_TRAMO = 2000
+
+/** Vértice de geometría en formato GeoJSON `[lng, lat]`, igual que `tramos.geometria`. */
+const coordenadaTramo = z.tuple([
+  z.number().min(-180, { message: 'Longitud fuera de rango' }).max(180, { message: 'Longitud fuera de rango' }),
+  z.number().min(-90, { message: 'Latitud fuera de rango' }).max(90, { message: 'Latitud fuera de rango' }),
+])
+
+/**
+ * Alta/edición de un tramo (municipio/auditor). Deliberadamente sin `km`: se
+ * calcula siempre en el servidor a partir de `geometria` (ver `kmDeGeometria`
+ * en `lib/tramos.ts`) — un `km` que mandara el cliente inflaría el
+ * denominador de cobertura o el progreso propio, así que ni siquiera se
+ * declara acá. Como `z.object` descarta claves desconocidas por defecto, un
+ * `km` que igual llegara en el payload se ignora sin hacer falta `.strict()`.
+ */
+export const esquemaTramo = z.object({
+  nombreCodigo: z
+    .string()
+    .trim()
+    .min(2, { message: 'El nombre o código debe tener al menos 2 caracteres' })
+    .max(120, { message: 'El nombre o código es demasiado largo' }),
+  localidad: z
+    .string()
+    .trim()
+    .min(2, { message: 'La localidad debe tener al menos 2 caracteres' })
+    .max(120, { message: 'La localidad es demasiado larga' }),
+  geometria: z
+    .array(coordenadaTramo, { message: 'Dibujá el tramo en el mapa' })
+    .min(2, { message: 'Dibujá el tramo con al menos 2 puntos' })
+    .max(MAX_PUNTOS_TRAMO, { message: 'El tramo tiene demasiados puntos' }),
+  activo: z.boolean(),
+})
+
 export function primerError(error: z.ZodError): string {
   const issue = error.issues[0]
   return issue?.message ?? 'Datos inválidos'
@@ -243,3 +278,4 @@ export type RecorridoPayload = z.infer<typeof esquemaRecorrido>
 export type CambioEstadoPayload = z.infer<typeof esquemaCambioEstado>
 export type RecuperarPayload = z.infer<typeof esquemaRecuperar>
 export type NuevaClavePayload = z.infer<typeof esquemaNuevaClave>
+export type TramoPayload = z.infer<typeof esquemaTramo>

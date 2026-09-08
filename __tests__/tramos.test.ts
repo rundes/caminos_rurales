@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest'
-import { buscarTramos, combinarTramos, ordenarTramos, type TramoListado } from '@/lib/tramos'
+import { buscarTramos, combinarTramos, kmDeGeometria, ordenarTramos, type TramoListado } from '@/lib/tramos'
 import type { TramoResumen } from '@/lib/tramos-consultas'
+import { kmDeTrack } from '@/lib/track'
 
 const RESUMEN: TramoResumen[] = [
   { id: 't1', nombre_codigo: 'CR-014 Camino a La Elisa', localidad: 'Maipú', km: 5, veces: 2, ultimaVisita: '2026-01-05T00:00:00Z', cuadros: 3 },
@@ -64,5 +65,36 @@ describe('ordenarTramos', () => {
     const copia = [...LISTADO]
     ordenarTramos(LISTADO, 'km')
     expect(LISTADO).toEqual(copia)
+  })
+})
+
+describe('kmDeGeometria', () => {
+  test('coincide con kmDeTrack sobre los mismos puntos convertidos [lng,lat] -> {lat,lng}', () => {
+    const geometria: [number, number][] = [
+      [-57.9, -36.99],
+      [-57.89, -36.98],
+      [-57.85, -36.95],
+    ]
+    const esperado = Number(
+      kmDeTrack(geometria.map(([lng, lat]) => ({ lat, lng }))).toFixed(3),
+    )
+    expect(kmDeGeometria(geometria)).toBe(esperado)
+  })
+
+  test('un único punto no recorre distancia', () => {
+    expect(kmDeGeometria([[-57.9, -36.99]])).toBe(0)
+  })
+
+  test('geometría vacía da 0 km', () => {
+    expect(kmDeGeometria([])).toBe(0)
+  })
+
+  test('redondea a 3 decimales', () => {
+    const geometria: [number, number][] = [
+      [-57.9, -36.99],
+      [-57.89123456, -36.98123456],
+    ]
+    const km = kmDeGeometria(geometria)
+    expect(km).toBe(Number(km.toFixed(3)))
   })
 })
