@@ -5,7 +5,7 @@ import { crearProveedorSupabase } from './supabase'
 import type { ProveedorAlmacenamiento } from './tipos'
 
 export type { DestinoSubida, ProveedorAlmacenamiento } from './tipos'
-export { valorParaGuardar, PREFIJO_GCS } from './tipos'
+export { valorParaGuardar } from './tipos'
 
 /**
  * Proveedor de almacenamiento según `ALMACENAMIENTO`: `gcs` usa Google Cloud

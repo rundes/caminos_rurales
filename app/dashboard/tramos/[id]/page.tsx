@@ -1,5 +1,6 @@
 import { notFound } from 'next/navigation'
 import { MapaTramoCliente } from '@/components/MapaTramoCliente'
+import { obtenerProveedor } from '@/lib/almacenamiento'
 import { obtenerRugosidadTramos } from '@/lib/cobertura-consultas'
 import { formatearKm } from '@/lib/cobertura-resumen'
 import { formatearFecha, formatearFechaHora } from '@/lib/fechas'
@@ -9,10 +10,8 @@ import { crearClienteServidor } from '@/lib/supabase/server'
 
 type Props = { params: Promise<{ id: string }> }
 
-const SEGUNDOS_URL_FIRMADA = 60 * 60
 const LIMITE_OBSERVACIONES = 200
 const LIMITE_CUADROS = 200
-const BUCKET_EVIDENCIA = 'evidencia-vial'
 
 export default async function TramoDetallePage({ params }: Props) {
   const { id } = await params
@@ -76,16 +75,10 @@ export default async function TramoDetallePage({ params }: Props) {
   const rutas = [
     ...new Set([
       ...filasObservaciones.map((o) => o.url_evidencia_imagen).filter((r): r is string => Boolean(r)),
-      ...filasCuadros.map((c) => c.ruta).filter((r) => !r.startsWith('https://')),
+      ...filasCuadros.map((c) => c.ruta),
     ]),
   ]
-  const urls: Record<string, string> = {}
-  if (rutas.length > 0) {
-    const { data: firmadas } = await supabase.storage.from(BUCKET_EVIDENCIA).createSignedUrls(rutas, SEGUNDOS_URL_FIRMADA)
-    for (const f of firmadas ?? []) {
-      if (f.path && f.signedUrl) urls[f.path] = f.signedUrl
-    }
-  }
+  const urls = rutas.length > 0 ? await obtenerProveedor().urlsLectura(rutas) : {}
 
   return (
     <div className="flex flex-col gap-6">
@@ -159,7 +152,7 @@ export default async function TramoDetallePage({ params }: Props) {
         ) : (
           <ul className="divide-y rounded-2xl bg-white shadow-sm">
             {filasCuadros.map((c) => {
-              const url = c.ruta.startsWith('https://') ? c.ruta : urls[c.ruta]
+              const url = urls[c.ruta]
               return (
                 <li key={c.id} className="flex items-center justify-between px-4 py-3 text-sm">
                   <span>{formatearFechaHora(c.t)}</span>

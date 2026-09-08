@@ -81,14 +81,13 @@ vi.mock('@/lib/supabase/server', () => ({
       return { select: () => crearConsultaFallasMock() }
     },
     rpc: async () => ({ data: RESUMEN, error: null }),
-    storage: {
-      from: () => ({
-        createSignedUrls: async (rutas: string[]) => ({
-          data: rutas.map((path) => ({ path, signedUrl: `https://firmada/${path}` })),
-          error: null,
-        }),
-      }),
-    },
+  }),
+}))
+
+vi.mock('@/lib/almacenamiento', () => ({
+  obtenerProveedor: () => ({
+    urlsLectura: async (rutas: string[]) =>
+      Object.fromEntries(rutas.map((ruta) => [ruta, `https://firmada/${ruta}`])),
   }),
 }))
 

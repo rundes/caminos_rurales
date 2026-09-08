@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { Suspense } from 'react'
 import { FiltrosObservaciones } from '@/components/FiltrosObservaciones'
+import { obtenerProveedor } from '@/lib/almacenamiento'
 import { filtroValido, type FiltrosFallas } from '@/lib/fallas'
 import { finDeDia, formatearFechaHora } from '@/lib/fechas'
 import { crearClienteServidor } from '@/lib/supabase/server'
@@ -17,10 +18,8 @@ import { EstadoSelect } from './EstadoSelect'
 
 const ORIGENES: readonly OrigenObservacion[] = ['manual', 'sensor']
 
-const SEGUNDOS_URL_FIRMADA = 60 * 60
 const LIMITE_OBSERVACIONES = 500
 const AVISO_LIMITE = `Mostrando las últimas ${LIMITE_OBSERVACIONES} observaciones.`
-const BUCKET_EVIDENCIA = 'evidencia-vial'
 
 const ETIQUETA_ORIGEN: Record<'manual' | 'sensor', string> = {
   manual: 'Manual',
@@ -87,13 +86,7 @@ export default async function ObservacionesPage({ searchParams }: Props) {
   const alcanzoLimite = filas.length >= LIMITE_OBSERVACIONES
 
   const rutas = [...new Set(filas.map((f) => f.url_evidencia_imagen).filter((r): r is string => Boolean(r)))]
-  const urlsEvidencia: Record<string, string> = {}
-  if (rutas.length > 0) {
-    const { data: firmadas } = await supabase.storage.from(BUCKET_EVIDENCIA).createSignedUrls(rutas, SEGUNDOS_URL_FIRMADA)
-    for (const f of firmadas ?? []) {
-      if (f.path && f.signedUrl) urlsEvidencia[f.path] = f.signedUrl
-    }
-  }
+  const urlsEvidencia = rutas.length > 0 ? await obtenerProveedor().urlsLectura(rutas) : {}
 
   const conteos = new Map((resumen ?? []).map((r) => [r.estado, r.total]))
 

@@ -267,7 +267,10 @@ Variables:
 - `ALMACENAMIENTO`: `supabase` (por defecto) o `gcs`. Ver
   [Almacenamiento de evidencia](#almacenamiento-de-evidencia).
 - `GCS_BUCKET`, `GCS_SERVICE_ACCOUNT_KEY`: requeridas solo si
-  `ALMACENAMIENTO=gcs`.
+  `ALMACENAMIENTO=gcs`. `GCS_SERVICE_ACCOUNT_KEY` además se valida al
+  arrancar: tiene que parsear como JSON y traer `client_email`/`private_key`,
+  o `envServidor()` tira un error en español que lo dice (sin loguear la
+  clave). Ver [Almacenamiento de evidencia](#almacenamiento-de-evidencia).
 - `SITE_URL`: opcional, origen público fijo (por ejemplo
   `https://visiovial.example`, sin `/` final) para armar el `redirectTo` del
   email de recuperación de contraseña. Sin definirla, `lib/url-origen.ts` la
@@ -406,6 +409,7 @@ más retención y PITR).
 - `node scripts/smoke.mjs`: smoke test de integración contra el proyecto Supabase real. Ver [Smoke test](#smoke-test-de-integración).
 - `npm run setup` (`node scripts/setup-entorno.mjs [--solo-migraciones] [--dry-run]`): ver [Configuración inicial](#configuración-inicial-npm-run-setup).
 - `npm run borrar-usuario -- <email> [--dry-run]` (`node scripts/borrar-usuario.mjs`): ver [Baja de usuario](#baja-de-usuario).
+- `npm run verificar-gcs` (`node scripts/verificar-gcs.mjs`): checklist post-cutover del bucket GCS (sube, firma, lee, borra, y avisa si el bucket sigue siendo público). Ver [Almacenamiento de evidencia](#almacenamiento-de-evidencia).
 
 ## Migraciones
 
@@ -435,26 +439,79 @@ Archivos estáticos en `public/capas/<slug-de-municipio>/`, registrados por slug
 ## Almacenamiento de evidencia
 
 Las fotos y videos de las observaciones se suben desde el navegador con un `PUT`
-a una URL firmada que devuelve la Server Action `prepararSubida`. El proveedor se
-elige con la variable `ALMACENAMIENTO`:
+a una URL firmada que devuelve la Server Action `prepararSubida`, y se leen con
+una URL firmada de lectura (nunca una URL pública fija). El proveedor se elige
+con la variable `ALMACENAMIENTO`, y los dos exponen el mismo contrato
+(`lib/almacenamiento/tipos.ts`): en la base se guarda siempre la **ruta**
+dentro del bucket, y se firma una URL de lectura de 1 h recién al mostrarla
+(`urlLectura` para una sola ruta, `urlsLectura` para firmar muchas de una
+vez — el mapa firma en lote con concurrencia acotada en vez de mandar
+cientos de pedidos sueltos, ver `lib/concurrencia.ts`).
 
 - **Supabase Storage** (por defecto, `ALMACENAMIENTO=supabase` o sin definir):
-  usa `createSignedUploadUrl` sobre el bucket `evidencia-vial`. En la base se
-  guarda la **ruta** dentro del bucket y se firma una URL de lectura de 1 h cada
-  vez que hay que mostrarla.
-- **Google Cloud Storage** (`ALMACENAMIENTO=gcs`): usa una URL firmada V4 de
-  escritura válida 15 minutos. Requiere `GCS_BUCKET` (por ejemplo `maipu-pba`) y
+  usa `createSignedUploadUrl` para subir y `createSignedUrl`/`createSignedUrls`
+  sobre el bucket `evidencia-vial` para leer.
+- **Google Cloud Storage** (`ALMACENAMIENTO=gcs`): usa `getSignedUrl` V4 tanto
+  para subir (`action: 'write'`, 15 min) como para leer (`action: 'read'`,
+  1 h). Requiere `GCS_BUCKET` (por ejemplo `maipu-pba`) y
   `GCS_SERVICE_ACCOUNT_KEY` con el JSON de la cuenta de servicio **en una sola
-  línea**. En la base se guarda la URL pública
-  `https://storage.googleapis.com/<bucket>/<ruta>`.
+  línea**; `envServidor()` valida al arrancar que el JSON parsee y tenga
+  `client_email`/`private_key` — una clave rota se detecta ahí, no en el
+  primer pedido de un usuario.
 
-Para GCS el bucket debe ser de **lectura pública** (`allUsers` con rol
-`Storage Object Viewer`) y tener CORS que habilite `PUT` desde el dominio de la
-app:
+### El bucket de GCS debe ser privado
 
-```json
-[{ "origin": ["https://tu-dominio"], "method": ["PUT", "GET"], "responseHeader": ["Content-Type"], "maxAgeSeconds": 3600 }]
-```
+**El bucket NO debe ser público.** Con URLs de lectura firmadas ya no hace
+falta lectura pública, y dejarla habilitada expone las fotos y cuadros de
+cámara de todos los municipios a cualquiera que adivine una ruta. Checklist
+del cutover a un bucket nuevo (por ejemplo `maipu-pba`):
+
+1. **Uniform bucket-level access, sin `allUsers`.** Crear el bucket con
+   acceso uniforme a nivel de bucket y no otorgar ningún rol a `allUsers` ni
+   `allAuthenticatedUsers`. Si el bucket viene de antes con lectura pública,
+   sacar ese acceso:
+
+   ```bash
+   gsutil iam ch -d allUsers:objectViewer gs://maipu-pba
+   ```
+
+2. **La cuenta de servicio solo necesita `roles/storage.objectAdmin`**, y
+   acotado a ese bucket (no a nivel de proyecto):
+
+   ```bash
+   gsutil iam ch serviceAccount:cuenta@proyecto.iam.gserviceaccount.com:roles/storage.objectAdmin gs://maipu-pba
+   ```
+
+3. **CORS para `PUT`**: las subidas firmadas van directo del navegador al
+   bucket (origen cruzado), así que el bucket necesita CORS habilitado para el
+   dominio de la app. Guardar como `cors.json`:
+
+   ```json
+   [
+     {
+       "origin": ["https://tu-dominio"],
+       "method": ["PUT", "GET"],
+       "responseHeader": ["Content-Type"],
+       "maxAgeSeconds": 3600
+     }
+   ]
+   ```
+
+   y aplicarlo con:
+
+   ```bash
+   gsutil cors set cors.json gs://maipu-pba
+   ```
+
+4. **Variables de entorno**: `ALMACENAMIENTO=gcs`, `GCS_BUCKET=maipu-pba`,
+   `GCS_SERVICE_ACCOUNT_KEY` con el JSON de la cuenta de servicio en una sola
+   línea (ver arriba).
+
+5. **Verificar**: con esas variables ya configuradas, correr
+   `npm run verificar-gcs` (`scripts/verificar-gcs.mjs`). Sube un objeto
+   chico, firma una URL de lectura, la descarga, la borra, y además chequea
+   que la URL pública del objeto (sin firmar) **no** devuelva 200 — si
+   devuelve 200, el bucket sigue siendo público y hay que revisar el paso 1.
 
 Las fotos se comprimen en el teléfono antes de subirlas (`lib/imagenes.ts`:
 1600 px de lado mayor, JPEG calidad 0.8); los videos se suben sin transcodificar

@@ -4,18 +4,21 @@ import { beforeEach, describe, expect, test, vi } from 'vitest'
 const getUser = vi.fn()
 const maybeSingle = vi.fn()
 const from = vi.fn()
-const createSignedUrls = vi.fn()
 
 vi.mock('@/lib/supabase/server', () => ({
   crearClienteServidor: async () => ({
     auth: { getUser },
     from,
-    storage: { from: () => ({ createSignedUrls }) },
   }),
 }))
 
 const obtenerCuadros = vi.fn()
 vi.mock('@/lib/cuadros-consultas', () => ({ obtenerCuadros: (...args: unknown[]) => obtenerCuadros(...args) }))
+
+const urlsLectura = vi.fn()
+vi.mock('@/lib/almacenamiento', () => ({
+  obtenerProveedor: () => ({ urlsLectura: (...args: unknown[]) => urlsLectura(...args) }),
+}))
 
 const { obtenerCuadrosMunicipio } = await import('@/app/dashboard/mapa/actions')
 
@@ -24,7 +27,7 @@ beforeEach(() => {
   getUser.mockResolvedValue({ data: { user: { id: 'u1' } } })
   from.mockImplementation(() => ({ select: () => ({ eq: () => ({ maybeSingle }) }) }))
   maybeSingle.mockResolvedValue({ data: { municipio_id: 'maipu' }, error: null })
-  createSignedUrls.mockResolvedValue({ data: [], error: null })
+  urlsLectura.mockResolvedValue({})
 })
 
 describe('obtenerCuadrosMunicipio', () => {
@@ -56,14 +59,14 @@ describe('obtenerCuadrosMunicipio', () => {
     expect(resultado).toEqual({ ok: false, error: expect.stringMatching(/partido/i) })
   })
 
-  test('devuelve los cuadros del municipio del usuario con URLs firmadas y directas', async () => {
+  test('devuelve los cuadros del municipio del usuario con las URLs que firma el proveedor', async () => {
     obtenerCuadros.mockResolvedValue([
       { id: 'c1', ruta: 'u1/r1/cuadros/1.jpg' },
       { id: 'c2', ruta: 'https://cdn.example.com/2.jpg' },
     ])
-    createSignedUrls.mockResolvedValue({
-      data: [{ path: 'u1/r1/cuadros/1.jpg', signedUrl: 'https://firmada.example.com/1.jpg' }],
-      error: null,
+    urlsLectura.mockResolvedValue({
+      'u1/r1/cuadros/1.jpg': 'https://firmada.example.com/1.jpg',
+      'https://cdn.example.com/2.jpg': 'https://cdn.example.com/2.jpg',
     })
 
     const resultado = await obtenerCuadrosMunicipio()
@@ -76,18 +79,9 @@ describe('obtenerCuadrosMunicipio', () => {
       'https://cdn.example.com/2.jpg': 'https://cdn.example.com/2.jpg',
     })
     expect(obtenerCuadros).toHaveBeenCalledWith(expect.anything(), 'maipu')
-  })
-
-  test('firma en lotes de 100 rutas cuando hay más de un lote', async () => {
-    const rutas = Array.from({ length: 150 }, (_, i) => `u1/r1/cuadros/${i}.jpg`)
-    obtenerCuadros.mockResolvedValue(rutas.map((ruta, i) => ({ id: `c${i}`, ruta })))
-    createSignedUrls.mockResolvedValue({ data: [], error: null })
-
-    await obtenerCuadrosMunicipio()
-
-    expect(createSignedUrls).toHaveBeenCalledTimes(2)
-    expect(createSignedUrls.mock.calls[0][0]).toHaveLength(100)
-    expect(createSignedUrls.mock.calls[1][0]).toHaveLength(50)
+    // La firma en lote (chunking, concurrencia acotada) vive en el proveedor:
+    // esta acción solo le pasa las rutas únicas, sin conocer su implementación.
+    expect(urlsLectura).toHaveBeenCalledWith(['u1/r1/cuadros/1.jpg', 'https://cdn.example.com/2.jpg'])
   })
 
   test('no firma nada cuando no hay cuadros', async () => {
@@ -96,13 +90,13 @@ describe('obtenerCuadrosMunicipio', () => {
     const resultado = await obtenerCuadrosMunicipio()
 
     expect(resultado).toEqual({ ok: true, data: { cuadros: [], urls: {} } })
-    expect(createSignedUrls).not.toHaveBeenCalled()
+    expect(urlsLectura).not.toHaveBeenCalled()
   })
 
   test('si algo falla al firmar, devuelve error genérico y loguea', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
     obtenerCuadros.mockResolvedValue([{ id: 'c1', ruta: 'u1/r1/cuadros/1.jpg' }])
-    createSignedUrls.mockRejectedValue(new Error('boom'))
+    urlsLectura.mockRejectedValue(new Error('boom'))
 
     const resultado = await obtenerCuadrosMunicipio()
 

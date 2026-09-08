@@ -83,16 +83,15 @@ vi.mock('@/lib/supabase/server', () => ({
         if (tabla === 'cuadros') return crearConsulta(() => cuadrosResultado)
         throw new Error(`tabla no prevista: ${tabla}`)
       },
-      storage: {
-        from: () => ({
-          createSignedUrls: async (rutas: string[]) => ({
-            data: rutas.map((path) => ({ path, signedUrl: `https://firmada/${path}` })),
-            error: null,
-          }),
-        }),
-      },
     }
   },
+}))
+
+vi.mock('@/lib/almacenamiento', () => ({
+  obtenerProveedor: () => ({
+    urlsLectura: async (rutas: string[]) =>
+      Object.fromEntries(rutas.map((ruta) => [ruta, `https://firmada/${ruta}`])),
+  }),
 }))
 
 const { default: TramoDetallePage } = await import('@/app/dashboard/tramos/[id]/page')
