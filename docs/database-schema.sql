@@ -76,6 +76,11 @@ create table public.recorridos (
   municipio text not null,
   inicio timestamptz not null,
   fin timestamptz not null,
+  -- Lo calcula el servidor (`finalizarRecorrido`) sumando distancia dentro de
+  -- cada segmento del track, nunca a través de un corte (pausa o
+  -- interrupción de la grabación): ver `kmDeTrack`/`derivarCortes` en
+  -- `lib/track.ts`. Los cortes los deriva el propio servidor de los
+  -- timestamps de los puntos crudos, no del cliente.
   km numeric(10, 3) not null default 0,
   puntos_gps integer not null default 0,
   track jsonb not null default '[]'::jsonb,

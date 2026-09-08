@@ -129,13 +129,68 @@ export function partirEnSegmentos<T>(puntos: readonly T[], cortes: readonly numb
   return segmentos.filter((s) => s.length > 0)
 }
 
-/** Suma de distancias haversine entre puntos consecutivos del track, en km. */
-export function kmDeTrack(puntos: readonly { lat: number; lng: number }[]): number {
+/**
+ * Umbral de "sin señal" para tratar un hueco entre dos puntos consecutivos
+ * como una interrupción real de la grabación (app en 2° plano, pantalla
+ * bloqueada, o zona sin GPS) y no como una demora normal de una lectura.
+ * `useGrabadorGps.OPCIONES_GPS.timeout` ya le da 20 s a cada lectura antes de
+ * que `watchPosition` reporte un error de timeout (y siga reintentando); 30 s
+ * deja un margen de 10 s por encima de eso para no marcar como interrupción
+ * una única lectura lenta pero real, y es corto en relación a la duración
+ * típica de un recorrido para no dejar pasar huecos grandes sin cortar.
+ *
+ * Es también el umbral que usa el servidor para derivar los cortes del track
+ * a partir de los timestamps de los puntos crudos (`derivarCortes`): no
+ * confía en los cortes que pudiera declarar el cliente, los recalcula él
+ * mismo con este mismo umbral, así hay una sola definición de "corte" en vez
+ * de dos que puedan desalinearse.
+ */
+export const UMBRAL_INTERRUPCION_MS = 30_000
+
+/**
+ * Deriva los índices de corte de un track a partir del tiempo entre puntos
+ * consecutivos: un hueco mayor a `umbralMs` es una interrupción real (no se
+ * grabó nada mientras tanto), así que el punto siguiente arranca un segmento
+ * nuevo (mismo formato que espera `partirEnSegmentos`/`kmDeTrack`). Puntos
+ * fuera de orden (`t` no creciente) no generan corte: la resta da negativa o
+ * cero, nunca supera el umbral.
+ */
+export function derivarCortes(
+  puntos: readonly { t: number }[],
+  umbralMs: number = UMBRAL_INTERRUPCION_MS,
+): number[] {
+  const cortes: number[] = []
+  for (let i = 1; i < puntos.length; i += 1) {
+    if (puntos[i].t - puntos[i - 1].t > umbralMs) cortes.push(i)
+  }
+  return cortes
+}
+
+/** Suma de distancias haversine entre puntos consecutivos de un segmento, en km. */
+function kmDeSegmento(puntos: readonly { lat: number; lng: number }[]): number {
   let km = 0
   for (let i = 1; i < puntos.length; i += 1) {
     km += distanciaKm(puntos[i - 1], puntos[i])
   }
   return km
+}
+
+/**
+ * Suma de distancias haversine entre puntos consecutivos del track, en km.
+ * Con `cortes` (índices, ver `partirEnSegmentos`) no cruza un corte: la
+ * distancia entre el último punto de un segmento y el primero del siguiente
+ * no se suma, así una pausa o interrupción de la grabación no se acredita
+ * como si se hubiera recorrido en línea recta. Sin `cortes` (el valor por
+ * defecto) suma el track de punta a punta, igual que antes — es lo que
+ * corresponde para una geometría que nunca tiene pausas, como un tramo
+ * dibujado a mano (`lib/tramos.ts`, `TramoForm`).
+ */
+export function kmDeTrack(
+  puntos: readonly { lat: number; lng: number }[],
+  cortes: readonly number[] = [],
+): number {
+  if (cortes.length === 0) return kmDeSegmento(puntos)
+  return partirEnSegmentos(puntos, cortes).reduce((suma, segmento) => suma + kmDeSegmento(segmento), 0)
 }
 
 const MS_POR_HORA = 3600 * 1000

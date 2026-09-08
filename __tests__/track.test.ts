@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import {
+  derivarCortes,
   evaluarPlausibilidad,
   filtrarPunto,
   kmDeTrack,
@@ -185,6 +186,85 @@ describe('kmDeTrack', () => {
     const b = punto(LAT_BASE + offsetLatKm(1), -60)
     const c = punto(LAT_BASE + offsetLatKm(2), -60)
     expect(kmDeTrack([a, b, c])).toBeCloseTo(2, 2)
+  })
+
+  test('un hueco de 50 km entre dos segmentos no aporta nada si se pasa el corte', () => {
+    const a = punto(LAT_BASE, -60)
+    const b = punto(LAT_BASE + offsetLatKm(1), -60) // segmento 1: ~1 km
+    const lejos = punto(LAT_BASE + offsetLatKm(51), -60) // salto de 50 km
+    const c = punto(LAT_BASE + offsetLatKm(52), -60) // segmento 2: ~1 km
+
+    // sin cortes, el salto de 50 km se suma igual que el resto (comportamiento previo)
+    expect(kmDeTrack([a, b, lejos, c])).toBeCloseTo(52, 0)
+    // con un corte justo antes de `lejos`, el salto no cuenta: solo 1 + 1 km
+    expect(kmDeTrack([a, b, lejos, c], [2])).toBeCloseTo(2, 2)
+  })
+
+  test('varios cortes: solo suma la distancia dentro de cada segmento', () => {
+    const puntos = [
+      punto(LAT_BASE, -60),
+      punto(LAT_BASE + offsetLatKm(1), -60),
+      punto(LAT_BASE + offsetLatKm(100), -60), // corte antes de este punto
+      punto(LAT_BASE + offsetLatKm(101), -60),
+      punto(LAT_BASE + offsetLatKm(200), -60), // corte antes de este punto
+      punto(LAT_BASE + offsetLatKm(201), -60),
+    ]
+    // 1 km (seg. 1) + 1 km (seg. 2) + 1 km (seg. 3) = 3 km; los saltos de 99 y 99 km no cuentan
+    expect(kmDeTrack(puntos, [2, 4])).toBeCloseTo(3, 1)
+  })
+
+  test('un array de cortes vacío se comporta igual que no pasar el parámetro', () => {
+    const a = punto(LAT_BASE, -60)
+    const b = punto(LAT_BASE + offsetLatKm(1), -60)
+    expect(kmDeTrack([a, b], [])).toBe(kmDeTrack([a, b]))
+  })
+})
+
+describe('derivarCortes', () => {
+  test('sin huecos de tiempo no genera ningún corte', () => {
+    const puntos = [punto(LAT_BASE, -60, 0), punto(LAT_BASE, -60, 5_000), punto(LAT_BASE, -60, 10_000)]
+    expect(derivarCortes(puntos)).toEqual([])
+  })
+
+  test('un hueco por encima del umbral genera un corte en el índice del punto siguiente', () => {
+    const puntos = [
+      punto(LAT_BASE, -60, 0),
+      punto(LAT_BASE, -60, 5_000),
+      punto(LAT_BASE, -60, 5_000 + 31_000), // 31 s de hueco: por encima del umbral (30 s)
+    ]
+    expect(derivarCortes(puntos)).toEqual([2])
+  })
+
+  test('un hueco justo en el umbral (30 s) no corta; por encima sí', () => {
+    const base = [punto(LAT_BASE, -60, 0)]
+    expect(derivarCortes([...base, punto(LAT_BASE, -60, 30_000)])).toEqual([])
+    expect(derivarCortes([...base, punto(LAT_BASE, -60, 30_001)])).toEqual([1])
+  })
+
+  test('varios huecos generan varios cortes, uno por cada hueco', () => {
+    const puntos = [
+      punto(LAT_BASE, -60, 0),
+      punto(LAT_BASE, -60, 40_000),
+      punto(LAT_BASE, -60, 45_000),
+      punto(LAT_BASE, -60, 90_000),
+    ]
+    expect(derivarCortes(puntos)).toEqual([1, 3])
+  })
+
+  test('respeta un umbral personalizado', () => {
+    const puntos = [punto(LAT_BASE, -60, 0), punto(LAT_BASE, -60, 5_000)]
+    expect(derivarCortes(puntos, 1_000)).toEqual([1])
+    expect(derivarCortes(puntos, 10_000)).toEqual([])
+  })
+
+  test('puntos fuera de orden (t no creciente) no generan corte', () => {
+    const puntos = [punto(LAT_BASE, -60, 10_000), punto(LAT_BASE, -60, 0)]
+    expect(derivarCortes(puntos)).toEqual([])
+  })
+
+  test('track vacío o de un solo punto no genera cortes', () => {
+    expect(derivarCortes([])).toEqual([])
+    expect(derivarCortes([punto(LAT_BASE, -60, 0)])).toEqual([])
   })
 })
 

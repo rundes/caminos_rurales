@@ -96,6 +96,34 @@ describe('cerrarRecorrido', () => {
     expect(await listarCola()).toEqual([])
   })
 
+  test('una pausa real en el track no se acredita como km recorridos', async () => {
+    await guardarRecorrido(RECORRIDO)
+    // Cluster 1: 2 puntos, ~1,1 km entre ambos (0.01° de latitud), 5 s de por
+    // medio (bien por debajo del umbral: no corta).
+    await guardarPunto({ recorridoId: ID, lat: -36.85, lng: -57.88, t: T0, precision: 8 })
+    await guardarPunto({ recorridoId: ID, lat: -36.86, lng: -57.88, t: T0 + 5_000, precision: 8 })
+    // Hueco de 40 s (por encima de `UMBRAL_INTERRUPCION_MS`) y un salto grande
+    // de posición: una pausa real, no una demora de una lectura.
+    await guardarPunto({ recorridoId: ID, lat: -37.5, lng: -57.88, t: T0 + 5_000 + 40_000, precision: 8 })
+    // Cluster 2: otro punto a ~1,1 km del anterior, otra vez 5 s después.
+    await guardarPunto({
+      recorridoId: ID,
+      lat: -37.51,
+      lng: -57.88,
+      t: T0 + 5_000 + 40_000 + 5_000,
+      precision: 8,
+    })
+
+    const resultado = await cerrarRecorrido(ID, FIN)
+
+    expect(resultado.ok).toBe(true)
+    const guardado = await obtenerRecorrido(ID)
+    // Solo los ~2,2 km de los dos clusters (1,1 + 1,1); el salto de ~72 km
+    // entre -36.86 y -37.5 de latitud no se acredita.
+    expect(guardado?.km).toBeGreaterThan(2)
+    expect(guardado?.km).toBeLessThan(3)
+  })
+
   test('un recorrido que ya no está en el dispositivo devuelve el motivo', async () => {
     const resultado = await cerrarRecorrido(ID, FIN)
 

@@ -138,7 +138,12 @@ const coordenadaTrack = z.tuple([
 /**
  * Punto GPS crudo, opcional: lo manda el cliente además del `track`
  * simplificado para que el servidor pueda evaluar la plausibilidad
- * (velocidad entre muestras y precisión media).
+ * (velocidad entre muestras y precisión media) y derivar los cortes del
+ * track (huecos de tiempo entre puntos consecutivos, ver `derivarCortes` en
+ * `lib/track.ts`) sin confiar en lo que el cliente declare. La derivación de
+ * cortes solo se aplica cuando `puntos` tiene la misma longitud que `track`
+ * (así los arma siempre el cliente real, índice a índice); si no coinciden,
+ * el servidor sigue sin cortar (ver `finalizarRecorrido`).
  */
 const puntoGpsTrack = z.object({
   lat: z.number().min(-90, { message: 'Latitud fuera de rango' }).max(90, { message: 'Latitud fuera de rango' }),

@@ -1,5 +1,7 @@
 import { distanciaKm } from '@/lib/geo'
-import { filtrarPunto, type PuntoGps } from '@/lib/track'
+import { derivarCortes, filtrarPunto, kmDeTrack, UMBRAL_INTERRUPCION_MS, type PuntoGps } from '@/lib/track'
+
+export { UMBRAL_INTERRUPCION_MS }
 
 export type EstadoGrabacion = 'inactivo' | 'grabando' | 'pausado' | 'finalizado'
 
@@ -21,7 +23,13 @@ export type Grabador = {
    * segmento nuevo del track porque hubo una pausa de por medio. El mapa usa
    * esto para no dibujar una línea recta entre el punto de antes de pausar y
    * el de después de reanudar: puede haber metros o cuadras de diferencia y
-   * unirlos con una recta mostraría un camino que nunca se recorrió.
+   * unirlos con una recta mostraría un camino que nunca se recorrió. Se corta
+   * en cada pausado manual sin importar cuánto haya durado (ver `reanudar`),
+   * a diferencia de los kilómetros: esos se calculan aparte, derivando los
+   * cortes de los timestamps de los puntos (`lib/track.ts#derivarCortes`),
+   * igual que hace el servidor — así hay una sola definición de "corte" para
+   * kilómetros, cliente y servidor, y no depende de este campo (pensado para
+   * el dibujo del mapa, no para puntuar).
    */
   cortes: readonly number[]
 }
@@ -36,18 +44,6 @@ export const GRABADOR_INICIAL: Grabador = {
   cantidad: 0,
   cortes: [],
 }
-
-/**
- * Umbral de "sin señal" para tratar un hueco como una interrupción real de
- * la grabación (app en 2° plano, pantalla bloqueada, o zona sin GPS) y no
- * como una demora normal de una lectura. `useGrabadorGps.OPCIONES_GPS.timeout`
- * ya le da 20 s a cada lectura antes de que `watchPosition` reporte un error
- * de timeout (y siga reintentando); 30 s deja un margen de 10 s por encima de
- * eso para no marcar como interrupción una única lectura lenta pero real, y
- * es corto en relación a la duración típica de un recorrido para no dejar
- * pasar huecos grandes sin cortar.
- */
-export const UMBRAL_INTERRUPCION_MS = 30_000
 
 /** Arranca un recorrido nuevo. `ahora` en milisegundos epoch. */
 export function iniciar(recorridoId: string, ahora: number): Grabador {
@@ -72,8 +68,10 @@ export function retomar(
   puntos: readonly PuntoGps[],
   ahora: number = Date.now(),
 ): Grabador {
-  let km = 0
-  for (let i = 1; i < puntos.length; i += 1) km += distanciaKm(puntos[i - 1], puntos[i])
+  // Mismo cálculo que al cerrar el recorrido (`cerrarRecorrido`) y en el
+  // servidor: no bridgea los huecos de tiempo que hubo dentro de lo ya
+  // grabado (pausas o interrupciones previas a este relanzamiento).
+  const km = kmDeTrack(puntos, derivarCortes(puntos))
   const ultimo = puntos.length > 0 ? puntos[puntos.length - 1] : null
   const huboInterrupcion = ultimo !== null && ahora - ultimo.t > UMBRAL_INTERRUPCION_MS
   return {
@@ -98,7 +96,13 @@ export function agregarPunto(grabador: Grabador, punto: PuntoGps): Grabador {
   if (grabador.estado !== 'grabando') return grabador
   if (!filtrarPunto(grabador.ultimo, punto)) return grabador
 
-  const km = grabador.ultimo ? grabador.km + distanciaKm(grabador.ultimo, punto) : grabador.km
+  // Mismo umbral que `derivarCortes`/`cerrarRecorrido`/el servidor: si pasó
+  // más de `UMBRAL_INTERRUPCION_MS` desde el último punto aceptado (una
+  // pausa manual larga, o una interrupción que el watchdog todavía no
+  // reconoció), el contador en vivo tampoco bridgea ese hueco con una recta.
+  // `ultimo` se actualiza igual, para que el mapa siga mostrando la posición real.
+  const huboCorte = grabador.ultimo !== null && punto.t - grabador.ultimo.t > UMBRAL_INTERRUPCION_MS
+  const km = grabador.ultimo && !huboCorte ? grabador.km + distanciaKm(grabador.ultimo, punto) : grabador.km
   return { ...grabador, ultimo: punto, km, cantidad: grabador.cantidad + 1 }
 }
 

@@ -175,6 +175,76 @@ try {
   })
   ok(Boolean(insAjeno.error), 'RLS bloquea insert de recorrido con usuario_id ajeno', insAjeno.error?.message)
 
+  // 5b. km de un recorrido con una pausa grande entre dos clusters de puntos:
+  // `finalizarRecorrido` (Server Action, no accesible desde este script, ver
+  // encabezado) calcula `recorridos.km` sumando distancia dentro de cada
+  // segmento del track y nunca a través de un corte (`kmDeTrack`/
+  // `derivarCortes`, `lib/track.ts`; cubierto en detalle por
+  // `__tests__/track.test.ts` y `__tests__/recorrido-actions.test.ts`). Acá
+  // se verifica la mitad que sí es alcanzable desde este script: que la base
+  // guarda y devuelve fielmente el km segmentado (no el bridgeado) que ese
+  // cálculo produciría para un track con una pausa grande entre dos clusters.
+  const haversineKm = (a, b) => {
+    const R = 6371
+    const rad = (g) => (g * Math.PI) / 180
+    const dLat = rad(b[0] - a[0])
+    const dLng = rad(b[1] - a[1])
+    const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a[0])) * Math.cos(rad(b[0])) * Math.sin(dLng / 2) ** 2
+    return 2 * R * Math.asin(Math.sqrt(h))
+  }
+  // Cluster 1 (2 puntos, ~1,1 km) — salto de ~55 km (pausa real) — cluster 2 (2 puntos, ~1,1 km).
+  const clusterA = [
+    [-36.85, -57.88],
+    [-36.86, -57.88],
+  ]
+  const clusterB = [
+    [-37.35, -57.88],
+    [-37.36, -57.88],
+  ]
+  const trackConPausa = [...clusterA, ...clusterB]
+  const kmSegmentado = Number(
+    (
+      haversineKm(clusterA[0], clusterA[1]) + haversineKm(clusterB[0], clusterB[1])
+    ).toFixed(3),
+  )
+  const kmBridgeado = Number(
+    trackConPausa.slice(1).reduce((suma, p, i) => suma + haversineKm(trackConPausa[i], p), 0).toFixed(3),
+  )
+  ok(
+    kmBridgeado > kmSegmentado * 10,
+    'el track de control salta ~55 km entre clusters (bridgeado >> segmentado)',
+    `segmentado=${kmSegmentado} bridgeado=${kmBridgeado}`,
+  )
+
+  const recorridoPausaId = randomUUID()
+  const insRecorridoPausa = await maipu.c
+    .from('recorridos')
+    .insert({
+      id: recorridoPausaId,
+      usuario_id: uid,
+      municipio: 'maipu',
+      inicio,
+      fin,
+      km: kmSegmentado,
+      track: trackConPausa,
+      estado: 'finalizado',
+    })
+    .select('id')
+    .single()
+  ok(
+    !insRecorridoPausa.error && insRecorridoPausa.data?.id === recorridoPausaId,
+    'insert recorrido con pausa (km segmentado, no bridgeado)',
+    insRecorridoPausa.error?.message,
+  )
+  recorridoIds.push(recorridoPausaId)
+
+  const leidoPausa = await maipu.c.from('recorridos').select('km').eq('id', recorridoPausaId).single()
+  ok(
+    !leidoPausa.error && Number(leidoPausa.data?.km) === kmSegmentado,
+    'recorridos.km guarda el segmentado (suma de los dos clusters), no el salto entre ellos',
+    JSON.stringify(leidoPausa.data),
+  )
+
   // 6. cobertura_tramos: sin política de insert para el usuario; sí para la clave secreta.
   // cobertura_municipio agrega por localidad y respeta el municipio del usuario.
   const covUsuario = await maipu.c.from('cobertura_tramos').insert({ tramo_id: tramo?.id, recorrido_id: recorridoId, usuario_id: uid })

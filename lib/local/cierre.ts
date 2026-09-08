@@ -1,4 +1,4 @@
-import { kmDeTrack } from '@/lib/track'
+import { derivarCortes, kmDeTrack } from '@/lib/track'
 import { abrirDb } from './db'
 import type { RecorridoLocal } from './tipos'
 
@@ -35,12 +35,17 @@ export async function cerrarRecorrido(recorridoId: string, fin = Date.now()): Pr
   }
 
   const suficientes = puntos.length >= MIN_PUNTOS
+  // Deriva los cortes de los propios timestamps (igual que el servidor, ver
+  // `derivarCortes`) en vez de confiar en `Grabador.cortes`: ese campo corta
+  // en cada pausado manual sin importar la duración (pensado para el mapa),
+  // acá interesa solo el hueco real de tiempo sin grabar.
+  const cortes = suficientes ? derivarCortes(puntos) : []
   const recorrido: RecorridoLocal = {
     ...guardado,
     fin: new Date(fin).toISOString(),
     estado: suficientes ? 'finalizado' : 'descartado',
     puntosGps: puntos.length,
-    km: suficientes ? Number(kmDeTrack(puntos).toFixed(DECIMALES_KM)) : 0,
+    km: suficientes ? Number(kmDeTrack(puntos, cortes).toFixed(DECIMALES_KM)) : 0,
   }
   await recorridos.put(recorrido)
 

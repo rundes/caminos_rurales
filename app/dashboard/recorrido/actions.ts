@@ -23,7 +23,7 @@ import {
 } from '@/lib/recorrido-servidor'
 import { crearClienteAdmin } from '@/lib/supabase/admin'
 import { crearClienteServidor } from '@/lib/supabase/server'
-import { evaluarPlausibilidad, kmDeTrack } from '@/lib/track'
+import { derivarCortes, evaluarPlausibilidad, kmDeTrack } from '@/lib/track'
 import type { ResultadoAccion } from '@/lib/tipos'
 import { esquemaCuadros, esquemaRecorrido, primerError } from '@/lib/validaciones'
 
@@ -82,7 +82,19 @@ export async function finalizarRecorrido(payload: unknown): Promise<ResultadoRec
   if (!parseo.success) return { ok: false, error: primerError(parseo.error), definitivo: true }
   const datos = parseo.data
 
-  const kmCrudo = kmDeTrack(coordenadasDeTrack(datos.track))
+  // Antitrampa: los cortes del track no salen de lo que declare el cliente
+  // (podría ocultar una pausa mandando cortes de menos, o inventar una para
+  // recortar km de más) sino de los timestamps de `datos.puntos`, con el
+  // mismo umbral que usa el watchdog del grabador (`derivarCortes`). Solo se
+  // aplican cuando `puntos` tiene la misma cantidad de elementos que `track`:
+  // es como los arma siempre el cliente real (`armarPayload`, mismo array
+  // simplificado para ambos, así que quedan índice a índice alineados); si no
+  // coinciden no hay forma confiable de mapear un corte de `puntos` a un
+  // índice de `track`, así que se sigue sin cortar (mismo comportamiento que
+  // sin `puntos`, ver la nota de `esquemaRecorrido`).
+  const cortes =
+    datos.puntos && datos.puntos.length === datos.track.length ? derivarCortes(datos.puntos) : []
+  const kmCrudo = kmDeTrack(coordenadasDeTrack(datos.track), cortes)
   const plausibilidad = evaluarPlausibilidad({
     km: kmCrudo,
     inicio: new Date(datos.inicio),

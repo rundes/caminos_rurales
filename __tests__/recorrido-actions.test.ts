@@ -270,6 +270,66 @@ function muestra(lng: number, extra: Record<string, unknown> = {}): Record<strin
   }
 }
 
+// --- Track con una pausa real: dos clusters de puntos separados por un
+// salto de 50 km y una pausa de 30 min, lejos (lat 10) de los tramos de
+// prueba (que están cerca del ecuador) para que la cobertura no interfiera.
+// Dentro de cada cluster los puntos van cada 20 s (bien por debajo de
+// `UMBRAL_INTERRUPCION_MS`, 30 s) a 90 km/h — no cortan y no disparan la
+// antitrampa de velocidad. El salto entre clusters, en cambio, tiene 30 min
+// de por medio: a 100 km/h (bajo el límite de 160) es la única forma
+// plausible de cubrir esa distancia, así que sin cortar el recorrido entero
+// se rechazaría por implausible en vez de aceptarse con el km recortado.
+const KM_POR_GRADO = (Math.PI / 180) * 6371
+function offsetLatKm(km: number): number {
+  return km / KM_POR_GRADO
+}
+const LAT_LEJOS = 10
+const LNG_LEJOS = 50
+const T_PAUSA = 1_756_950_000_000
+const DURACION_TRACK_CON_PAUSA_MS = 1_950_000
+
+type PuntoPayload = { lat: number; lng: number; t: number; precision: number }
+
+/**
+ * Cluster 1: 6 puntos (0 a 2,5 km, hops de 0,5 km cada 20 s). Salto de 50 km
+ * con una pausa real de 30 min. Cluster 2: 3 puntos más (otros 1 km, mismo
+ * ritmo). Total real (segmentado): 3,5 km; bridgeado (sin cortar): 53,5 km.
+ */
+function trackConPausa(): { track: [number, number][]; puntos: PuntoPayload[] } {
+  const offsetsKmYms: [number, number][] = [
+    [0, 0],
+    [0.5, 20_000],
+    [1, 40_000],
+    [1.5, 60_000],
+    [2, 80_000],
+    [2.5, 100_000],
+    [52.5, 1_900_000],
+    [53, 1_920_000],
+    [53.5, 1_940_000],
+  ]
+  const track: [number, number][] = offsetsKmYms.map(([km]) => [LAT_LEJOS + offsetLatKm(km), LNG_LEJOS])
+  const puntos: PuntoPayload[] = offsetsKmYms.map(([km, ms]) => ({
+    lat: LAT_LEJOS + offsetLatKm(km),
+    lng: LNG_LEJOS,
+    t: T_PAUSA + ms,
+    precision: 8,
+  }))
+  return { track, puntos }
+}
+
+/** `payload()` con el track/puntos de `trackConPausa`, ventana horaria acorde. */
+function payloadConPausa(extra: Record<string, unknown> = {}): Record<string, unknown> {
+  const { track, puntos } = trackConPausa()
+  return payload({
+    inicio: new Date(T_PAUSA).toISOString(),
+    fin: new Date(T_PAUSA + DURACION_TRACK_CON_PAUSA_MS).toISOString(),
+    track,
+    puntos,
+    puntosGps: track.length,
+    ...extra,
+  })
+}
+
 function escrituraDe(tabla: string): Escritura | undefined {
   return escrituras.find((e) => e.tabla === tabla)
 }
@@ -900,6 +960,91 @@ describe('finalizarRecorrido', () => {
     expect(r.ok && r.data.kmPorCalidad.bueno).toBeCloseTo(0.222, 3)
     expect(escrituras).toEqual([])
     expect(mutaciones).toEqual([])
+  })
+})
+
+describe('finalizarRecorrido: los km no cruzan una pausa (0012)', () => {
+  test('un recorrido con una pausa real acredita solo la suma de los clusters, no el salto', async () => {
+    const r = await finalizarRecorrido(payloadConPausa())
+
+    expect(r.ok).toBe(true)
+    // 2,5 km (cluster 1) + 1 km (cluster 2): el salto de 50 km entre ellos,
+    // aunque el track lo atraviese, no se acredita.
+    expect(r.ok && r.data.km).toBeCloseTo(3.5, 0)
+    expect(r.ok && r.data.km).toBeLessThan(10)
+    // lo persistido en `recorridos.km` es el mismo valor segmentado que se devuelve.
+    expect(escrituraDe('recorridos')?.filas).toMatchObject({ km: r.ok ? r.data.km : undefined })
+  })
+
+  test('el servidor deriva el corte de los timestamps de `puntos`, no de nada que declare el cliente', async () => {
+    // El payload no tiene ningún campo `cortes`: no existe en el esquema. El
+    // único insumo es el tiempo real entre puntos consecutivos.
+    const r = await finalizarRecorrido(payloadConPausa())
+    expect(r.ok && r.data.km).toBeLessThan(10)
+  })
+
+  test('un salto espacial grande con timestamps comprimidos (simulando continuidad) se rechaza por implausible', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { track, puntos } = trackConPausa()
+    // Mismo salto de 50 km, pero declarado en 5 s en vez de 30 min: sin el
+    // hueco de tiempo no hay corte que derivar, así que el servidor lo trata
+    // como un solo segmento de 53,5 km — y esa velocidad instantánea (50 km
+    // en 5 s) es la que dispara el rechazo por implausibilidad, no un chequeo
+    // de cortes: el intento de esconder la pausa falsificando el tiempo
+    // tampoco sirve para inflar el km acreditado.
+    const puntosSinPausa: PuntoPayload[] = puntos.map((p, i) =>
+      i < 6 ? p : { ...p, t: puntos[5].t + 5_000 + (i - 6) * 20_000 },
+    )
+
+    const r = await finalizarRecorrido(
+      payloadConPausa({ puntos: puntosSinPausa, track }),
+    )
+
+    expect(r).toEqual({ ok: false, error: expect.stringMatching(/no pudo validarse/i), definitivo: true })
+    expect(escrituras).toEqual([])
+    spy.mockRestore()
+  })
+
+  test('si `puntos` no coincide en longitud con `track`, no deriva cortes (usa el track completo, como antes)', async () => {
+    const { track, puntos } = trackConPausa()
+
+    const r = await finalizarRecorrido(
+      payloadConPausa({ track, puntos: puntos.slice(0, -1) }),
+    )
+
+    // Sin forma confiable de alinear los índices, el servidor no cortea:
+    // mismo comportamiento (heredado) que si no mandara `puntos` en absoluto.
+    expect(r.ok).toBe(true)
+    expect(r.ok && r.data.km).toBeGreaterThan(50)
+  })
+
+  test('el km segmentado (no el bridgeado) es el que se usa para el premio por sensores', async () => {
+    const { puntos } = trackConPausa()
+    const muestrasCluster1 = puntos.slice(0, 6).map((p) => ({
+      t: p.t,
+      lat: p.lat,
+      lng: p.lng,
+      velocidadKmh: 40,
+      rumbo: null,
+      altitud: null,
+      rmsVertical: 0.5,
+      picoVertical: 2,
+      frenadas: 0,
+      laterales: 0,
+      muestras: 50,
+      calidad: 'bueno',
+    }))
+
+    const r = await finalizarRecorrido(payloadConPausa({ muestras: muestrasCluster1 }))
+
+    expect(r.ok).toBe(true)
+    // 2,5 km con sensores sobre 3,5 km reales (corregidos): supera el 50%
+    // mínimo (`FRACCION_SENSOR_MINIMA`). Sobre el km bridgeado (53,5) no lo
+    // hubiera alcanzado.
+    expect(r.ok && r.data.kmPorCalidad.bueno).toBeCloseTo(2.5, 0)
+    expect(escrituraDe('puntos_eventos')?.filas).toEqual(
+      expect.arrayContaining([expect.objectContaining({ motivo: 'km_sensor' })]),
+    )
   })
 })
 
