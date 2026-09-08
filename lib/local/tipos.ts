@@ -64,8 +64,9 @@ export type ObservacionLocal = {
 
 /**
  * Cuadro de la cámara georreferenciado. El `id` lo pone IndexedDB al guardarlo.
- * El `blob` viaja hasta que se sube; después queda solo la `ruta` y el blob se
- * borra para liberar espacio en el dispositivo.
+ * El blob vive aparte, en el store `blobs` (misma clave): la fila de `cuadros`
+ * solo sabe si todavía lo tiene (`tieneBlob`), así los índices y los conteos
+ * no cargan megabytes de imagen para leer un campo.
  */
 export type CuadroLocal = {
   id?: number
@@ -75,13 +76,28 @@ export type CuadroLocal = {
   lng: number
   rumbo: number | null
   velocidadKmh: number | null
-  blob?: Blob
   estadoSubida: EstadoSubida
   ruta?: string
+  tieneBlob: boolean
 }
 
 /** Cuadro ya guardado: tiene la clave que asignó IndexedDB. */
 export type CuadroGuardado = CuadroLocal & { id: number }
+
+/** Cuadro nuevo a guardar: todavía no tiene `id` ni `tieneBlob` (los pone `guardarCuadro`). */
+export type CuadroNuevo = {
+  recorridoId: string
+  t: number
+  lat: number
+  lng: number
+  rumbo: number | null
+  velocidadKmh: number | null
+  blob: Blob
+  estadoSubida: EstadoSubida
+}
+
+/** Cuadro guardado con su blob adjunto, cuando se lo cargó aparte (lectura acotada). */
+export type CuadroConBlob = CuadroGuardado & { blob?: Blob }
 
 /** Entrada de la cola de subida: un recorrido finalizado esperando sincronizarse. */
 export type ItemCola = {
@@ -128,7 +144,12 @@ export interface BaseLocal {
  */
 export interface BaseCuadros {
   listarRecorridos(usuarioId: string): Promise<RecorridoLocal[]>
-  listarCuadros(recorridoId: string, estado?: EstadoSubida): Promise<CuadroGuardado[]>
+  /**
+   * Cuadros pendientes de un recorrido, hasta `limite`, con su blob ya
+   * cargado. Lectura acotada por cursor: nunca trae más blobs que los que se
+   * van a subir en este lote.
+   */
+  listarCuadrosPendientes(recorridoId: string, limite: number): Promise<CuadroConBlob[]>
   contarCuadros(recorridoId: string, estado?: EstadoSubida): Promise<number>
   marcarCuadro(id: number, estado: EstadoSubida, ruta?: string): Promise<void>
   /** Libera los blobs de los cuadros ya subidos. Devuelve cuántos liberó. */

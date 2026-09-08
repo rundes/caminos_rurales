@@ -33,6 +33,8 @@ type Props = {
   error: string | null
   sensores: EstadoPanelSensores
   camara: EstadoPanelCamara
+  /** El cierre está en curso: deshabilita el botón para que un doble tap no lo dispare dos veces. */
+  finalizando: boolean
   onObservacion: () => void
   onPausar: () => void
   onReanudar: () => void
@@ -91,6 +93,7 @@ export function PanelGrabacion({
   error,
   sensores,
   camara,
+  finalizando,
   onObservacion,
   onPausar,
   onReanudar,
@@ -173,7 +176,7 @@ export function PanelGrabacion({
         <Boton variante="secundario" onClick={grabando ? onPausar : onReanudar}>
           {grabando ? 'Pausar' : 'Reanudar'}
         </Boton>
-        <Boton variante="secundario" onClick={onFinalizar}>
+        <Boton variante="secundario" cargando={finalizando} onClick={onFinalizar}>
           Finalizar
         </Boton>
       </div>

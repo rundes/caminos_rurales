@@ -91,7 +91,16 @@ const RECORRIDO_LOCAL = {
 }
 
 function sincronizacion(pendientes = 0, resumenes: Record<string, Resumen> = {}) {
-  return { pendientes, resumenes, sincronizar: vi.fn(async () => {}) }
+  return {
+    pendientes,
+    resumenes,
+    enError: [],
+    proximoIntento: null,
+    intentos: null,
+    sincronizar: vi.fn(async () => {}),
+    reintentar: vi.fn(async () => {}),
+    descartar: vi.fn(async () => {}),
+  }
 }
 
 /** `getUserMedia` falso: jsdom no trae `mediaDevices`. */
@@ -367,5 +376,28 @@ describe('RecorridoView', () => {
     await userEvent.click(await screen.findByRole('button', { name: /^finalizar$/i }))
 
     await waitFor(() => expect(screen.getByText(/tramo\(s\) nuevo\(s\)/i)).toBeInTheDocument())
+  })
+
+  test('un segundo tap en Finalizar mientras el primero sigue en curso no cierra el recorrido dos veces', async () => {
+    const pendiente: { resolver: ((valor: ResultadoCierre) => void) | null } = { resolver: null }
+    const finalizar = vi.fn(
+      () =>
+        new Promise<ResultadoCierre>((resolver) => {
+          pendiente.resolver = resolver
+        }),
+    )
+    vi.mocked(useGrabadorGps).mockReturnValue(control(GRABANDO, { finalizar }))
+
+    renderVista()
+
+    const boton = await screen.findByRole('button', { name: /^finalizar$/i })
+    await userEvent.click(boton)
+    await userEvent.click(boton)
+    await userEvent.click(boton)
+
+    expect(finalizar).toHaveBeenCalledTimes(1)
+
+    pendiente.resolver?.({ ok: true, recorrido: RECORRIDO_LOCAL })
+    await waitFor(() => expect(screen.getByText(/recorrido finalizado/i)).toBeInTheDocument())
   })
 })

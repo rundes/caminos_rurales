@@ -1,13 +1,15 @@
 'use client'
 
 import 'leaflet/dist/leaflet.css'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { CircleMarker, LayersControl, MapContainer, Popup, TileLayer, useMap } from 'react-leaflet'
+import { obtenerCuadrosMunicipio } from '@/app/dashboard/mapa/actions'
 import { CapaCuadros } from '@/components/CapaCuadros'
 import { CapaTramos, type ModoMapa, type TramoEstado } from '@/components/CapaTramos'
 import { CapasMunicipio } from '@/components/CapasMunicipio'
 import { TESELAS_IGN, type CapasMunicipio as CapasMunicipioTipo } from '@/lib/capas'
 import type { Cuadro } from '@/lib/cuadros'
+import { formatearFecha } from '@/lib/fechas'
 import { colorSeveridad } from '@/lib/severidad'
 import type { RugosidadTramo } from '@/lib/sensores/tipos'
 import { ETIQUETA_SEVERIDAD, ETIQUETA_TIPO_FALLA, type PuntoFalla } from '@/lib/tipos'
@@ -24,10 +26,20 @@ type Props = {
   limites?: LimitesBounds
   tramos?: TramoEstado[]
   rugosidad?: Record<string, RugosidadTramo>
-  cuadros?: Cuadro[]
-  urlsCuadros?: Record<string, string>
   cuadrosPorTramo?: Record<string, number>
 }
+
+/**
+ * Estado de la capa "Cuadros", cargada bajo demanda al activar el toggle vía
+ * la server action `obtenerCuadrosMunicipio` (ver `app/dashboard/mapa/actions.ts`):
+ * la mayoría de las visitas al mapa nunca activa esa capa, así que firmar
+ * cientos de URLs en cada carga de página sería trabajo desperdiciado.
+ */
+type EstadoCuadros =
+  | { estado: 'inactivo' }
+  | { estado: 'cargando' }
+  | { estado: 'error'; mensaje: string }
+  | { estado: 'listo'; cuadros: Cuadro[]; urls: Record<string, string> }
 
 const ZOOM_INICIAL = 10
 const URL_OSM = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'
@@ -112,17 +124,71 @@ export function MapaRelevamiento({
   limites,
   tramos,
   rugosidad,
-  cuadros,
-  urlsCuadros,
   cuadrosPorTramo,
 }: Props) {
   const [modo, setModo] = useState<ModoMapa>('cobertura')
   const [mostrarCuadros, setMostrarCuadros] = useState(false)
+  const [estadoCuadros, setEstadoCuadros] = useState<EstadoCuadros>({ estado: 'inactivo' })
+
+  const cargarCuadros = useCallback(() => {
+    setEstadoCuadros({ estado: 'cargando' })
+    obtenerCuadrosMunicipio()
+      .then((resultado) => {
+        if (resultado.ok) {
+          setEstadoCuadros({ estado: 'listo', cuadros: resultado.data.cuadros, urls: resultado.data.urls })
+        } else {
+          setEstadoCuadros({ estado: 'error', mensaje: resultado.error })
+        }
+      })
+      .catch((error: unknown) => {
+        console.error('[mapa]', error)
+        setEstadoCuadros({ estado: 'error', mensaje: 'No se pudieron cargar los cuadros.' })
+      })
+  }, [])
+
+  // Se pide al activar el toggle, no en un efecto: dispara el pedido desde el
+  // propio evento en vez de observar `mostrarCuadros` para no encadenar
+  // renders. Una sola vez por sesión del componente: apagar y prender de
+  // nuevo no repite el pedido mientras ya haya un resultado (listo o error).
+  const cambiarMostrarCuadros = useCallback(
+    (mostrar: boolean) => {
+      setMostrarCuadros(mostrar)
+      if (mostrar && estadoCuadros.estado === 'inactivo') cargarCuadros()
+    },
+    [estadoCuadros.estado, cargarCuadros],
+  )
 
   return (
     <div className="relative">
-      <ControlModo modo={modo} onCambiar={setModo} mostrarCuadros={mostrarCuadros} onCambiarCuadros={setMostrarCuadros} />
-      <MapContainer center={centro} zoom={ZOOM_INICIAL} className="h-[60dvh] w-full rounded-2xl" scrollWheelZoom>
+      <ControlModo
+        modo={modo}
+        onCambiar={setModo}
+        mostrarCuadros={mostrarCuadros}
+        onCambiarCuadros={cambiarMostrarCuadros}
+      />
+      {mostrarCuadros && estadoCuadros.estado === 'cargando' && (
+        <p className="absolute right-3 top-14 z-[1000] rounded-lg bg-white px-3 py-1 text-sm text-gray-600 shadow-sm">
+          Cargando cuadros…
+        </p>
+      )}
+      {mostrarCuadros && estadoCuadros.estado === 'error' && (
+        <p
+          role="alert"
+          className="absolute right-3 top-14 z-[1000] rounded-lg bg-red-50 px-3 py-1 text-sm text-red-800 shadow-sm"
+        >
+          {estadoCuadros.mensaje}{' '}
+          <button type="button" className="underline" onClick={cargarCuadros}>
+            Reintentar
+          </button>
+        </p>
+      )}
+      <MapContainer
+        center={centro}
+        zoom={ZOOM_INICIAL}
+        className="h-[60dvh] w-full rounded-2xl"
+        scrollWheelZoom
+        preferCanvas
+      >
         <LayersControl position="topright">
           <LayersControl.BaseLayer checked name="IGN">
             <TileLayer
@@ -140,7 +206,9 @@ export function MapaRelevamiento({
         {limites && <EnfoqueLimites limites={limites} />}
         {capas && <CapasMunicipio capas={capas} />}
         {tramos && <CapaTramos tramos={tramos} modo={modo} rugosidad={rugosidad} cuadrosPorTramo={cuadrosPorTramo} />}
-        {mostrarCuadros && cuadros && <CapaCuadros cuadros={cuadros} urls={urlsCuadros ?? {}} />}
+        {mostrarCuadros && estadoCuadros.estado === 'listo' && (
+          <CapaCuadros cuadros={estadoCuadros.cuadros} urls={estadoCuadros.urls} />
+        )}
         {puntos.map((p) => {
           const hrefVideo = p.url_evidencia_video ? urlVideo(p.url_evidencia_video, urlsEvidencia) : null
           const esSensor = p.origen === 'sensor'
@@ -161,7 +229,7 @@ export function MapaRelevamiento({
                 <br />
                 Severidad: {ETIQUETA_SEVERIDAD[p.severidad]}
                 <br />
-                {p.fecha ? new Date(p.fecha).toLocaleDateString('es-AR') : ''}
+                {p.fecha ? formatearFecha(p.fecha) : ''}
                 {esSensor && (
                   <>
                     <br />

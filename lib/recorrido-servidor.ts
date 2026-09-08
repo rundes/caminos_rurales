@@ -141,12 +141,40 @@ export type FilaObservacion = {
   url_evidencia_video: string | null
 }
 
-/** Fila de `fallas_deteccion` para una observación del recorrido. */
-export function filaObservacion(recorridoId: string, observacion: Observacion): FilaObservacion {
+/**
+ * Prefijo de ruta de almacenamiento que le corresponde a un usuario y
+ * recorrido. La ruta la elige el cliente al pedir la URL firmada (o la manda
+ * en la observación), así que el servidor la vuelve a verificar antes de
+ * guardarla: un payload modificado no puede apuntar a un objeto de otra
+ * persona o de otro recorrido.
+ */
+export function prefijoRuta(ctx: Contexto): string {
+  return `${ctx.usuarioId}/${ctx.recorridoId}/`
+}
+
+export const ERROR_RUTA_AJENA_OBSERVACION = 'Ruta de evidencia fuera del recorrido'
+
+/** Lanzada cuando la evidencia de una observación no cuelga del usuario y el recorrido. */
+export class ErrorRutaAjena extends Error {
+  constructor() {
+    super(ERROR_RUTA_AJENA_OBSERVACION)
+    this.name = 'ErrorRutaAjena'
+  }
+}
+
+/**
+ * Fila de `fallas_deteccion` para una observación del recorrido.
+ * Antitrampa: si trae evidencia, rechaza una ruta que no cuelga del usuario y
+ * el recorrido (ver `prefijoRuta`) en vez de guardar una referencia ajena.
+ */
+export function filaObservacion(ctx: Contexto, observacion: Observacion): FilaObservacion {
   const evidencia = observacion.evidencia
+  if (evidencia && !evidencia.ruta.startsWith(prefijoRuta(ctx))) {
+    throw new ErrorRutaAjena()
+  }
   return {
     id: observacion.id,
-    recorrido_id: recorridoId,
+    recorrido_id: ctx.recorridoId,
     tipo_falla: observacion.tipo_falla,
     severidad: observacion.severidad,
     latitud: observacion.latitud,
@@ -326,23 +354,52 @@ async function guardarObservaciones(
   datos: RecorridoPayload,
 ): Promise<void> {
   if (datos.observaciones.length === 0) return
-  const filas = datos.observaciones.map((o) => filaObservacion(ctx.recorridoId, o))
+  const filas = datos.observaciones.map((o) => filaObservacion(ctx, o))
   // Upsert por `id` (lo genera el cliente): un reprocesamiento no duplica filas.
   const { error } = await supabase.from('fallas_deteccion').upsert(filas, { onConflict: 'id' })
   if (error) throw new Error(error.message)
 }
 
-/** Puntos que el usuario ya sumó en las últimas 24 h (para el tope diario). */
-async function puntosDelDia(admin: ClienteAdmin, usuarioId: string): Promise<number> {
+/**
+ * Puntos que el usuario ya sumó en las últimas 24 h (para el tope diario).
+ * `excluirRecorridoId` deja afuera los eventos del propio recorrido que se
+ * está (re)procesando: como ahora se hace upsert en vez de borrar-y-reinsertar
+ * (ver `guardarPuntos`), sin esta exclusión un reprocesamiento contaría sus
+ * propios puntos ya otorgados como si fueran de otro recorrido.
+ */
+export async function puntosDelDia(
+  admin: ClienteAdmin,
+  usuarioId: string,
+  excluirRecorridoId?: string,
+): Promise<number> {
   const desde = new Date(Date.now() - VENTANA_REPETIDO_MS).toISOString()
-  const { data, error } = await admin
+  let consulta = admin
     .from('puntos_eventos')
     .select('puntos')
     .eq('usuario_id', usuarioId)
     .gte('created_at', desde)
-    .limit(MAX_FILAS_COBERTURA)
+  if (excluirRecorridoId) consulta = consulta.neq('recorrido_id', excluirRecorridoId)
+  const { data, error } = await consulta.limit(MAX_FILAS_COBERTURA)
   if (error) throw new Error(error.message)
   return (data ?? []).reduce((suma, e) => suma + Number(e.puntos), 0)
+}
+
+/**
+ * Borra del recorrido los eventos de puntos cuyo motivo ya no aplica: lo que
+ * sobrevive a un recálculo es exactamente `motivosVigentes`, el resto (de una
+ * pasada anterior) queda obsoleto.
+ */
+async function borrarMotivosSobrantes(
+  admin: ClienteAdmin,
+  recorridoId: string,
+  motivosVigentes: readonly string[],
+): Promise<void> {
+  let consulta = admin.from('puntos_eventos').delete().eq('recorrido_id', recorridoId)
+  if (motivosVigentes.length > 0) {
+    consulta = consulta.not('motivo', 'in', `(${motivosVigentes.join(',')})`)
+  }
+  const { error } = await consulta
+  if (error) throw new Error(error.message)
 }
 
 async function guardarPuntos(
@@ -352,13 +409,6 @@ async function guardarPuntos(
   observacionesConEvidencia: number,
   sensor: { kmSensor: number; kmRecorrido: number },
 ): Promise<number> {
-  // Idempotencia: un reprocesamiento no debe duplicar los eventos del recorrido.
-  const { error: errorBorrado } = await admin
-    .from('puntos_eventos')
-    .delete()
-    .eq('recorrido_id', ctx.recorridoId)
-  if (errorBorrado) throw new Error(errorBorrado.message)
-
   const eventos = calcularPuntos({
     kmNuevos: particion.kmNuevos,
     // Solo cuentan para puntos los repetidos que el usuario no cubrió en las últimas 24 h (anti-farmeo).
@@ -367,33 +417,47 @@ async function guardarPuntos(
     kmSensor: sensor.kmSensor,
     kmRecorrido: sensor.kmRecorrido,
   })
-  if (eventos.length === 0) return 0
 
-  // Antitrampa: tope diario de puntos por usuario. El excedente se trunca.
-  const previos = await puntosDelDia(admin, ctx.usuarioId)
-  const limitados = limitarPorTopeDiario(eventos, previos)
-  const total = totalPuntos(limitados)
-  if (total < totalPuntos(eventos)) {
-    console.warn('[recorrido] tope diario de puntos alcanzado', {
-      usuarioId: ctx.usuarioId,
-      recorridoId: ctx.recorridoId,
-      previos,
-      solicitados: totalPuntos(eventos),
-      otorgados: total,
-    })
+  let limitados: ReturnType<typeof limitarPorTopeDiario> = []
+  let total = 0
+  if (eventos.length > 0) {
+    // Antitrampa: tope diario de puntos por usuario. El excedente se trunca.
+    const previos = await puntosDelDia(admin, ctx.usuarioId, ctx.recorridoId)
+    limitados = limitarPorTopeDiario(eventos, previos)
+    total = totalPuntos(limitados)
+    if (total < totalPuntos(eventos)) {
+      console.warn('[recorrido] tope diario de puntos alcanzado', {
+        usuarioId: ctx.usuarioId,
+        recorridoId: ctx.recorridoId,
+        previos,
+        solicitados: totalPuntos(eventos),
+        otorgados: total,
+      })
+    }
   }
-  if (limitados.length === 0) return 0
 
-  const { error } = await admin.from('puntos_eventos').insert(
-    limitados.map((e) => ({
-      usuario_id: ctx.usuarioId,
-      municipio: ctx.municipio,
-      recorrido_id: ctx.recorridoId,
-      motivo: e.motivo,
-      puntos: e.puntos,
-    })),
+  // Idempotencia: un reprocesamiento pisa los motivos vigentes (upsert) y
+  // borra los que ya no aplican, en vez de borrar todo y reinsertar (evita la
+  // ventana sin filas de una carrera entre dos reprocesamientos concurrentes).
+  if (limitados.length > 0) {
+    const { error } = await admin.from('puntos_eventos').upsert(
+      limitados.map((e) => ({
+        usuario_id: ctx.usuarioId,
+        municipio: ctx.municipio,
+        recorrido_id: ctx.recorridoId,
+        motivo: e.motivo,
+        puntos: e.puntos,
+      })),
+      { onConflict: 'recorrido_id,motivo' },
+    )
+    if (error) throw new Error(error.message)
+  }
+  await borrarMotivosSobrantes(
+    admin,
+    ctx.recorridoId,
+    limitados.map((e) => e.motivo),
   )
-  if (error) throw new Error(error.message)
+
   return total
 }
 
@@ -405,12 +469,14 @@ async function totalesUsuario(
     .from('recorridos')
     .select('km')
     .eq('usuario_id', usuarioId)
+    .limit(MAX_FILAS_COBERTURA)
   if (errorRecorridos) throw new Error(errorRecorridos.message)
 
   const { data: logros, error: errorLogros } = await admin
     .from('logros')
     .select('codigo')
     .eq('usuario_id', usuarioId)
+    .limit(MAX_FILAS_COBERTURA)
   if (errorLogros) throw new Error(errorLogros.message)
 
   return {
@@ -576,11 +642,33 @@ export async function buscarRecorrido(
   }
 }
 
-/** Sella el recorrido como procesado. Es la última escritura del flujo. */
-export async function marcarProcesado(admin: ClienteAdmin, recorridoId: string): Promise<void> {
-  const { error } = await admin
+/**
+ * Reclama el recorrido para procesarlo, sellándolo *antes* de empezar (no
+ * después): el `update ... where procesado_at is null` solo afecta la fila si
+ * nadie la selló todavía, así que entre dos finalizaciones concurrentes del
+ * mismo recorrido gana una sola. Devuelve `false` si la carrera se perdió (la
+ * fila ya estaba sellada); el que pierde sigue por la rama idempotente
+ * (`resumenGuardado`) en vez de reprocesar.
+ */
+export async function reclamarProcesamiento(admin: ClienteAdmin, recorridoId: string): Promise<boolean> {
+  const { data, error } = await admin
     .from('recorridos')
     .update({ procesado_at: new Date().toISOString() })
     .eq('id', recorridoId)
+    .is('procesado_at', null)
+    .select('id')
   if (error) throw new Error(error.message)
+  return (data ?? []).length > 0
+}
+
+/**
+ * Revierte el sello de un recorrido cuyo procesamiento falló a mitad de
+ * camino, para que un reintento pueda volver a reclamarlo y reprocesarlo.
+ */
+export async function liberarProcesamiento(admin: ClienteAdmin, recorridoId: string): Promise<void> {
+  const { error } = await admin
+    .from('recorridos')
+    .update({ procesado_at: null })
+    .eq('id', recorridoId)
+  if (error) console.error('[recorrido] no se pudo liberar el sello de procesamiento', error.message)
 }

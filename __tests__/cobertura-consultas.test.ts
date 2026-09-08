@@ -4,19 +4,36 @@ import { describe, expect, test, vi } from 'vitest'
 import type { Database } from '@/lib/supabase/database.types'
 
 vi.mock('server-only', () => ({}))
+// `unstable_cache` no aporta nada en un test unitario (no hay runtime de
+// Next detrás): se lo reemplaza por un passthrough para poder ejercitar
+// `obtenerTramosConEstadoCacheado` en aislamiento.
+vi.mock('next/cache', () => ({
+  unstable_cache: (fn: (...args: unknown[]) => unknown) => fn,
+  revalidateTag: vi.fn(),
+}))
 
-const { obtenerCoberturaMunicipio, obtenerLogrosPropios, obtenerRanking, obtenerRugosidadTramos, obtenerTramosConEstado } =
-  await import('@/lib/cobertura-consultas')
+const adminFrom = vi.fn()
+vi.mock('@/lib/supabase/admin', () => ({ crearClienteAdmin: () => ({ from: adminFrom }) }))
+
+const {
+  obtenerCoberturaMunicipio,
+  obtenerLogrosPropios,
+  obtenerRanking,
+  obtenerRugosidadTramos,
+  obtenerTramosConEstado,
+  obtenerTramosConEstadoCacheado,
+} = await import('@/lib/cobertura-consultas')
 
 type Cliente = SupabaseClient<Database>
 type Resultado = { data: unknown; error: { message: string } | null }
 
-/** Consulta encadenable fake: select().eq().in() resuelven todas al mismo resultado configurado. */
+/** Consulta encadenable fake: select().eq().in().limit() resuelven todas al mismo resultado configurado. */
 function crearConsulta(resolver: () => Resultado) {
   const consulta = {
     select: () => consulta,
     eq: () => consulta,
     in: () => consulta,
+    limit: () => consulta,
     then: (onFulfilled: (v: Resultado) => unknown, onRejected?: (e: unknown) => unknown) =>
       Promise.resolve(resolver()).then(onFulfilled, onRejected),
   }
@@ -168,6 +185,52 @@ describe('obtenerRugosidadTramos', () => {
     const cliente = crearCliente({ rpc: { data: null, error: { message: 'boom' } } })
     expect(await obtenerRugosidadTramos(cliente, 'maipu')).toEqual({})
     expect(spy).toHaveBeenCalledWith('[rugosidad]', 'boom')
+    spy.mockRestore()
+  })
+})
+
+describe('obtenerTramosConEstadoCacheado', () => {
+  const TRAMOS_ADMIN = [
+    { id: 't1', nombre_codigo: 'A', localidad: 'Segurola', km: '2', geometria: [] },
+    { id: 't2', nombre_codigo: 'B', localidad: 'Segurola', km: 3, geometria: [] },
+  ]
+
+  function configurarAdmin(config: { tramos?: Resultado; cobertura?: Resultado }) {
+    adminFrom.mockImplementation((tabla: string) => {
+      if (tabla === 'tramos') return crearConsulta(() => config.tramos ?? { data: [], error: null })
+      if (tabla === 'cobertura_tramos') return crearConsulta(() => config.cobertura ?? { data: [], error: null })
+      throw new Error(`tabla no prevista: ${tabla}`)
+    })
+  }
+
+  test('usa el cliente admin (no el de sesión) y cruza tramos con cobertura igual que la versión sin cachear', async () => {
+    configurarAdmin({
+      tramos: { data: TRAMOS_ADMIN, error: null },
+      cobertura: { data: [{ tramo_id: 't1' }, { tramo_id: 't1' }, { tramo_id: 't2' }], error: null },
+    })
+
+    const resultado = await obtenerTramosConEstadoCacheado('maipu')
+
+    expect(resultado).toEqual([
+      { id: 't1', nombre_codigo: 'A', localidad: 'Segurola', km: 2, geometria: [], veces: 2 },
+      { id: 't2', nombre_codigo: 'B', localidad: 'Segurola', km: 3, geometria: [], veces: 1 },
+    ])
+    expect(adminFrom).toHaveBeenCalledWith('tramos')
+    expect(adminFrom).toHaveBeenCalledWith('cobertura_tramos')
+  })
+
+  test('sin tramos para el municipio, devuelve [] sin consultar cobertura', async () => {
+    configurarAdmin({ tramos: { data: [], error: null } })
+
+    expect(await obtenerTramosConEstadoCacheado('maipu')).toEqual([])
+  })
+
+  test('si falla la consulta admin de tramos, devuelve [] y loguea', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    configurarAdmin({ tramos: { data: null, error: { message: 'boom-admin' } } })
+
+    expect(await obtenerTramosConEstadoCacheado('maipu')).toEqual([])
+    expect(spy).toHaveBeenCalledWith('[cobertura-consultas]', 'boom-admin')
     spy.mockRestore()
   })
 })

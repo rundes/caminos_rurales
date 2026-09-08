@@ -90,6 +90,48 @@ describe('simplificar', () => {
     expect(resultado[0]).toEqual(inicio)
     expect(resultado[resultado.length - 1]).toEqual(fin)
   })
+
+  test('20 mil puntos casi colineales: no revienta la pila y responde rápido', () => {
+    // Pila explícita en vez de recursión: un track largo y casi recto (una
+    // ruta rural, el caso más común) no puede depender de la profundidad de
+    // la pila de llamadas de JS. El ruido lateral queda por debajo de la
+    // tolerancia (5 m < 10 m) salvo un pico ocasional cada 500 puntos (ruido
+    // real de GPS): así el algoritmo hace trabajo real (recorta la mayoría,
+    // conserva los picos) sin degenerar en el caso cuadrático de un zigzag
+    // parejo por encima de la tolerancia en cada punto.
+    const CANTIDAD = 20_000
+    const puntos: PuntoGps[] = Array.from({ length: CANTIDAD }, (_, i) => {
+      const lateralM = i % 500 === 250 ? 20 : (i % 2 === 0 ? 1 : -1) * 5
+      return punto(LAT_BASE + offsetLatKm(i * 0.001), -60 + offsetLngKm(lateralM / 1000, LAT_BASE), i)
+    })
+
+    const inicioMs = Date.now()
+    const resultado = simplificar(puntos, 10)
+    const duracionMs = Date.now() - inicioMs
+
+    expect(resultado[0]).toEqual(puntos[0])
+    expect(resultado[resultado.length - 1]).toEqual(puntos[CANTIDAD - 1])
+    expect(resultado.length).toBeLessThan(CANTIDAD)
+    expect(resultado.length).toBeGreaterThan(1)
+    expect(duracionMs).toBeLessThan(1000)
+  })
+
+  test('caso adversario (partición despareja en cada paso) no desborda la pila', () => {
+    // Zigzag con amplitud por encima de la tolerancia en cada punto: el punto
+    // más lejano de cada rango termina siempre pegado a un extremo, así que
+    // una implementación recursiva acumularía una llamada por punto (miles de
+    // cuadros de pila). Con la pila explícita esto es solo iteración.
+    const CANTIDAD = 5_000
+    const puntos: PuntoGps[] = Array.from({ length: CANTIDAD }, (_, i) => {
+      const lateralM = (i % 2 === 0 ? 1 : -1) * 15
+      return punto(LAT_BASE + offsetLatKm(i * 0.001), -60 + offsetLngKm(lateralM / 1000, LAT_BASE), i)
+    })
+
+    expect(() => simplificar(puntos, 10)).not.toThrow()
+    const resultado = simplificar(puntos, 10)
+    expect(resultado[0]).toEqual(puntos[0])
+    expect(resultado[resultado.length - 1]).toEqual(puntos[CANTIDAD - 1])
+  })
 })
 
 describe('kmDeTrack', () => {

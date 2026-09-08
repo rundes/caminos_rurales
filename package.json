@@ -1,7 +1,10 @@
 {
   "name": "caminos_rurales",
-  "version": "0.1.0",
+  "version": "0.6.0",
   "private": true,
+  "engines": {
+    "node": ">=20.9"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -10,7 +13,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "tipos": "node scripts/generar-tipos.mjs"
+    "tipos": "node scripts/generar-tipos.mjs",
+    "setup": "node scripts/setup-entorno.mjs",
+    "borrar-usuario": "node scripts/borrar-usuario.mjs"
   },
   "dependencies": {
     "@google-cloud/storage": "^8.0.1",

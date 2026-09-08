@@ -2,8 +2,8 @@ import { Suspense } from 'react'
 import { MapaCliente } from '@/components/MapaCliente'
 import { capasDe } from '@/lib/capas'
 import { limitesDe } from '@/lib/capas-servidor'
-import { obtenerRugosidadTramos, obtenerTramosConEstado } from '@/lib/cobertura-consultas'
-import { obtenerCuadros, obtenerCuadrosPorTramo } from '@/lib/cuadros-consultas'
+import { obtenerRugosidadTramos, obtenerTramosConEstadoCacheado } from '@/lib/cobertura-consultas'
+import { obtenerCuadrosPorTramoCacheado } from '@/lib/cuadros-consultas'
 import { aPuntos, filtrarPuntos, municipiosDe, type FilaFalla } from '@/lib/fallas'
 import { buscarPartido } from '@/lib/partidos'
 import { crearClienteServidor } from '@/lib/supabase/server'
@@ -13,8 +13,8 @@ type Props = { searchParams: Promise<{ tipo?: string; municipio?: string }> }
 
 const CENTRO_PROVINCIA: [number, number] = [-36.6, -60.0]
 const SEGUNDOS_URL_FIRMADA = 60 * 60
-const LIMITE_FALLAS = 2000
-const LOTE_FIRMA_CUADROS = 100
+const LIMITE_FALLAS = 1000
+const AVISO_LIMITE_FALLAS = `Mostrando las últimas ${LIMITE_FALLAS} observaciones.`
 
 export default async function MapaPage({ searchParams }: Props) {
   const filtros = await searchParams
@@ -29,14 +29,28 @@ export default async function MapaPage({ searchParams }: Props) {
   if (errorPerfil) console.error('[mapa]', errorPerfil.message)
   const municipioActual = perfil?.municipio_id ?? null
   const capas = capasDe(municipioActual)
+  const partidoFiltro = filtros.municipio ? buscarPartido(filtros.municipio) : undefined
+  const partidoActual = !filtros.municipio && capas ? buscarPartido(municipioActual ?? '') : undefined
 
-  const { data, error } = await supabase
-    .from('fallas_deteccion')
-    .select(
-      'id, tipo_falla, severidad, latitud, longitud, url_evidencia_imagen, url_evidencia_video, created_at, origen, magnitud, recorridos(inicio, municipio)',
-    )
-    .order('created_at', { ascending: false })
-    .limit(LIMITE_FALLAS)
+  // Cinco consultas independientes entre sí (ninguna depende del resultado de
+  // otra): fallas, tramos, rugosidad, cuadros por tramo y límites del
+  // municipio. Encadenarlas en `await` secuenciales sumaría sus latencias en
+  // cascada por nada; acá corren en paralelo. Tramos y cuadros-por-tramo usan
+  // la versión cacheada por municipio (ver `lib/cache.ts`); rugosidad sigue
+  // sin cachear porque es una RPC con el cliente del usuario.
+  const [{ data, error }, tramos, rugosidad, cuadrosPorTramo, limites] = await Promise.all([
+    supabase
+      .from('fallas_deteccion')
+      .select(
+        'id, tipo_falla, severidad, latitud, longitud, url_evidencia_imagen, url_evidencia_video, created_at, origen, magnitud, recorridos(inicio, municipio)',
+      )
+      .order('created_at', { ascending: false })
+      .limit(LIMITE_FALLAS),
+    municipioActual ? obtenerTramosConEstadoCacheado(municipioActual) : Promise.resolve([]),
+    municipioActual ? obtenerRugosidadTramos(supabase, municipioActual) : Promise.resolve({}),
+    municipioActual ? obtenerCuadrosPorTramoCacheado(municipioActual) : Promise.resolve({}),
+    partidoActual ? limitesDe(municipioActual) : Promise.resolve(null),
+  ])
 
   if (error) {
     console.error('[mapa]', error.message)
@@ -46,6 +60,7 @@ export default async function MapaPage({ searchParams }: Props) {
   const todos = aPuntos((data ?? []) as FilaFalla[])
   const puntos = filtrarPuntos(todos, filtros)
   const municipios = municipiosDe(todos)
+  const alcanzoLimiteFallas = todos.length >= LIMITE_FALLAS
 
   const rutasImagen = puntos.map((p) => p.url_evidencia_imagen).filter((r): r is string => Boolean(r))
   const rutasVideo = puntos
@@ -60,32 +75,6 @@ export default async function MapaPage({ searchParams }: Props) {
     }
   }
 
-  const tramos = municipioActual ? await obtenerTramosConEstado(supabase, municipioActual) : []
-  const rugosidad = municipioActual ? await obtenerRugosidadTramos(supabase, municipioActual) : {}
-  const cuadros = municipioActual ? await obtenerCuadros(supabase, municipioActual) : []
-  const cuadrosPorTramo = municipioActual ? await obtenerCuadrosPorTramo(supabase, municipioActual) : {}
-
-  const rutasCuadros = [...new Set(cuadros.map((c) => c.ruta))]
-  const urlsCuadros: Record<string, string> = {}
-  for (const ruta of rutasCuadros) {
-    if (ruta.startsWith('https://')) urlsCuadros[ruta] = ruta
-  }
-  const rutasCuadrosASignar = rutasCuadros.filter((r) => !r.startsWith('https://'))
-  const lotesCuadros: string[][] = []
-  for (let i = 0; i < rutasCuadrosASignar.length; i += LOTE_FIRMA_CUADROS) {
-    lotesCuadros.push(rutasCuadrosASignar.slice(i, i + LOTE_FIRMA_CUADROS))
-  }
-  const resultadosCuadros = await Promise.all(
-    lotesCuadros.map((lote) => supabase.storage.from('evidencia-vial').createSignedUrls(lote, SEGUNDOS_URL_FIRMADA)),
-  )
-  for (const { data: firmadasCuadros } of resultadosCuadros) {
-    for (const f of firmadasCuadros ?? []) {
-      if (f.path && f.signedUrl) urlsCuadros[f.path] = f.signedUrl
-    }
-  }
-
-  const partidoFiltro = filtros.municipio ? buscarPartido(filtros.municipio) : undefined
-  const partidoActual = !filtros.municipio && capas ? buscarPartido(municipioActual ?? '') : undefined
   const centro: [number, number] = partidoFiltro
     ? [partidoFiltro.lat, partidoFiltro.lng]
     : partidoActual
@@ -93,8 +82,6 @@ export default async function MapaPage({ searchParams }: Props) {
       : puntos[0]
         ? [puntos[0].latitud, puntos[0].longitud]
         : CENTRO_PROVINCIA
-
-  const limites = partidoActual ? await limitesDe(municipioActual) : null
 
   return (
     <div className="flex flex-col gap-4">
@@ -105,6 +92,7 @@ export default async function MapaPage({ searchParams }: Props) {
       <p className="text-sm text-gray-600">
         {puntos.length} observación(es). Observaciones: rojo alta · amarillo media · verde baja.
       </p>
+      {alcanzoLimiteFallas && <p className="text-sm text-amber-700">{AVISO_LIMITE_FALLAS}</p>}
       <p className="text-sm text-gray-600">Tramos: verde cubierto · gris pendiente.</p>
       <p className="text-sm text-gray-600">
         Estado estimado: verde bueno · amarillo regular · naranja malo · rojo intransitable · gris sin datos.
@@ -118,8 +106,6 @@ export default async function MapaPage({ searchParams }: Props) {
         limites={limites ?? undefined}
         tramos={tramos}
         rugosidad={rugosidad}
-        cuadros={cuadros}
-        urlsCuadros={urlsCuadros}
         cuadrosPorTramo={cuadrosPorTramo}
       />
     </div>

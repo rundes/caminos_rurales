@@ -62,28 +62,53 @@ describe('signIn', () => {
 })
 
 describe('signUpAction', () => {
-  test('envía nombre y municipio en metadata', async () => {
+  test('envía nombre y código de invitación en metadata, sin municipio_id', async () => {
     signUp.mockResolvedValue({ error: null, data: { session: {} } })
     await expect(
       signUpAction(
         undefined,
-        formulario({ email: 'a@b.com', password: '12345678', nombre: 'Ana', municipio_id: 'carlos-tejedor' }),
+        formulario({ email: 'a@b.com', password: '12345678', nombre: 'Ana', codigo_invitacion: 'MAIPU-2027' }),
       ),
     ).rejects.toThrow('NEXT_REDIRECT:/dashboard')
     expect(signUp).toHaveBeenCalledWith({
       email: 'a@b.com',
       password: '12345678',
-      options: { data: { nombre: 'Ana', municipio_id: 'carlos-tejedor' } },
+      options: { data: { nombre: 'Ana', codigo_invitacion: 'MAIPU-2027' } },
     })
+    const metadata = signUp.mock.calls[0][0].options.data
+    expect(metadata).not.toHaveProperty('municipio_id')
     expect(redirect).toHaveBeenCalledWith('/dashboard')
   })
 
-  test('rechaza partido inválido', async () => {
+  test('rechaza código de invitación demasiado corto', async () => {
     const r = await signUpAction(
       undefined,
-      formulario({ email: 'a@b.com', password: '12345678', nombre: 'Ana', municipio_id: 'narnia' }),
+      formulario({ email: 'a@b.com', password: '12345678', nombre: 'Ana', codigo_invitacion: 'ab' }),
     )
-    expect(r).toEqual({ ok: false, error: expect.stringMatching(/partido/i) })
+    expect(r).toEqual({ ok: false, error: expect.stringMatching(/código de invitación/i) })
+    expect(signUp).not.toHaveBeenCalled()
+  })
+
+  test('rechaza código de invitación demasiado largo', async () => {
+    const r = await signUpAction(
+      undefined,
+      formulario({
+        email: 'a@b.com',
+        password: '12345678',
+        nombre: 'Ana',
+        codigo_invitacion: 'x'.repeat(41),
+      }),
+    )
+    expect(r).toEqual({ ok: false, error: expect.stringMatching(/código de invitación/i) })
+    expect(signUp).not.toHaveBeenCalled()
+  })
+
+  test('rechaza registro sin código de invitación', async () => {
+    const r = await signUpAction(
+      undefined,
+      formulario({ email: 'a@b.com', password: '12345678', nombre: 'Ana' }),
+    )
+    expect(r?.ok).toBe(false)
     expect(signUp).not.toHaveBeenCalled()
   })
 
@@ -91,7 +116,7 @@ describe('signUpAction', () => {
     signUp.mockResolvedValue({ error: null, data: { session: null } })
     const r = await signUpAction(
       undefined,
-      formulario({ email: 'a@b.com', password: '12345678', nombre: 'Ana', municipio_id: 'carlos-tejedor' }),
+      formulario({ email: 'a@b.com', password: '12345678', nombre: 'Ana', codigo_invitacion: 'MAIPU-2027' }),
     )
     expect(r).toEqual({ ok: true, data: undefined })
     expect(redirect).not.toHaveBeenCalled()

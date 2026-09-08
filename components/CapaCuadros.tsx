@@ -1,10 +1,10 @@
 'use client'
 
 import type { CircleMarker as CircleMarkerLeaflet } from 'leaflet'
-import { useCallback, useMemo, useRef } from 'react'
+import { memo, useCallback, useMemo, useRef, useState } from 'react'
 import { CircleMarker, Popup, Tooltip } from 'react-leaflet'
 import { calcularVecinos, type Cuadro } from '@/lib/cuadros'
-import { ZONA_HORARIA } from '@/lib/fechas'
+import { formatearFechaHora, formatearHora } from '@/lib/fechas'
 
 type Props = {
   cuadros: Cuadro[]
@@ -23,18 +23,21 @@ function urlCuadro(ruta: string, urls: Record<string, string>): string | null {
   return urls[ruta] ?? null
 }
 
-function formatearHora(iso: string): string {
-  return new Date(iso).toLocaleTimeString('es-AR', { timeZone: ZONA_HORARIA, hour: '2-digit', minute: '2-digit' })
-}
-
-function formatearFechaHora(iso: string): string {
-  return new Date(iso).toLocaleString('es-AR', { timeZone: ZONA_HORARIA })
-}
-
-/** Capa "Cuadros" del mapa: marcadores de fotos de la cámara, con popup navegable por tramo. */
-export function CapaCuadros({ cuadros, urls }: Props) {
+/**
+ * Capa "Cuadros" del mapa: marcadores de fotos de la cámara, con popup
+ * navegable por tramo.
+ *
+ * El contenido pesado del popup (la miniatura) solo se monta para el
+ * marcador seleccionado: con cientos de cuadros, renderizar una `<img>` por
+ * cada uno dispararía todas las descargas a la vez apenas se activa la capa.
+ * `seleccionado` se actualiza con el evento `popupopen` de Leaflet, que se
+ * dispara tanto al tocar un marcador como al abrir su popup vía
+ * `openPopup()` (los botones Anterior/Siguiente).
+ */
+export const CapaCuadros = memo(function CapaCuadros({ cuadros, urls }: Props) {
   const marcadores = useRef<Map<string, CircleMarkerLeaflet>>(new Map())
   const vecinosPorId = useMemo(() => calcularVecinos(cuadros), [cuadros])
+  const [seleccionado, setSeleccionado] = useState<string | null>(null)
 
   const irA = useCallback((id: string | null | undefined) => {
     if (!id) return
@@ -45,7 +48,8 @@ export function CapaCuadros({ cuadros, urls }: Props) {
     <>
       {cuadros.map((c) => {
         const { anterior, siguiente } = vecinosPorId.get(c.id) ?? { anterior: null, siguiente: null }
-        const src = urlCuadro(c.ruta, urls)
+        const activo = seleccionado === c.id
+        const src = activo ? urlCuadro(c.ruta, urls) : null
 
         return (
           <CircleMarker
@@ -57,31 +61,39 @@ export function CapaCuadros({ cuadros, urls }: Props) {
             center={[c.lat, c.lng]}
             radius={RADIO}
             pathOptions={{ color: COLOR, fillColor: COLOR_RELLENO, fillOpacity: OPACIDAD_RELLENO }}
+            eventHandlers={{ popupopen: () => setSeleccionado(c.id) }}
           >
             <Tooltip>📷 {formatearHora(c.t)}</Tooltip>
             <Popup>
-              {src && <img src={src} alt="Cuadro capturado" width={ANCHO_IMAGEN} loading="lazy" />}
-              <br />
-              {formatearFechaHora(c.t)}
-              <br />
-              {c.velocidadKmh !== null && (
+              {activo ? (
                 <>
-                  Velocidad: {c.velocidadKmh.toFixed(0)} km/h
+                  {/* eslint-disable-next-line @next/next/no-img-element -- miniatura firmada de Storage/GCS, no un asset local optimizable por next/image */}
+                  {src && <img src={src} alt="Cuadro capturado" width={ANCHO_IMAGEN} loading="lazy" />}
                   <br />
+                  {formatearFechaHora(c.t)}
+                  <br />
+                  {c.velocidadKmh !== null && (
+                    <>
+                      Velocidad: {c.velocidadKmh.toFixed(0)} km/h
+                      <br />
+                    </>
+                  )}
+                  Tramo: {c.tramo_id ?? 'sin tramo'}
+                  <br />
+                  <button type="button" disabled={!anterior} onClick={() => irA(anterior?.id)}>
+                    Anterior
+                  </button>{' '}
+                  <button type="button" disabled={!siguiente} onClick={() => irA(siguiente?.id)}>
+                    Siguiente
+                  </button>
                 </>
+              ) : (
+                <span>Cargando…</span>
               )}
-              Tramo: {c.tramo_id ?? 'sin tramo'}
-              <br />
-              <button type="button" disabled={!anterior} onClick={() => irA(anterior?.id)}>
-                Anterior
-              </button>{' '}
-              <button type="button" disabled={!siguiente} onClick={() => irA(siguiente?.id)}>
-                Siguiente
-              </button>
             </Popup>
           </CircleMarker>
         )
       })}
     </>
   )
-}
+})

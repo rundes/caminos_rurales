@@ -3,15 +3,18 @@
 import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 import { obtenerProveedor } from '@/lib/almacenamiento'
+import { revalidarMunicipio } from '@/lib/cache'
 import type { DestinoSubida } from '@/lib/almacenamiento/tipos'
 import { TIPOS_PERMITIDOS, rutaEvidencia } from '@/lib/archivos'
 import { ErrorPlausibilidadCuadros, guardarCuadros, recalcularPuntosCuadros } from '@/lib/cuadros-servidor'
+import { consumirCupo, CUPO_RECORRIDOS_DIA, CUPO_SUBIDAS_DIA } from '@/lib/cupos'
 import {
   ERROR_SESION,
   buscarRecorrido,
   coordenadasDeTrack,
-  marcarProcesado,
+  liberarProcesamiento,
   procesarRecorrido,
+  reclamarProcesamiento,
   resumenGuardado,
   sesionYMunicipio,
   tramosDeMunicipio,
@@ -38,14 +41,19 @@ export type ResultadoRecorrido =
 const ERROR_GENERICO = 'No se pudo guardar el recorrido. Intentá de nuevo.'
 const ERROR_AJENO = 'Ese recorrido ya fue registrado por otra persona.'
 const ERROR_IMPLAUSIBLE = 'El recorrido no pudo validarse. Verificá el GPS y volvé a intentar.'
+const ERROR_CUPO_RECORRIDOS = 'Alcanzaste el máximo de recorridos por día. Volvé a intentar mañana.'
 
 /** Código Postgres de violación de unicidad (`unique_violation`). */
 const CODIGO_DUPLICADO = '23505'
 
-function revalidarDashboard(): void {
+function revalidarDashboard(municipio: string): void {
   revalidatePath('/dashboard')
   revalidatePath('/dashboard/mapa')
   revalidatePath('/dashboard/ranking')
+  // Los agregados por municipio del mapa (tramos, cuadros por tramo) se
+  // cachean aparte con `unstable_cache` (ver `lib/cache.ts`): `revalidatePath`
+  // no los alcanza, así que un recorrido nuevo tiene que invalidar su tag.
+  revalidarMunicipio(municipio)
 }
 
 /**
@@ -56,10 +64,18 @@ function revalidarDashboard(): void {
  * track (velocidad media, velocidad entre muestras, precisión y km totales).
  *
  * Idempotente por `id` (lo genera el cliente). El recorrido se marca con
- * `procesado_at` recién cuando terminó todo el post-procesado, así que:
+ * `procesado_at` antes de arrancar el post-procesado, no después: la carrera
+ * la resuelve `reclamarProcesamiento` (update atómico `where procesado_at is
+ * null`), así que entre dos envíos concurrentes del mismo recorrido gana uno
+ * solo. Concretamente:
  * - si ya existe y está procesado, devuelve el resumen recalculado sin escribir;
- * - si existe pero quedó a medias (`procesado_at` null, por un fallo previo o
- *   por una carrera entre dos envíos), se reprocesa; cada paso es idempotente.
+ * - si existe pero no está procesado, se intenta reclamar: si se pierde la
+ *   carrera (ya lo reclamó otro envío) se devuelve el resumen recalculado; si
+ *   se gana, se procesa y, si algo falla, se libera el sello para poder
+ *   reintentar.
+ *
+ * Antitrampa: un recorrido nuevo (no una reentrega) consume el cupo diario de
+ * recorridos del usuario; sin cupo, el rechazo es definitivo.
  */
 export async function finalizarRecorrido(payload: unknown): Promise<ResultadoRecorrido> {
   const parseo = esquemaRecorrido.safeParse(payload)
@@ -94,6 +110,11 @@ export async function finalizarRecorrido(payload: unknown): Promise<ResultadoRec
     }
 
     if (!existente) {
+      // Antitrampa: tope diario de recorridos nuevos. Una reentrega del mismo
+      // recorrido (existente ya insertado) no consume cupo de nuevo.
+      const cupoOk = await consumirCupo(supabase, 'recorridos', CUPO_RECORRIDOS_DIA)
+      if (!cupoOk) return { ok: false, error: ERROR_CUPO_RECORRIDOS, definitivo: true }
+
       const { error: errorInsert } = await supabase.from('recorridos').insert({
         id: datos.id,
         usuario_id: ctx.usuarioId,
@@ -122,10 +143,23 @@ export async function finalizarRecorrido(payload: unknown): Promise<ResultadoRec
       return { ok: true, data: await resumenGuardado(supabase, admin, ctx, kmGuardado) }
     }
 
-    const resumen = await procesarRecorrido(supabase, admin, ctx, datos, kmGuardado)
-    await marcarProcesado(admin, ctx.recorridoId)
-    revalidarDashboard()
-    return { ok: true, data: resumen }
+    // Sella el recorrido *antes* de procesarlo: si otro envío concurrente ya lo
+    // reclamó, no hay 0 filas que perder tiempo reprocesando.
+    const reclamado = await reclamarProcesamiento(admin, ctx.recorridoId)
+    if (!reclamado) {
+      return { ok: true, data: await resumenGuardado(supabase, admin, ctx, kmGuardado) }
+    }
+
+    try {
+      const resumen = await procesarRecorrido(supabase, admin, ctx, datos, kmGuardado)
+      revalidarDashboard(ctx.municipio)
+      return { ok: true, data: resumen }
+    } catch (error) {
+      // El procesamiento quedó a medias: libera el sello para que un
+      // reintento pueda reclamarlo y reprocesarlo desde cero.
+      await liberarProcesamiento(admin, ctx.recorridoId)
+      throw error
+    }
   } catch (error) {
     console.error('[recorrido]', error)
     return { ok: false, error: ERROR_GENERICO }
@@ -198,23 +232,40 @@ export async function registrarCuadros(entrada: unknown): Promise<ResultadoCuadr
   }
 }
 
+/**
+ * El `observacionId` termina en la ruta de almacenamiento (ver `rutaEvidencia`):
+ * un formato laxo dejaría que un payload modificado meta `/` o `..` y escriba
+ * fuera del prefijo `{uid}/{recorridoId}/` que las políticas verifican.
+ * `rutaEvidencia` además sanitiza el valor, en capas (defensa en profundidad).
+ */
+const REGEX_OBSERVACION_ID = /^[A-Za-z0-9-]{1,80}$/
+
 const esquemaSubida = z.object({
   recorridoId: z.uuid({ message: 'Recorrido sin identificador válido' }),
   nombre: z.string().trim().min(1).max(200, { message: 'Nombre de archivo inválido' }),
   contentType: z.enum(TIPOS_PERMITIDOS, { message: 'Tipo de archivo no permitido' }),
+  observacionId: z
+    .string()
+    .regex(REGEX_OBSERVACION_ID, { message: 'Identificador de observación inválido' })
+    .optional(),
 })
+
+const ERROR_CUPO_SUBIDAS = 'Alcanzaste el máximo de subidas por día. Volvé a intentar mañana.'
 
 /**
  * Devuelve una URL firmada para subir una evidencia del recorrido con un
  * `PUT` directo desde el navegador. El proveedor sale de `ALMACENAMIENTO`.
+ *
+ * Antitrampa: consume el cupo diario de subidas del usuario; sin cupo, el
+ * rechazo es definitivo (no tiene sentido reintentar hasta el día siguiente).
  */
 export async function prepararSubida(
   recorridoId: string,
   nombre: string,
   contentType: string,
   observacionId?: string,
-): Promise<ResultadoAccion<DestinoSubida>> {
-  const parseo = esquemaSubida.safeParse({ recorridoId, nombre, contentType })
+): Promise<ResultadoAccion<DestinoSubida> | { ok: false; error: string; definitivo: true }> {
+  const parseo = esquemaSubida.safeParse({ recorridoId, nombre, contentType, observacionId })
   if (!parseo.success) return { ok: false, error: primerError(parseo.error) }
 
   const supabase = await crearClienteServidor()
@@ -223,8 +274,11 @@ export async function prepararSubida(
   } = await supabase.auth.getUser()
   if (!user) return { ok: false, error: ERROR_SESION }
 
+  const cupoOk = await consumirCupo(supabase, 'subidas', CUPO_SUBIDAS_DIA)
+  if (!cupoOk) return { ok: false, error: ERROR_CUPO_SUBIDAS, definitivo: true }
+
   try {
-    const ruta = rutaEvidencia(user.id, parseo.data.recorridoId, parseo.data.nombre, observacionId)
+    const ruta = rutaEvidencia(user.id, parseo.data.recorridoId, parseo.data.nombre, parseo.data.observacionId)
     const destino = await obtenerProveedor().prepararSubida(ruta, parseo.data.contentType)
     return { ok: true, data: destino }
   } catch (error) {

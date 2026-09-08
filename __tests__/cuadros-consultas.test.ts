@@ -4,8 +4,20 @@ import { describe, expect, test, vi } from 'vitest'
 import type { Database } from '@/lib/supabase/database.types'
 
 vi.mock('server-only', () => ({}))
+// `unstable_cache` no aporta nada en un test unitario (no hay runtime de
+// Next detrás): se lo reemplaza por un passthrough para poder ejercitar
+// `obtenerCuadrosPorTramoCacheado` en aislamiento.
+vi.mock('next/cache', () => ({
+  unstable_cache: (fn: (...args: unknown[]) => unknown) => fn,
+  revalidateTag: vi.fn(),
+}))
 
-const { obtenerCuadros, obtenerCuadrosPorTramo } = await import('@/lib/cuadros-consultas')
+const adminFrom = vi.fn()
+vi.mock('@/lib/supabase/admin', () => ({ crearClienteAdmin: () => ({ from: adminFrom }) }))
+
+const { obtenerCuadros, obtenerCuadrosPorTramo, obtenerCuadrosPorTramoCacheado } = await import(
+  '@/lib/cuadros-consultas'
+)
 
 type Cliente = SupabaseClient<Database>
 type Resultado = { data: unknown; error: { message: string } | null }
@@ -180,5 +192,63 @@ describe('obtenerCuadrosPorTramo', () => {
     await obtenerCuadrosPorTramo(cliente, 'maipu')
 
     expect(rpc).toHaveBeenCalledWith('cuadros_por_tramo', { p_municipio: 'maipu' })
+  })
+})
+
+describe('obtenerCuadrosPorTramoCacheado', () => {
+  function crearConsultaAdmin(resolver: () => Resultado, llamadas: Llamadas) {
+    const consulta = {
+      select: (...args: unknown[]) => {
+        llamadas.select.push(args)
+        return consulta
+      },
+      eq: (...args: unknown[]) => {
+        llamadas.eq.push(args)
+        return consulta
+      },
+      limit: (...args: unknown[]) => {
+        llamadas.limit.push(args)
+        return consulta
+      },
+      then: (onFulfilled: (v: Resultado) => unknown, onRejected?: (e: unknown) => unknown) =>
+        Promise.resolve(resolver()).then(onFulfilled, onRejected),
+    }
+    return consulta
+  }
+
+  function configurarAdmin(cuadros?: Resultado) {
+    const llamadas = crearLlamadas()
+    adminFrom.mockImplementation((tabla: string) => {
+      if (tabla === 'cuadros') return crearConsultaAdmin(() => cuadros ?? { data: [], error: null }, llamadas)
+      throw new Error(`tabla no prevista: ${tabla}`)
+    })
+    return llamadas
+  }
+
+  test('agrupa en JS por tramo_id usando el cliente admin (no el rpc)', async () => {
+    configurarAdmin({
+      data: [{ tramo_id: 't1' }, { tramo_id: 't1' }, { tramo_id: 't2' }, { tramo_id: null }],
+      error: null,
+    })
+
+    expect(await obtenerCuadrosPorTramoCacheado('maipu')).toEqual({ t1: 2, t2: 1 })
+  })
+
+  test('filtra explícitamente por municipio vía la relación recorridos y limita', async () => {
+    const llamadas = configurarAdmin({ data: [], error: null })
+
+    await obtenerCuadrosPorTramoCacheado('maipu')
+
+    expect(llamadas.eq).toContainEqual(['recorridos.municipio', 'maipu'])
+    expect(llamadas.limit).toContainEqual([20000])
+  })
+
+  test('si la consulta admin falla, devuelve {} y loguea con el prefijo [cuadros]', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    configurarAdmin({ data: null, error: { message: 'boom-admin' } })
+
+    expect(await obtenerCuadrosPorTramoCacheado('maipu')).toEqual({})
+    expect(spy).toHaveBeenCalledWith('[cuadros]', 'boom-admin')
+    spy.mockRestore()
   })
 })

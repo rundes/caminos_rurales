@@ -3,7 +3,6 @@
 import { useActionState, useState } from 'react'
 import { signIn, signUpAction, type EstadoAuth } from './actions'
 import { Boton } from '@/components/Boton'
-import { PARTIDOS } from '@/lib/partidos'
 
 const CAMPO = 'w-full rounded-xl border border-gray-300 px-4 py-3 text-lg'
 
@@ -44,17 +43,19 @@ export function LoginForm() {
             <input name="nombre" type="text" required className={CAMPO} />
           </label>
           <label className="flex flex-col gap-1">
-            <span className="font-medium">Partido</span>
-            <select name="municipio_id" required defaultValue="" className={CAMPO}>
-              <option value="" disabled>
-                Elegí tu partido
-              </option>
-              {PARTIDOS.map((p) => (
-                <option key={p.slug} value={p.slug}>
-                  {p.nombre}
-                </option>
-              ))}
-            </select>
+            <span className="font-medium">Código de invitación</span>
+            <input
+              name="codigo_invitacion"
+              type="text"
+              required
+              minLength={4}
+              maxLength={40}
+              autoCapitalize="characters"
+              autoComplete="off"
+              spellCheck={false}
+              className={`${CAMPO} uppercase`}
+            />
+            <span className="text-sm text-gray-600">Pedile el código a tu municipio.</span>
           </label>
         </>
       )}

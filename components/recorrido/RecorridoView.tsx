@@ -98,7 +98,16 @@ export function RecorridoView({ usuarioId, municipio, capas, limites, centro }: 
     registrarGps.current = sensores.registrarGps
   }, [sensores.registrarGps])
 
-  const { pendientes, resumenes, sincronizar } = useSincronizacion(usuarioId)
+  const {
+    pendientes,
+    resumenes,
+    enError,
+    proximoIntento,
+    intentos,
+    sincronizar,
+    reintentar,
+    descartar,
+  } = useSincronizacion(usuarioId)
   const cuadros = useSincronizacionCuadros(usuarioId)
   const enLinea = useEnLinea()
 
@@ -108,6 +117,12 @@ export function RecorridoView({ usuarioId, municipio, capas, limites, centro }: 
   const [cerrado, setCerrado] = useState<Cerrado | null>(null)
   const [errorLocal, setErrorLocal] = useState<string | null>(null)
   const [totalCuadros, setTotalCuadros] = useState({ capturados: 0, pendientes: 0 })
+  const [finalizando, setFinalizando] = useState(false)
+  // Guard contra doble tap: el `ref` se lee sincrónicamente antes que
+  // cualquier `await`, así que un segundo tap mientras el primero sigue en
+  // curso no vuelve a disparar el cierre (el estado de React tarda un render
+  // en reflejarse en el botón deshabilitado).
+  const finalizandoRef = useRef(false)
 
   useEffect(() => {
     recorridoEnCurso(usuarioId)
@@ -180,17 +195,25 @@ export function RecorridoView({ usuarioId, municipio, capas, limites, centro }: 
   }, [detenerCamara, sinTerminar, sincronizar])
 
   const finalizar = useCallback(async () => {
-    const { recorridoId, km, cantidad } = grabador.estado
-    // Se libera antes de cerrar, y también cuando el recorrido se descarta:
-    // dejar el hardware prendido en el resumen quema batería y da mala espina.
-    detenerCamara()
-    const resultado = await grabador.finalizar()
-    if (resultado && !resultado.ok) {
-      setErrorLocal(resultado.mensaje)
-      return
+    if (finalizandoRef.current) return
+    finalizandoRef.current = true
+    setFinalizando(true)
+    try {
+      const { recorridoId, km, cantidad } = grabador.estado
+      // Se libera antes de cerrar, y también cuando el recorrido se descarta:
+      // dejar el hardware prendido en el resumen quema batería y da mala espina.
+      detenerCamara()
+      const resultado = await grabador.finalizar()
+      if (resultado && !resultado.ok) {
+        setErrorLocal(resultado.mensaje)
+        return
+      }
+      if (recorridoId) setCerrado({ recorridoId, km, puntosGps: cantidad })
+      await sincronizar()
+    } finally {
+      finalizandoRef.current = false
+      setFinalizando(false)
     }
-    if (recorridoId) setCerrado({ recorridoId, km, puntosGps: cantidad })
-    await sincronizar()
   }, [detenerCamara, grabador, sincronizar])
 
   // Abrir el formulario pausa la grabación y congela la posición: la
@@ -269,6 +292,7 @@ export function RecorridoView({ usuarioId, municipio, capas, limites, centro }: 
               videoRef: camara.videoRef,
               onAlternar: camara.alternar,
             }}
+            finalizando={finalizando}
             onObservacion={abrirObservacion}
             onPausar={grabador.pausar}
             onReanudar={grabador.reanudar}
@@ -293,9 +317,14 @@ export function RecorridoView({ usuarioId, municipio, capas, limites, centro }: 
       sinTerminar={sinTerminar}
       error={grabador.error ?? errorLocal}
       pendientes={pendientes}
+      enError={enError}
+      proximoIntento={proximoIntento}
+      intentos={intentos}
       onIniciar={() => correr(iniciar)}
       onContinuar={() => correr(continuar)}
       onCerrarPendiente={() => correr(cerrarPendiente)}
+      onReintentar={(recorridoId) => correr(() => reintentar(recorridoId))}
+      onDescartar={(recorridoId) => correr(() => descartar(recorridoId))}
     />
   )
 }

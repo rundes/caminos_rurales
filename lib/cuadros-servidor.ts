@@ -1,8 +1,10 @@
 import type { TramoGeometria } from './cobertura'
-import { puntosPorCuadros } from './juego'
-import type { ClienteAdmin, ClienteServidor, Contexto } from './recorrido-servidor'
+import { limitarPorTopeDiario, puntosPorCuadros, totalPuntos, type EventoPuntos } from './juego'
+import { prefijoRuta, puntosDelDia, type ClienteAdmin, type ClienteServidor, type Contexto } from './recorrido-servidor'
 import { crearAsignadorTramos, type AsignadorTramos } from './sensores/asignacion'
 import type { CuadroPayload } from './validaciones'
+
+export { prefijoRuta }
 
 /** Fila de `cuadros`: una foto ya subida, georreferenciada y con su tramo. */
 export type FilaCuadro = {
@@ -102,15 +104,6 @@ export function validarPlausibilidadCuadros(
 }
 
 /**
- * La ruta la elige el cliente al pedir la URL firmada, así que el servidor la
- * vuelve a verificar antes de guardarla: un payload modificado no puede
- * apuntar a un objeto de otra persona o de otro recorrido.
- */
-export function prefijoRuta(ctx: Contexto): string {
-  return `${ctx.usuarioId}/${ctx.recorridoId}/`
-}
-
-/**
  * Filas de `cuadros` para el lote, cada una asignada al tramo más cercano.
  * Rechaza el lote entero si alguna ruta no cuelga del usuario y el recorrido.
  */
@@ -176,8 +169,14 @@ export async function guardarCuadros(
 
 /**
  * Recalcula los puntos por cuadros del recorrido sobre el total guardado y
- * reemplaza el evento anterior. Es idempotente: la cola sube en lotes y cada
- * llamada deja el mismo estado final que dejaría una sola con todo junto.
+ * pisa el evento anterior (upsert por `(recorrido_id, motivo)`, ver 0009). Es
+ * idempotente: la cola sube en lotes y cada llamada deja el mismo estado final
+ * que dejaría una sola con todo junto.
+ *
+ * Antitrampa: también pasa por el tope diario de puntos del usuario
+ * (`limitarPorTopeDiario`), excluyendo del acumulado previo los del propio
+ * recorrido (igual que `guardarPuntos`) para que un recálculo no se cuente
+ * a sí mismo como ajeno.
  */
 export async function recalcularPuntosCuadros(
   admin: ClienteAdmin,
@@ -189,24 +188,36 @@ export async function recalcularPuntosCuadros(
     .eq('recorrido_id', ctx.recorridoId)
   if (error) throw new Error(error.message)
 
+  const total = count ?? 0
+  const puntosCrudos = puntosPorCuadros(total)
+
+  let puntos = 0
+  if (puntosCrudos > 0) {
+    const evento: EventoPuntos = { motivo: 'cuadros', puntos: puntosCrudos, detalle: `${total} cuadros` }
+    const previos = await puntosDelDia(admin, ctx.usuarioId, ctx.recorridoId)
+    puntos = totalPuntos(limitarPorTopeDiario([evento], previos))
+  }
+
+  if (puntos > 0) {
+    const { error: errorUpsert } = await admin.from('puntos_eventos').upsert(
+      {
+        usuario_id: ctx.usuarioId,
+        municipio: ctx.municipio,
+        recorrido_id: ctx.recorridoId,
+        motivo: MOTIVO_CUADROS,
+        puntos,
+      },
+      { onConflict: 'recorrido_id,motivo' },
+    )
+    if (errorUpsert) throw new Error(errorUpsert.message)
+    return puntos
+  }
+
   const { error: errorBorrado } = await admin
     .from('puntos_eventos')
     .delete()
     .eq('recorrido_id', ctx.recorridoId)
     .eq('motivo', MOTIVO_CUADROS)
   if (errorBorrado) throw new Error(errorBorrado.message)
-
-  const total = count ?? 0
-  const puntos = puntosPorCuadros(total)
-  if (puntos <= 0) return 0
-
-  const { error: errorInsert } = await admin.from('puntos_eventos').insert({
-    usuario_id: ctx.usuarioId,
-    municipio: ctx.municipio,
-    recorrido_id: ctx.recorridoId,
-    motivo: MOTIVO_CUADROS,
-    puntos,
-  })
-  if (errorInsert) throw new Error(errorInsert.message)
-  return puntos
+  return 0
 }

@@ -12,18 +12,41 @@ vi.mock('react-leaflet', () => ({
     pathOptions,
     center,
     ref,
+    eventHandlers,
   }: {
     children?: React.ReactNode
     radius?: number
     pathOptions?: { color?: string; fillColor?: string }
     center?: [number, number]
     ref?: (instancia: { openPopup: () => void } | null) => void
+    eventHandlers?: { popupopen?: () => void }
   }) => {
     if (typeof ref === 'function') {
-      ref({ openPopup: () => llamadasAbrirPopup.push(center?.[0] ?? -1) })
+      // El `ref` imita el layer real de Leaflet: `openPopup()` dispara el
+      // mismo evento `popupopen` que un click, tanto en el mock como en la
+      // implementación real.
+      ref({
+        openPopup: () => {
+          llamadasAbrirPopup.push(center?.[0] ?? -1)
+          eventHandlers?.popupopen?.()
+        },
+      })
     }
     return (
-      <div data-testid="circle-marker" data-radius={radius} data-color={pathOptions?.color} data-lat={center?.[0]}>
+      <div
+        data-testid="circle-marker"
+        data-radius={radius}
+        data-color={pathOptions?.color}
+        data-lat={center?.[0]}
+        // Solo dispara si el click fue directo sobre este div (el
+        // "marcador"), no uno que burbujeó desde un botón del popup
+        // (Anterior/Siguiente, hijo suyo en el DOM simplificado del mock):
+        // en el Leaflet real el popup no cuelga del DOM del marcador, así
+        // que un click ahí nunca reabre el marcador que lo contiene.
+        onClick={(e) => {
+          if (e.target === e.currentTarget) eventHandlers?.popupopen?.()
+        }}
+      >
         {children}
       </div>
     )
@@ -75,18 +98,39 @@ test('el tooltip muestra el ícono de cámara y la hora', () => {
   expect(tooltips[0].textContent).toContain('📷')
 })
 
-test('el popup usa la URL firmada para rutas de storage y la ruta directa cuando ya es https', () => {
+test('sin seleccionar ningún marcador, el popup no monta la imagen ni el resto del contenido', () => {
   render(<CapaCuadros cuadros={CUADROS} urls={{ 'u1/r1/cuadros/1.jpg': 'https://firmada.example.com/1.jpg' }} />)
 
+  expect(screen.queryByRole('img')).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Anterior' })).not.toBeInTheDocument()
+  expect(screen.getAllByText('Cargando…')).toHaveLength(2)
+})
+
+test('al seleccionar un marcador (click), su popup monta la imagen usando la URL firmada', () => {
+  render(<CapaCuadros cuadros={CUADROS} urls={{ 'u1/r1/cuadros/1.jpg': 'https://firmada.example.com/1.jpg' }} />)
+
+  fireEvent.click(screen.getAllByTestId('circle-marker')[0])
+
   const imagenes = screen.getAllByRole('img') as HTMLImageElement[]
+  expect(imagenes).toHaveLength(1)
   expect(imagenes[0]).toHaveAttribute('src', 'https://firmada.example.com/1.jpg')
   expect(imagenes[0]).toHaveAttribute('loading', 'lazy')
   expect(imagenes[0]).toHaveAttribute('width', '240')
-  expect(imagenes[1]).toHaveAttribute('src', 'https://cdn.example.com/img2.jpg')
 })
 
-test('sin URL firmada disponible, no renderiza imagen para esa ruta', () => {
+test('al seleccionar el marcador con ruta directa (https), usa esa ruta tal cual', () => {
+  render(<CapaCuadros cuadros={CUADROS} urls={{}} />)
+
+  fireEvent.click(screen.getAllByTestId('circle-marker')[1])
+
+  const [imagen] = screen.getAllByRole('img') as HTMLImageElement[]
+  expect(imagen).toHaveAttribute('src', 'https://cdn.example.com/img2.jpg')
+})
+
+test('sin URL firmada disponible, el marcador seleccionado no renderiza imagen', () => {
   render(<CapaCuadros cuadros={[CUADROS[0]]} urls={{}} />)
+
+  fireEvent.click(screen.getByTestId('circle-marker'))
 
   expect(screen.queryByRole('img')).not.toBeInTheDocument()
 })
@@ -94,34 +138,41 @@ test('sin URL firmada disponible, no renderiza imagen para esa ruta', () => {
 test('deshabilita "Anterior" en el primer cuadro del tramo y "Siguiente" en el último', () => {
   render(<CapaCuadros cuadros={CUADROS} urls={{}} />)
 
-  const anteriores = screen.getAllByRole('button', { name: 'Anterior' })
-  const siguientes = screen.getAllByRole('button', { name: 'Siguiente' })
-  expect(anteriores[0]).toBeDisabled()
-  expect(siguientes[0]).not.toBeDisabled()
-  expect(anteriores[1]).not.toBeDisabled()
-  expect(siguientes[1]).toBeDisabled()
+  const marcadores = screen.getAllByTestId('circle-marker')
+
+  fireEvent.click(marcadores[0])
+  expect(screen.getByRole('button', { name: 'Anterior' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Siguiente' })).not.toBeDisabled()
+
+  fireEvent.click(marcadores[1])
+  expect(screen.getByRole('button', { name: 'Anterior' })).not.toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Siguiente' })).toBeDisabled()
 })
 
 test('"Siguiente" abre el popup del cuadro siguiente dentro del mismo tramo', () => {
   render(<CapaCuadros cuadros={CUADROS} urls={{}} />)
 
-  const [siguienteDeC1] = screen.getAllByRole('button', { name: 'Siguiente' })
-  fireEvent.click(siguienteDeC1)
+  fireEvent.click(screen.getAllByTestId('circle-marker')[0])
+  fireEvent.click(screen.getByRole('button', { name: 'Siguiente' }))
 
   expect(llamadasAbrirPopup).toContain(CUADROS[1].lat)
+  // El popup pasa a mostrar el contenido del cuadro siguiente (c2, sin tramo_id distinto acá, pero con su propio "Anterior" habilitado).
+  expect(screen.getByRole('button', { name: 'Anterior' })).not.toBeDisabled()
 })
 
 test('"Anterior" abre el popup del cuadro anterior dentro del mismo tramo', () => {
   render(<CapaCuadros cuadros={CUADROS} urls={{}} />)
 
-  const [, anteriorDeC2] = screen.getAllByRole('button', { name: 'Anterior' })
-  fireEvent.click(anteriorDeC2)
+  fireEvent.click(screen.getAllByTestId('circle-marker')[1])
+  fireEvent.click(screen.getByRole('button', { name: 'Anterior' }))
 
   expect(llamadasAbrirPopup).toContain(CUADROS[0].lat)
 })
 
-test('el popup muestra fecha/hora, velocidad y tramo', () => {
+test('el popup del marcador seleccionado muestra fecha/hora, velocidad y tramo', () => {
   render(<CapaCuadros cuadros={[CUADROS[0]]} urls={{}} />)
+
+  fireEvent.click(screen.getByTestId('circle-marker'))
 
   const popup = screen.getByTestId('popup')
   const fechaEsperada = new Date(CUADROS[0].t).toLocaleString('es-AR', { timeZone: ZONA_HORARIA })
@@ -130,17 +181,21 @@ test('el popup muestra fecha/hora, velocidad y tramo', () => {
   expect(popup.textContent).toContain('Tramo: t1')
 })
 
-test('sin velocidad (null), el popup omite la línea de velocidad', () => {
+test('sin velocidad (null), el popup del marcador seleccionado omite la línea de velocidad', () => {
   const cuadroSinVelocidad = { ...CUADROS[0], velocidadKmh: null }
   render(<CapaCuadros cuadros={[cuadroSinVelocidad]} urls={{}} />)
+
+  fireEvent.click(screen.getByTestId('circle-marker'))
 
   const popup = screen.getByTestId('popup')
   expect(popup.textContent).not.toContain('Velocidad')
 })
 
-test('sin tramo (null), el popup muestra "sin tramo"', () => {
+test('sin tramo (null), el popup del marcador seleccionado muestra "sin tramo"', () => {
   const cuadroSinTramo = { ...CUADROS[0], tramo_id: null }
   render(<CapaCuadros cuadros={[cuadroSinTramo]} urls={{}} />)
+
+  fireEvent.click(screen.getByTestId('circle-marker'))
 
   const popup = screen.getByTestId('popup')
   expect(popup.textContent).toContain('Tramo: sin tramo')

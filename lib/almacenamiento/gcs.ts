@@ -1,10 +1,11 @@
 import 'server-only'
+import { envServidor } from '@/lib/env'
 import { PREFIJO_GCS, type DestinoSubida, type ProveedorAlmacenamiento } from './tipos'
 
 const MINUTOS_ESCRITURA = 15
 
 function credenciales(): Record<string, unknown> {
-  const crudo = process.env.GCS_SERVICE_ACCOUNT_KEY
+  const crudo = envServidor().GCS_SERVICE_ACCOUNT_KEY
   if (!crudo) throw new Error('Falta GCS_SERVICE_ACCOUNT_KEY para usar ALMACENAMIENTO=gcs')
   try {
     return JSON.parse(crudo) as Record<string, unknown>
@@ -15,7 +16,7 @@ function credenciales(): Record<string, unknown> {
 }
 
 function nombreBucket(): string {
-  const bucket = process.env.GCS_BUCKET
+  const bucket = envServidor().GCS_BUCKET
   if (!bucket) throw new Error('Falta GCS_BUCKET para usar ALMACENAMIENTO=gcs')
   return bucket
 }

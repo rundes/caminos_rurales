@@ -2,7 +2,7 @@
 -- Estado final: refleja 0001_schema.sql + 0002_storage_por_municipio.sql +
 -- 0003a_tipos_falla.sql + 0003_recorridos.sql + 0004_recorridos_procesado.sql +
 -- 0005_fallas_update.sql + 0006a_enums_sensor.sql + 0006_muestras_sensor.sql +
--- 0007_cuadros.sql.
+-- 0007_cuadros.sql + 0008_seguridad.sql + 0009_cupos.sql.
 -- Una instalación nueva puede
 -- correr solo este archivo. La tabla `relevamientos` ya no existe: el flujo
 -- es recorrido GPS -> cobertura de tramos -> puntos e insignias.
@@ -184,6 +184,14 @@ create index cuadros_recorrido_idx on public.cuadros (recorrido_id);
 create index cuadros_tramo_idx on public.cuadros (tramo_id);
 create index puntos_usuario_idx on public.puntos_eventos (usuario_id);
 create index puntos_municipio_idx on public.puntos_eventos (municipio);
+-- Índices de 0008: las consultas de inicio y de detalle filtran por recorrido
+-- o por usuario ordenando por fecha descendente.
+create index puntos_recorrido_idx on public.puntos_eventos (recorrido_id);
+create index puntos_usuario_fecha_idx on public.puntos_eventos (usuario_id, created_at desc);
+create index cobertura_usuario_fecha_idx on public.cobertura_tramos (usuario_id, created_at desc);
+create index cobertura_recorrido_idx on public.cobertura_tramos (recorrido_id);
+create index fallas_fecha_idx on public.fallas_deteccion (created_at desc);
+create index cuadros_t_idx on public.cuadros (t desc);
 
 -- 10. FUNCIONES AUXILIARES (security definer evita recursión de RLS sobre perfiles)
 create or replace function public.municipio_actual()
@@ -191,7 +199,7 @@ returns text
 language sql
 stable
 security definer
-set search_path = public
+set search_path = public, pg_temp
 as $$
   select municipio_id from public.perfiles where id = auth.uid();
 $$;
@@ -201,7 +209,7 @@ returns rol_usuario
 language sql
 stable
 security definer
-set search_path = public
+set search_path = public, pg_temp
 as $$
   select rol from public.perfiles where id = auth.uid();
 $$;
@@ -214,7 +222,7 @@ returns table (localidad text, tramos integer, cubiertos integer, km numeric, km
 language plpgsql
 stable
 security definer
-set search_path = public
+set search_path = public, pg_temp
 as $$
 begin
   if p_municipio is distinct from public.municipio_actual() then return; end if;
@@ -245,7 +253,7 @@ returns table (usuario_id uuid, nombre text, puntos bigint, posicion bigint)
 language plpgsql
 stable
 security definer
-set search_path = public
+set search_path = public, pg_temp
 as $$
 begin
   if p_municipio is distinct from public.municipio_actual() then return; end if;
@@ -279,7 +287,7 @@ returns table (
 language plpgsql
 stable
 security definer
-set search_path = public
+set search_path = public, pg_temp
 as $$
 #variable_conflict use_column
 begin
@@ -342,7 +350,7 @@ returns table (
 language plpgsql
 stable
 security definer
-set search_path = public
+set search_path = public, pg_temp
 as $$
 #variable_conflict use_column
 begin
@@ -359,19 +367,31 @@ end;
 $$;
 
 -- 12. TRIGGER: crear perfil al registrarse
--- El formulario de registro envía nombre y municipio_id en options.data.
+-- El formulario de registro envía nombre y codigo_invitacion en options.data.
+-- El municipio sale del código (tabla `codigos_invitacion`, sección 14), nunca
+-- de la metadata: si el código no existe o está inactivo el perfil queda en
+-- 'sin-asignar' y la app manda a /pendiente a canjear uno válido.
 create or replace function public.handle_new_user()
 returns trigger
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, pg_temp
 as $$
+declare
+  v_codigo text := upper(trim(coalesce(new.raw_user_meta_data ->> 'codigo_invitacion', '')));
+  v_municipio text;
 begin
+  if v_codigo <> '' then
+    select c.municipio into v_municipio
+    from public.codigos_invitacion c
+    where c.codigo = v_codigo and c.activo;
+  end if;
+
   insert into public.perfiles (id, nombre, municipio_id)
   values (
     new.id,
     coalesce(new.raw_user_meta_data ->> 'nombre', new.email),
-    coalesce(new.raw_user_meta_data ->> 'municipio_id', 'sin-asignar')
+    coalesce(v_municipio, 'sin-asignar')
   );
   return new;
 end;
@@ -430,16 +450,17 @@ create policy "recorridos_select" on public.recorridos
   for select to authenticated
   using (usuario_id = auth.uid() or municipio = public.municipio_actual());
 
+-- Alta solo en el municipio propio. No hay política de update: el recorrido es
+-- inmutable desde la app y el post-procesado lo sella con la clave secreta.
 create policy "recorridos_insert_propio" on public.recorridos
   for insert to authenticated
-  with check (usuario_id = auth.uid());
+  with check (
+    usuario_id = auth.uid()
+    and municipio = public.municipio_actual()
+  );
 
-create policy "recorridos_update_propio" on public.recorridos
-  for update to authenticated
-  using (usuario_id = auth.uid())
-  with check (usuario_id = auth.uid());
-
--- observaciones: lectura si el recorrido es visible; inserción sobre recorridos propios.
+-- observaciones: lectura si el recorrido es visible; inserción manual sobre
+-- recorridos propios (las de origen 'sensor' las escribe el servidor).
 create policy "fallas_select" on public.fallas_deteccion
   for select to authenticated
   using (
@@ -453,6 +474,7 @@ create policy "fallas_insert_propio" on public.fallas_deteccion
   for insert to authenticated
   with check (
     recorrido_id in (select id from public.recorridos where usuario_id = auth.uid())
+    and origen = 'manual'
   );
 
 create policy "fallas_update_propio" on public.fallas_deteccion
@@ -547,7 +569,56 @@ create policy "logros_select" on public.logros
     or usuario_id in (select id from public.perfiles where municipio_id = public.municipio_actual())
   );
 
--- 14. STORAGE: bucket privado para evidencia
+-- 14. SEGURIDAD (0008): perfil inmutable y códigos de invitación
+-- El perfil deja de ser escribible desde la app salvo `nombre` y
+-- `acepto_terminos_at`. El grant por columna corta el intento antes de RLS; el
+-- trigger cubre cualquier otra vía. La clave secreta (service role, sin
+-- `auth.uid()`) conserva el control total: es la que asigna el municipio
+-- cuando alguien canjea un código de invitación.
+revoke update on public.perfiles from authenticated;
+grant update (nombre, acepto_terminos_at) on public.perfiles to authenticated;
+
+create or replace function public.perfiles_campos_protegidos()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if new.id is distinct from old.id
+    or new.rol is distinct from old.rol
+    or new.municipio_id is distinct from old.municipio_id
+  then
+    raise exception 'El perfil no puede cambiar id, rol ni municipio_id desde la app'
+      using errcode = '42501';
+  end if;
+  return new;
+end;
+$$;
+
+create trigger perfiles_no_escalar
+  before update on public.perfiles
+  for each row
+  when (auth.uid() is not null)
+  execute function public.perfiles_campos_protegidos();
+
+-- Códigos de invitación por municipio: los lee `handle_new_user` (sección 12)
+-- al crear el perfil y la acción `/pendiente` al canjearlos. RLS habilitado sin
+-- políticas: nadie los ve desde la app, solo la clave secreta y las funciones
+-- `security definer`.
+create table public.codigos_invitacion (
+  codigo text primary key,
+  municipio text not null,
+  activo boolean not null default true,
+  creado_at timestamptz default now()
+);
+
+alter table public.codigos_invitacion enable row level security;
+
+insert into public.codigos_invitacion (codigo, municipio)
+values ('MAIPU-2027', 'maipu');
+
+-- 15. STORAGE: bucket privado para evidencia
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 values (
   'evidencia-vial',
@@ -580,3 +651,64 @@ create policy "evidencia_delete_propio" on storage.objects
     bucket_id = 'evidencia-vial'
     and (storage.foldername(name))[1] = auth.uid()::text
   );
+
+-- 16. CUPOS (0009): cupos diarios y puntos únicos por motivo dentro de un recorrido
+-- Contador por usuario y día de subidas de evidencia y recorridos finalizados.
+-- Sin políticas: la app nunca lee ni escribe esta tabla directo, solo a través
+-- de `consumir_cupo` (security definer).
+create table public.uso_diario (
+  usuario_id uuid not null references public.perfiles(id) on delete cascade,
+  dia date not null default current_date,
+  subidas int not null default 0,
+  recorridos int not null default 0,
+  primary key (usuario_id, dia)
+);
+
+alter table public.uso_diario enable row level security;
+
+-- Suma 1 al contador del tipo pedido para el usuario autenticado y el día de
+-- hoy (upsert) y devuelve si todavía está dentro del máximo. Sin sesión no hay
+-- cupo que dar: devuelve false.
+create or replace function public.consumir_cupo(p_tipo text, p_max int)
+returns boolean
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_usuario uuid := auth.uid();
+  v_n int;
+begin
+  if v_usuario is null then
+    return false;
+  end if;
+
+  if p_tipo = 'subidas' then
+    insert into public.uso_diario (usuario_id, dia, subidas)
+    values (v_usuario, current_date, 1)
+    on conflict (usuario_id, dia)
+    do update set subidas = public.uso_diario.subidas + 1
+    returning subidas into v_n;
+  elsif p_tipo = 'recorridos' then
+    insert into public.uso_diario (usuario_id, dia, recorridos)
+    values (v_usuario, current_date, 1)
+    on conflict (usuario_id, dia)
+    do update set recorridos = public.uso_diario.recorridos + 1
+    returning recorridos into v_n;
+  else
+    raise exception 'Tipo de cupo inválido: %', p_tipo;
+  end if;
+
+  return v_n <= p_max;
+end;
+$$;
+
+revoke all on function public.consumir_cupo(text, int) from public;
+grant execute on function public.consumir_cupo(text, int) to authenticated;
+
+-- `guardarPuntos`/`recalcularPuntosCuadros` idempotizaban borrando todos los
+-- eventos del recorrido antes de reinsertar; eso abría una ventana donde una
+-- carrera podía duplicar motivos. La restricción única fuerza el upsert por
+-- (recorrido_id, motivo) en su lugar (ver sección 8, tabla `puntos_eventos`).
+alter table public.puntos_eventos
+  add constraint puntos_eventos_recorrido_motivo_unico unique (recorrido_id, motivo);

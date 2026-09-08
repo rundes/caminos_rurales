@@ -28,6 +28,16 @@ function limpiarNombre(nombre: string): string {
 }
 
 /**
+ * El `id` termina crudo en la ruta de almacenamiento: sin sanear, un `/` o un
+ * `..` colado (aunque la validación de arriba en la cadena debiera rechazarlo
+ * antes) escribiría fuera del prefijo `{uid}/{recorridoId}/` que las
+ * políticas verifican. Defensa en profundidad, no la única barrera.
+ */
+function sanitizarId(id: string | number): string {
+  return String(id).replace(/[^A-Za-z0-9-]+/g, '-')
+}
+
+/**
  * Ruta de la evidencia en el almacenamiento. Con el `id` de la observación la
  * ruta es determinística: un reintento de subida pisa el mismo objeto en vez
  * de dejar copias huérfanas. Sin `id` cae al timestamp.
@@ -38,5 +48,5 @@ export function rutaEvidencia(
   nombre: string,
   id: string | number = Date.now(),
 ): string {
-  return `${uid}/${recorridoId}/${id}-${limpiarNombre(nombre)}`
+  return `${uid}/${recorridoId}/${sanitizarId(id)}-${limpiarNombre(nombre)}`
 }

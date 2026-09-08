@@ -61,14 +61,19 @@ function cookieHeader(session) {
   return partes.join('; ')
 }
 
-/** Crea un usuario autoconfirmado en `municipio`, lo loguea y devuelve su cliente. */
-async function crearUsuario(municipio) {
+/**
+ * Crea un usuario autoconfirmado con el código de invitación `codigo`, lo
+ * loguea y devuelve su cliente. `municipio` es solo la etiqueta esperada
+ * (0008: el trigger `handle_new_user` resuelve el municipio real a partir del
+ * código, nunca de la metadata) — se usa para el email y los mensajes.
+ */
+async function crearUsuario(municipio, codigo) {
   const email = `smoke+${municipio}+${Date.now()}+${Math.random().toString(36).slice(2, 8)}@example.com`
   const { data, error } = await admin.auth.admin.createUser({
     email,
     password: PASSWORD,
     email_confirm: true,
-    user_metadata: { nombre: 'Smoke Test', municipio_id: municipio },
+    user_metadata: { nombre: 'Smoke Test', codigo_invitacion: codigo },
   })
   if (error || !data?.user) throw new Error(`crear usuario ${municipio}: ${error?.message}`)
   const c = createClient(URL, PUB, { auth: { persistSession: false, autoRefreshToken: false } })
@@ -87,8 +92,8 @@ const muestrasIds = []
 const cuadrosIds = []
 
 try {
-  // 1. Crear usuario (autoconfirmado) con metadata municipio maipu → trigger crea perfil
-  const maipu = await crearUsuario('maipu')
+  // 1. Crear usuario (autoconfirmado) con código de invitación de maipu → trigger crea perfil
+  const maipu = await crearUsuario('maipu', 'MAIPU-2027')
   uid = maipu.id
   const cookie = cookieHeader(maipu.session)
 
@@ -126,7 +131,10 @@ try {
   const tramo = trMaipu.data?.[0]
   ok(Boolean(tramo?.id), 'hay un tramo disponible para la prueba de cobertura', JSON.stringify(tramo))
 
-  const bahia = await crearUsuario('bahia-blanca')
+  // Código de invitación temporal para poder crear un usuario de otro municipio
+  // (0008: sin código válido el trigger deja el perfil en 'sin-asignar').
+  await sql(`insert into public.codigos_invitacion (codigo, municipio) values ('SMOKE-BB', 'bahia-blanca') on conflict (codigo) do nothing`)
+  const bahia = await crearUsuario('bahia-blanca', 'SMOKE-BB')
   extraUids.push(bahia.id)
   const trBahia = await bahia.c.from('tramos').select('id')
   ok(!trBahia.error && trBahia.data?.length === 0, 'usuario de otro municipio ve 0 tramos', trBahia.error?.message ?? String(trBahia.data?.length))
@@ -410,12 +418,79 @@ try {
   const up2 = await maipu.c.storage.from('evidencia-vial').upload(`${bahia.id}/${recorridoId}/x.png`, png, { contentType: 'image/png' })
   ok(Boolean(up2.error), 'upload en carpeta ajena bloqueado', up2.error?.message)
 
-  const otroMaipu = await crearUsuario('maipu')
+  const otroMaipu = await crearUsuario('maipu', 'MAIPU-2027')
   extraUids.push(otroMaipu.id)
   const dl1 = await otroMaipu.c.storage.from('evidencia-vial').download(ruta)
   ok(!dl1.error, 'usuario del mismo municipio descarga evidencia', dl1.error?.message)
   const dl2 = await bahia.c.storage.from('evidencia-vial').download(ruta)
   ok(Boolean(dl2.error), 'usuario de otro municipio NO descarga evidencia', dl2.error?.message)
+
+  // 10bis. Seguridad (0008): perfil inmutable, recorridos/fallas endurecidos, código inválido
+  const rolAjeno = await maipu.c.from('perfiles').update({ rol: 'admin' }).eq('id', uid).select('rol')
+  ok(
+    Boolean(rolAjeno.error) || rolAjeno.data?.length === 0,
+    'usuario NO puede cambiar su propio rol (grant por columna + trigger perfiles_no_escalar)',
+    rolAjeno.error?.message ?? JSON.stringify(rolAjeno.data),
+  )
+  const rolTrasIntento = await sql(`select rol from public.perfiles where id = '${uid}'`)
+  ok(rolTrasIntento[0]?.rol !== 'admin', 'el rol sigue sin cambiar tras el intento', JSON.stringify(rolTrasIntento[0]))
+
+  const municipioAjeno = await maipu.c
+    .from('perfiles')
+    .update({ municipio_id: 'bahia-blanca' })
+    .eq('id', uid)
+    .select('municipio_id')
+  ok(
+    Boolean(municipioAjeno.error) || municipioAjeno.data?.length === 0,
+    'usuario NO puede cambiar su propio municipio_id',
+    municipioAjeno.error?.message ?? JSON.stringify(municipioAjeno.data),
+  )
+
+  const nombreOk = await maipu.c.from('perfiles').update({ nombre: 'Smoke Test Editado' }).eq('id', uid).select('nombre')
+  ok(
+    !nombreOk.error && nombreOk.data?.[0]?.nombre === 'Smoke Test Editado',
+    'usuario SI puede cambiar su nombre (columna permitida)',
+    nombreOk.error?.message ?? JSON.stringify(nombreOk.data),
+  )
+
+  const recorridoOtroMunicipio = await maipu.c
+    .from('recorridos')
+    .insert({ usuario_id: uid, municipio: 'bahia-blanca', inicio, fin, km: 1, track: [], estado: 'finalizado' })
+  ok(
+    Boolean(recorridoOtroMunicipio.error),
+    'RLS bloquea insert de recorrido con municipio distinto al propio',
+    recorridoOtroMunicipio.error?.message,
+  )
+
+  const updKmPropio = await maipu.c.from('recorridos').update({ km: 999 }).eq('id', recorridoId).select('id')
+  ok(
+    Boolean(updKmPropio.error) || updKmPropio.data?.length === 0,
+    'RLS bloquea update de recorrido propio (ya no hay política de update)',
+    updKmPropio.error?.message ?? JSON.stringify(updKmPropio.data),
+  )
+
+  const fallaSensorPropia = await maipu.c.from('fallas_deteccion').insert({
+    recorrido_id: recorridoId,
+    tipo_falla: 'bache',
+    severidad: 'baja',
+    latitud: -36.99,
+    longitud: -57.9,
+    origen: 'sensor',
+  })
+  ok(
+    Boolean(fallaSensorPropia.error),
+    'RLS bloquea insert de falla origen sensor desde la app (solo manual)',
+    fallaSensorPropia.error?.message,
+  )
+
+  const codigoInvalido = await crearUsuario('sin-asignar', 'CODIGO-INEXISTENTE-XYZ')
+  extraUids.push(codigoInvalido.id)
+  const perfilInvalido = await sql(`select municipio_id from public.perfiles where id = '${codigoInvalido.id}'`)
+  ok(
+    perfilInvalido[0]?.municipio_id === 'sin-asignar',
+    'usuario creado con código inválido queda con perfil sin-asignar',
+    JSON.stringify(perfilInvalido[0]),
+  )
 
   // 10. Rutas públicas y PWA
   const sinCookie = await fetch(`${DEV}/dashboard`, { redirect: 'manual' })
@@ -439,6 +514,7 @@ try {
     for (const id of puntosIds) await sql(`delete from public.puntos_eventos where id = '${id}'`)
     for (const id of coberturaIds) await sql(`delete from public.cobertura_tramos where id = '${id}'`)
     for (const id of recorridoIds) await sql(`delete from public.recorridos where id = '${id}'`)
+    await sql(`delete from public.codigos_invitacion where codigo = 'SMOKE-BB'`)
     if (uid) await admin.auth.admin.deleteUser(uid)
     for (const x of extraUids) await admin.auth.admin.deleteUser(x)
     console.log('limpieza OK')

@@ -1,5 +1,6 @@
 'use client'
 
+import { memo, useMemo } from 'react'
 import { Polyline, Tooltip } from 'react-leaflet'
 import { colorCalidad, ETIQUETA_CALIDAD } from '@/lib/sensores/colores'
 import type { RugosidadTramo } from '@/lib/sensores/tipos'
@@ -46,12 +47,25 @@ function sufijoCuadros(id: string, cuadrosPorTramo?: Record<string, number>): st
   return n ? ` · ${n} cuadros` : ''
 }
 
+type TramoConPosiciones = TramoEstado & { posiciones: [number, number][] }
+
 /** Capa de tramos del mapa de relevamiento: cobertura (cubierto/pendiente) o estado estimado por calidad. */
-export function CapaTramos({ tramos, modo, rugosidad, cuadrosPorTramo }: Props) {
+export const CapaTramos = memo(function CapaTramos({ tramos, modo, rugosidad, cuadrosPorTramo }: Props) {
+  // La proyección [lng, lat] -> [lat, lng] que espera Leaflet es la misma en
+  // cada render mientras no cambien los tramos: recalcularla en cada toggle
+  // de modo (o cada vez que el padre re-renderiza) es trabajo tirado.
+  const tramosConPosiciones = useMemo<TramoConPosiciones[]>(
+    () =>
+      tramos.map((t) => ({
+        ...t,
+        posiciones: t.geometria.map(([lng, lat]) => [lat, lng] as [number, number]),
+      })),
+    [tramos],
+  )
+
   return (
     <>
-      {tramos.map((t) => {
-        const posiciones: [number, number][] = t.geometria.map(([lng, lat]) => [lat, lng])
+      {tramosConPosiciones.map((t) => {
         const sufijoCuadrosTexto = sufijoCuadros(t.id, cuadrosPorTramo)
 
         if (modo === 'estado') {
@@ -60,7 +74,7 @@ export function CapaTramos({ tramos, modo, rugosidad, cuadrosPorTramo }: Props) 
           return (
             <Polyline
               key={t.id}
-              positions={posiciones}
+              positions={t.posiciones}
               pathOptions={{ color: colorCalidad(calidad), weight: PESO_TRAMO_ESTADO }}
             >
               <Tooltip>{tooltipEstado(t.nombre_codigo, r) + sufijoCuadrosTexto}</Tooltip>
@@ -72,7 +86,7 @@ export function CapaTramos({ tramos, modo, rugosidad, cuadrosPorTramo }: Props) 
         return (
           <Polyline
             key={t.id}
-            positions={posiciones}
+            positions={t.posiciones}
             pathOptions={{
               color: cubierto ? COLOR_TRAMO_CUBIERTO : COLOR_TRAMO_PENDIENTE,
               weight: cubierto ? PESO_TRAMO_CUBIERTO : PESO_TRAMO_PENDIENTE,
@@ -87,4 +101,4 @@ export function CapaTramos({ tramos, modo, rugosidad, cuadrosPorTramo }: Props) 
       })}
     </>
   )
-}
+})

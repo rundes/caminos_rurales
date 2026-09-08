@@ -6,12 +6,12 @@
  * una página estática sin datos de nadie. Así un celular compartido no puede
  * mostrarle a la persona equivocada el dashboard de otra.
  *
- * Los assets de `/_next/*`, las capas GeoJSON, los íconos y las teselas sí se
- * cachean: no llevan información de sesión.
+ * Los assets de `/_next/static/*`, las capas GeoJSON, los íconos y las
+ * teselas sí se cachean: no llevan información de sesión.
  */
 importScripts('/sw-cache.js')
 
-const VERSION = 'v2'
+const VERSION = 'v3'
 const CACHE_SHELL = `visiovial-shell-${VERSION}`
 const CACHE_ESTATICO = `visiovial-estatico-${VERSION}`
 const CACHE_NEXT = `visiovial-next-${VERSION}`
@@ -19,6 +19,8 @@ const CACHE_TESELAS = `visiovial-teselas-${VERSION}`
 
 const CACHES_PROPIOS = [CACHE_SHELL, CACHE_ESTATICO, CACHE_NEXT, CACHE_TESELAS]
 const MAX_TESELAS = 1500
+/** Cada cuántos `put` se corre `recortarCache`: un `cache.keys()` escanea todo el cache, así que hacerlo en cada fetch sería caro. */
+const CADA_N_PUTS = 50
 
 const RUTA_OFFLINE = '/offline'
 
@@ -68,6 +70,16 @@ self.addEventListener('message', (evento) => {
   }
 })
 
+/** Cuenta de puts por cache, para no recortar en cada uno (ver `CADA_N_PUTS`). */
+const contadorPuts = new Map()
+
+async function quizasRecortar(cache, nombreCache, max) {
+  if (!max) return
+  const contador = (contadorPuts.get(nombreCache) ?? 0) + 1
+  contadorPuts.set(nombreCache, contador)
+  if (contador % CADA_N_PUTS === 0) await self.recortarCache(cache, max)
+}
+
 async function cacheFirst(peticion, nombreCache, max) {
   const cache = await caches.open(nombreCache)
   const guardada = await cache.match(peticion)
@@ -76,9 +88,36 @@ async function cacheFirst(peticion, nombreCache, max) {
   const respuesta = await fetch(peticion)
   if (respuesta && (respuesta.ok || respuesta.type === 'opaque')) {
     await cache.put(peticion, respuesta.clone())
-    if (max) await self.recortarCache(cache, max)
+    await quizasRecortar(cache, nombreCache, max)
   }
   return respuesta
+}
+
+/**
+ * Stale-while-revalidate: si hay una copia cacheada la devuelve al toque y en
+ * paralelo pide la versión nueva a la red para la próxima vez; sin nada
+ * cacheado, espera la red. Para `/capas/*`: los GeoJSON de un municipio
+ * pueden actualizarse, pero no vale la pena bloquear el mapa esperando la red
+ * si ya hay una copia servible.
+ */
+async function staleWhileRevalidate(peticion, nombreCache, max) {
+  const cache = await caches.open(nombreCache)
+  const guardada = await cache.match(peticion)
+
+  const actualizacion = fetch(peticion)
+    .then(async (respuesta) => {
+      if (respuesta && (respuesta.ok || respuesta.type === 'opaque')) {
+        await cache.put(peticion, respuesta.clone())
+        await quizasRecortar(cache, nombreCache, max)
+      }
+      return respuesta
+    })
+    .catch((error) => {
+      if (guardada) return guardada
+      throw error
+    })
+
+  return guardada ?? actualizacion
 }
 
 async function networkFirst(peticion, nombreCache) {
@@ -127,8 +166,18 @@ self.addEventListener('fetch', (evento) => {
     return
   }
 
-  if (url.pathname.startsWith('/capas/') || url.pathname.startsWith('/icons/')) {
+  if (url.pathname.startsWith('/capas/')) {
+    evento.respondWith(staleWhileRevalidate(peticion, CACHE_ESTATICO))
+    return
+  }
+
+  if (url.pathname.startsWith('/icons/')) {
     evento.respondWith(cacheFirst(peticion, CACHE_ESTATICO))
+    return
+  }
+
+  if (url.pathname.startsWith('/_next/static/')) {
+    evento.respondWith(cacheFirst(peticion, CACHE_NEXT))
     return
   }
 

@@ -18,8 +18,10 @@ import {
   listarCola,
   listarColaCuadros,
   listarCuadros,
+  listarCuadrosPendientes,
   limpiarLocal,
   marcarCuadro,
+  marcarCuadrosEnError,
   listarImpactos,
   listarMuestras,
   listarObservaciones,
@@ -31,7 +33,7 @@ import {
   recorridoEnCurso,
 } from '@/lib/local/db'
 import type {
-  CuadroLocal,
+  CuadroNuevo,
   ImpactoLocal,
   MuestraLocal,
   ObservacionLocal,
@@ -84,7 +86,7 @@ function impacto(t: number, recorridoId = ID): ImpactoLocal {
   return { recorridoId, t, lat: -36.85, lng: -57.88, pico: 8.5, velocidadKmh: 40 }
 }
 
-function cuadro(t: number, recorridoId = ID): CuadroLocal {
+function cuadro(t: number, recorridoId = ID): CuadroNuevo {
   return {
     recorridoId,
     t,
@@ -95,6 +97,50 @@ function cuadro(t: number, recorridoId = ID): CuadroLocal {
     blob: new Blob([`cuadro-${t}`], { type: 'image/jpeg' }),
     estadoSubida: 'pendiente',
   }
+}
+
+/**
+ * Crea una base v4 "a mano" (con `blob` adentro de la fila, como antes de
+ * separar el store) usando IndexedDB directo, para probar la migración a v5
+ * sin pasar por `abrirDb` (que ya abre en v5).
+ */
+async function crearBaseV4ConCuadro(): Promise<void> {
+  await new Promise<void>((resolver, rechazar) => {
+    const peticion = indexedDB.open('visiovial', 4)
+    peticion.onupgradeneeded = () => {
+      const db = peticion.result
+      db.createObjectStore('puntos', { autoIncrement: true }).createIndex('recorridoId', 'recorridoId')
+      db.createObjectStore('observaciones', { keyPath: 'id' }).createIndex('recorridoId', 'recorridoId')
+      db.createObjectStore('cola', { keyPath: 'recorridoId' })
+      db.createObjectStore('recorridos', { keyPath: 'id' }).createIndex('usuarioId', 'usuarioId')
+      db.createObjectStore('muestras', { autoIncrement: true }).createIndex('recorridoId', 'recorridoId')
+      db.createObjectStore('impactos', { autoIncrement: true }).createIndex('recorridoId', 'recorridoId')
+      db
+        .createObjectStore('cuadros', { keyPath: 'id', autoIncrement: true })
+        .createIndex('recorridoId', 'recorridoId')
+      db.createObjectStore('colaCuadros', { keyPath: 'recorridoId' })
+    }
+    peticion.onsuccess = () => {
+      const db = peticion.result
+      const tx = db.transaction('cuadros', 'readwrite')
+      tx.objectStore('cuadros').add({
+        recorridoId: ID,
+        t: 100,
+        lat: -36.85,
+        lng: -57.88,
+        rumbo: 90,
+        velocidadKmh: 40,
+        blob: new Blob(['imagen-v4'], { type: 'image/jpeg' }),
+        estadoSubida: 'pendiente',
+      })
+      tx.oncomplete = () => {
+        db.close()
+        resolver()
+      }
+      tx.onerror = () => rechazar(tx.error)
+    }
+    peticion.onerror = () => rechazar(peticion.error)
+  })
 }
 
 beforeEach(async () => {
@@ -188,23 +234,40 @@ describe('base local', () => {
     expect(await listarImpactos('otro')).toHaveLength(1)
   })
 
-  test('guarda cuadros por recorrido, los cuenta y los filtra por estado', async () => {
+  test('guarda cuadros por recorrido (sin blob en la fila), los cuenta y los filtra por estado', async () => {
     const id = await guardarCuadro(cuadro(200))
     await guardarCuadro(cuadro(100))
     await guardarCuadro(cuadro(50, 'otro'))
 
     const cuadros = await listarCuadros(ID)
     expect(cuadros.map((c) => c.t)).toEqual([100, 200])
-    expect(cuadros[0].blob).toBeDefined()
+    expect(cuadros[0].tieneBlob).toBe(true)
+    expect((cuadros[0] as unknown as { blob?: Blob }).blob).toBeUndefined()
     expect(await contarCuadros(ID)).toBe(2)
     expect(await contarCuadros('otro')).toBe(1)
 
     await marcarCuadro(id, 'subida', 'uid/rec/cuadro-200-cuadro.jpg')
 
     expect(await contarCuadros(ID, 'pendiente')).toBe(1)
+    expect(await contarCuadros(ID, 'subida')).toBe(1)
     const subido = (await listarCuadros(ID, 'subida'))[0]
     expect(subido.t).toBe(200)
     expect(subido.ruta).toBe('uid/rec/cuadro-200-cuadro.jpg')
+  })
+
+  test('listarCuadrosPendientes carga el blob y respeta el límite del lote', async () => {
+    await guardarCuadro(cuadro(100))
+    await guardarCuadro(cuadro(200))
+    await guardarCuadro(cuadro(300))
+
+    const lote = await listarCuadrosPendientes(ID, 2)
+
+    expect(lote).toHaveLength(2)
+    expect(lote.map((c) => c.t)).toEqual([100, 200])
+    // `fake-indexeddb` en jsdom no clona el `Blob` como un browser real (queda
+    // como objeto plano), así que acá solo se comprueba que viajó algo: el
+    // contrato real (Blob de verdad) lo valida el navegador en producción.
+    expect(lote[0].blob).toBeDefined()
   })
 
   test('borrarCuadrosSubidos libera solo los blobs de los ya subidos', async () => {
@@ -215,10 +278,36 @@ describe('base local', () => {
     expect(await borrarCuadrosSubidos(ID)).toBe(1)
 
     const cuadros = await listarCuadros(ID)
-    expect(cuadros.find((c) => c.t === 100)?.blob).toBeUndefined()
-    expect(cuadros.find((c) => c.t === 200)?.blob).toBeDefined()
+    expect(cuadros.find((c) => c.t === 100)?.tieneBlob).toBe(false)
+    expect(cuadros.find((c) => c.t === 200)?.tieneBlob).toBe(true)
     // La fila queda: sigue contando como capturado.
     expect(await contarCuadros(ID)).toBe(2)
+  })
+
+  test('marcarCuadrosEnError deja los pendientes en error y libera sus blobs', async () => {
+    await guardarCuadro(cuadro(100))
+    await guardarCuadro(cuadro(200))
+
+    expect(await marcarCuadrosEnError(ID)).toBe(2)
+
+    const cuadros = await listarCuadros(ID)
+    expect(cuadros.every((c) => c.estadoSubida === 'error')).toBe(true)
+    expect(cuadros.every((c) => c.tieneBlob === false)).toBe(true)
+  })
+
+  test('migra los blobs de v4 a v5: la fila queda sin blob y el blob se mueve al store nuevo', async () => {
+    await crearBaseV4ConCuadro()
+
+    const cuadros = await listarCuadros(ID)
+    expect(cuadros).toHaveLength(1)
+    expect(cuadros[0].tieneBlob).toBe(true)
+    expect((cuadros[0] as unknown as { blob?: Blob }).blob).toBeUndefined()
+
+    const pendientes = await listarCuadrosPendientes(ID, 10)
+    expect(pendientes).toHaveLength(1)
+    // Ídem: en este entorno de test el blob no clona como instancia real, pero
+    // el punto de la migración es que se movió (no quedó en la fila vieja).
+    expect(pendientes[0].blob).toBeDefined()
   })
 
   test('la cola de cuadros no reinicia los intentos y se puede borrar', async () => {

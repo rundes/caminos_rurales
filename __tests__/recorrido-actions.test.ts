@@ -17,6 +17,9 @@ type Mutacion = {
 interface Consulta extends PromiseLike<Resultado> {
   select(...args: unknown[]): Consulta
   eq(...args: unknown[]): Consulta
+  neq(...args: unknown[]): Consulta
+  is(...args: unknown[]): Consulta
+  not(...args: unknown[]): Consulta
   in(...args: unknown[]): Consulta
   gte(...args: unknown[]): Consulta
   order(...args: unknown[]): Consulta
@@ -67,6 +70,13 @@ function tieneMetodo(ops: Operacion[], metodo: string): boolean {
   return ops.some((o) => o.metodo === metodo)
 }
 
+/**
+ * Si `false`, simula que otro envío concurrente ya reclamó el procesamiento
+ * del recorrido (ver `reclamarProcesamiento`): el `update ... is procesado_at
+ * null` no afecta ninguna fila.
+ */
+let reclamoGanado = true
+
 function resolver(tabla: string, ops: Operacion[]): Resultado {
   const cols = columnas(ops)
   if (tabla === 'perfiles') return { data: db.perfil, error: null }
@@ -112,6 +122,14 @@ function resolverConsulta(cliente: 'usuario' | 'admin', tabla: string, ops: Oper
       valores: mutacion.args[0],
       filtros: ops.filter((o) => o.metodo === 'eq').map((o) => o.args),
     })
+    // `reclamarProcesamiento`: update ... .is('procesado_at', null).select('id').
+    // En este harness el reclamo siempre gana: solo se llama cuando el propio
+    // código ya comprobó que `procesado_at` es null (ver `finalizarRecorrido`).
+    if (mutacion.metodo === 'update' && tabla === 'recorridos' && tieneMetodo(ops, 'is') && tieneMetodo(ops, 'select')) {
+      if (!reclamoGanado) return { data: [], error: null }
+      const idFiltro = ops.find((o) => o.metodo === 'eq' && o.args[0] === 'id')
+      return { data: [{ id: idFiltro?.args[1] }], error: null }
+    }
     return { data: null, error: null }
   }
   return resolver(tabla, ops)
@@ -126,6 +144,9 @@ function crearTabla(cliente: 'usuario' | 'admin', tabla: string): Consulta {
   const consulta: Consulta = {
     select: (...args) => registrar('select', args),
     eq: (...args) => registrar('eq', args),
+    neq: (...args) => registrar('neq', args),
+    is: (...args) => registrar('is', args),
+    not: (...args) => registrar('not', args),
     in: (...args) => registrar('in', args),
     gte: (...args) => registrar('gte', args),
     order: (...args) => registrar('order', args),
@@ -149,7 +170,15 @@ function crearTabla(cliente: 'usuario' | 'admin', tabla: string): Consulta {
 }
 
 const getUser = vi.fn()
-const rpc = vi.fn(async () => ({ data: db.coberturaMunicipio, error: null }))
+/** Cupos concedidos por defecto: los tests de cupo agotado lo pisan a `false`. */
+const cuposConcedidos: Record<string, boolean> = { subidas: true, recorridos: true }
+const rpc = vi.fn(async (fn: string, args?: Record<string, unknown>) => {
+  if (fn === 'consumir_cupo') {
+    const tipo = String(args?.p_tipo)
+    return { data: cuposConcedidos[tipo] ?? true, error: null }
+  }
+  return { data: db.coberturaMunicipio, error: null }
+})
 
 const clienteUsuario = {
   auth: { getUser },
@@ -170,6 +199,7 @@ const crearClienteAdmin = vi.fn(() => ({
 vi.mock('@/lib/supabase/server', () => ({ crearClienteServidor: async () => clienteUsuario }))
 vi.mock('@/lib/supabase/admin', () => ({ crearClienteAdmin }))
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }))
+vi.mock('@/lib/cache', () => ({ revalidarMunicipio: vi.fn() }))
 
 const prepararSubidaProveedor = vi.fn()
 vi.mock('@/lib/almacenamiento', () => ({
@@ -262,8 +292,11 @@ beforeEach(() => {
   mutaciones.length = 0
   tablasUsuario.length = 0
   tablasAdmin.length = 0
-  delete erroresInsert.recorridos
-  delete alInsertar.recorridos
+  for (const tabla of Object.keys(erroresInsert)) delete erroresInsert[tabla]
+  for (const tabla of Object.keys(alInsertar)) delete alInsertar[tabla]
+  cuposConcedidos.subidas = true
+  cuposConcedidos.recorridos = true
+  reclamoGanado = true
   getUser.mockResolvedValue({ data: { user: { id: 'u1' } } })
   db.perfil = { municipio_id: 'maipu' }
   db.recorridoExistente = null
@@ -383,7 +416,7 @@ describe('finalizarRecorrido', () => {
             latitud: 0,
             longitud: 0.005,
             descripcion: 'Bache profundo',
-            evidencia: { ruta: 'u1/r1/foto.jpg', tipo: 'imagen' },
+            evidencia: { ruta: `u1/${ID_RECORRIDO}/foto.jpg`, tipo: 'imagen' },
           },
           {
             id: 'cccccccc-0000-4000-8000-000000000003',
@@ -391,7 +424,7 @@ describe('finalizarRecorrido', () => {
             severidad: 'baja',
             latitud: 0,
             longitud: 0.006,
-            evidencia: { ruta: 'u1/r1/clip.mp4', tipo: 'video' },
+            evidencia: { ruta: `u1/${ID_RECORRIDO}/clip.mp4`, tipo: 'video' },
           },
         ],
       }),
@@ -408,7 +441,7 @@ describe('finalizarRecorrido', () => {
         latitud: 0,
         longitud: 0.005,
         descripcion: 'Bache profundo',
-        url_evidencia_imagen: 'u1/r1/foto.jpg',
+        url_evidencia_imagen: `u1/${ID_RECORRIDO}/foto.jpg`,
         url_evidencia_video: null,
       },
       {
@@ -420,7 +453,7 @@ describe('finalizarRecorrido', () => {
         longitud: 0.006,
         descripcion: null,
         url_evidencia_imagen: null,
-        url_evidencia_video: 'u1/r1/clip.mp4',
+        url_evidencia_video: `u1/${ID_RECORRIDO}/clip.mp4`,
       },
     ])
     // 20 por km nuevos + 5 por cada observación con evidencia
@@ -471,17 +504,79 @@ describe('finalizarRecorrido', () => {
       filas: [{ tramo_id: 'w1', recorrido_id: ID_RECORRIDO, usuario_id: 'u1' }],
     })
     expect(escrituraDe('puntos_eventos')).toBeDefined()
-    // idempotencia: borra los eventos previos de este recorrido antes de insertar
+    // idempotencia: upsert por (recorrido_id, motivo) + borrado de los motivos que ya no aplican
     expect(mutacionDe('puntos_eventos', 'delete')).toMatchObject({
       cliente: 'admin',
       filtros: [['recorrido_id', ID_RECORRIDO]],
     })
-    // sello final
+    // sello: reclamado *antes* de procesar (ver `reclamarProcesamiento`)
     expect(mutacionDe('recorridos', 'update')).toMatchObject({
       cliente: 'admin',
       valores: { procesado_at: expect.any(String) },
       filtros: [['id', ID_RECORRIDO]],
     })
+  })
+
+  test('si otro envío concurrente ya reclamó el procesamiento, devuelve el resumen sin reprocesar', async () => {
+    db.recorridoExistente = { id: ID_RECORRIDO, usuario_id: 'u1', km: 4.2, procesado_at: null }
+    db.coberturaDelRecorrido = [{ tramo_id: 'w1' }]
+    db.coberturaDeEsosTramos = [
+      { tramo_id: 'w1', recorrido_id: ID_RECORRIDO, created_at: '2026-09-03T11:00:00Z' },
+    ]
+    db.puntosDelRecorrido = [{ puntos: 20 }]
+    reclamoGanado = false
+
+    const r = await finalizarRecorrido(payload())
+
+    expect(r.ok && r.data.puntos).toBe(20)
+    // no reprocesa: nada de cobertura, puntos o sensores se vuelve a escribir
+    expect(escrituraDe('cobertura_tramos')).toBeUndefined()
+    expect(escrituraDe('puntos_eventos')).toBeUndefined()
+    expect(escrituraDe('muestras_sensor')).toBeUndefined()
+  })
+
+  test('si el procesamiento falla después de reclamar, libera el sello para poder reintentar', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    erroresInsert.cobertura_tramos = { message: 'boom' }
+
+    const r = await finalizarRecorrido(payload())
+
+    expect(r).toEqual({ ok: false, error: expect.stringMatching(/no se pudo guardar/i) })
+    const sellos = mutacionesDe('recorridos', 'update')
+    // primero reclama (sella con un timestamp)...
+    expect(sellos[0]).toMatchObject({
+      cliente: 'admin',
+      valores: { procesado_at: expect.any(String) },
+      filtros: [['id', ID_RECORRIDO]],
+    })
+    // ...y al fallar el procesamiento libera el sello para un reintento
+    expect(sellos[1]).toMatchObject({
+      cliente: 'admin',
+      valores: { procesado_at: null },
+      filtros: [['id', ID_RECORRIDO]],
+    })
+    spy.mockRestore()
+  })
+
+  test('sin cupo de recorridos, un recorrido nuevo se rechaza en forma definitiva y no escribe nada', async () => {
+    cuposConcedidos.recorridos = false
+    const r = await finalizarRecorrido(payload())
+    expect(r).toEqual({
+      ok: false,
+      error: expect.stringMatching(/máximo de recorridos/i),
+      definitivo: true,
+    })
+    expect(escrituras).toEqual([])
+    expect(mutaciones).toEqual([])
+  })
+
+  test('una reentrega (recorrido ya existente) no vuelve a consumir cupo de recorridos', async () => {
+    db.recorridoExistente = { id: ID_RECORRIDO, usuario_id: 'u1', km: 4.2, procesado_at: null }
+    cuposConcedidos.recorridos = false
+
+    const r = await finalizarRecorrido(payload())
+
+    expect(r.ok).toBe(true)
   })
 
   test('carrera de insercion: un 23505 se trata como recorrido existente', async () => {
@@ -853,6 +948,31 @@ describe('prepararSubida', () => {
     expect(spy).toHaveBeenCalledWith('[recorrido]', expect.any(Error))
     spy.mockRestore()
   })
+
+  test('sin cupo de subidas, se rechaza en forma definitiva sin pedir la URL firmada', async () => {
+    cuposConcedidos.subidas = false
+    const r = await prepararSubida(ID_RECORRIDO, 'foto.jpg', 'image/jpeg')
+    expect(r).toEqual({
+      ok: false,
+      error: expect.stringMatching(/máximo de subidas/i),
+      definitivo: true,
+    })
+    expect(prepararSubidaProveedor).not.toHaveBeenCalled()
+  })
+
+  test('rechaza un observacionId con caracteres fuera de lo permitido (antitrampa de ruta)', async () => {
+    const r = await prepararSubida(ID_RECORRIDO, 'foto.jpg', 'image/jpeg', '../../otro/foto')
+    expect(r).toEqual({ ok: false, error: expect.stringMatching(/identificador de observaci/i) })
+    expect(prepararSubidaProveedor).not.toHaveBeenCalled()
+  })
+
+  test('acepta un observacionId válido y lo usa en la ruta', async () => {
+    prepararSubidaProveedor.mockResolvedValue(DESTINO)
+    const r = await prepararSubida(ID_RECORRIDO, 'foto.jpg', 'image/jpeg', 'cuadro-123')
+    expect(r.ok).toBe(true)
+    const [ruta] = prepararSubidaProveedor.mock.calls[0]
+    expect(ruta).toBe(`u1/${ID_RECORRIDO}/cuadro-123-foto.jpg`)
+  })
 })
 
 describe('registrarCuadros', () => {
@@ -914,16 +1034,14 @@ describe('registrarCuadros', () => {
     })
   })
 
-  test('los puntos por cuadros los escribe el admin y reemplazan a los previos', async () => {
+  test('los puntos por cuadros los escribe el admin con upsert por (recorrido_id, motivo)', async () => {
     recorridoPropio()
     db.cuadrosDelRecorrido = 30
 
     await registrarCuadros(lote())
 
-    expect(mutacionDe('puntos_eventos', 'delete')).toMatchObject({
-      cliente: 'admin',
-      filtros: [['recorrido_id', ID_RECORRIDO], ['motivo', 'cuadros']],
-    })
+    // el upsert pisa el evento anterior: no hace falta un borrado aparte.
+    expect(mutacionDe('puntos_eventos', 'delete')).toBeUndefined()
     expect(escrituraDe('puntos_eventos')).toMatchObject({
       cliente: 'admin',
       filas: {
@@ -933,6 +1051,7 @@ describe('registrarCuadros', () => {
         motivo: 'cuadros',
         puntos: 3,
       },
+      opciones: { onConflict: 'recorrido_id,motivo' },
     })
     expect(tablasUsuario).not.toContain('puntos_eventos')
   })

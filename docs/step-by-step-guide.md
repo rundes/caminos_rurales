@@ -88,3 +88,10 @@
 
 ## Fase 12b (futura)
 - [ ] Clasificación de superficie y detección de baches con modelo entrenado sobre los cuadros; difuminado de caras/patentes.
+
+## Fase 13: Endurecimiento (ola 1, rama `feat/hardening`)
+- [x] A. Seguridad de datos (migración `0008_seguridad.sql`): perfiles inmutables desde la app (rol, municipio_id, id) con `revoke update` + trigger `perfiles_no_escalar`; altas de `recorridos` acotadas al municipio propio y sin update desde la app; altas de `fallas_deteccion` solo con `origen = 'manual'`; `search_path` fijo en todas las funciones `security definer`; códigos de invitación por municipio (`codigos_invitacion`, `MAIPU-2027`) y pantalla `/pendiente`; índices faltantes.
+- [x] B. Servidor: validación, cupos, carrera (migración `0009_cupos.sql`): `filaObservacion` valida el prefijo `{uid}/{recorridoId}/`; `observacionId` uuid o `cuadro-<t>` con regex; puntos por cuadros pasan por `limitarPorTopeDiario`; reclamo atómico de `procesado_at` contra la carrera de finalización; cupos diarios (`uso_diario`, `consumir_cupo`: 1500 subidas, 30 recorridos); `.limit()` en consultas sin tope; punto único por `(recorrido_id, motivo)`.
+- [x] C. Cliente: memoria, pérdida de datos, grabación: IndexedDB v5 con store `blobs` separado e índice compuesto `[recorridoId, estadoSubida]`; nav inferior bloqueada durante la grabación con confirmación al salir; recorridos en error visibles con "Reintentar"; Douglas-Peucker con pila explícita.
+- [x] D. Lectura y mapa: `Promise.all` en `mapa/page.tsx`; `unstable_cache` por `municipio:<slug>` (`lib/cache.ts`) con `revalidateTag`; cuadros cargados solo al activar el toggle; `preferCanvas`, `useMemo`/`React.memo` en capas; headers de seguridad y cache inmutable (`next.config.ts`); SW afinado.
+- [x] E. Operación: `.github/workflows/ci.yml` (tipos, lint, tests con cobertura, build) y `smoke.yml` manual; umbrales de cobertura en `vitest.config.mts`; `lib/env.ts` (zod, `envServidor`/`envPublico`) cableado en los clientes de Supabase y el proveedor de almacenamiento; `engines`/`.nvmrc`; `scripts/setup-entorno.mjs` y `scripts/borrar-usuario.mjs`; `CHANGELOG.md`.
