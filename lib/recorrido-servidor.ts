@@ -13,6 +13,7 @@ import { normalizarMuestra } from './sensores/calidad'
 import type { CalidadSegmento } from './sensores/tipos'
 import type { crearClienteAdmin } from './supabase/admin'
 import type { crearClienteServidor } from './supabase/server'
+import { derivarCortesDeMuestras } from './track'
 import type { Observacion, RecorridoPayload } from './validaciones'
 
 export type ClienteServidor = Awaited<ReturnType<typeof crearClienteServidor>>
@@ -520,13 +521,18 @@ export async function procesarRecorrido(
   const particion = await guardarCobertura(admin, ctx, datos, tramos)
   await guardarObservaciones(supabase, ctx, datos)
   const sensores = await guardarSensores(supabase, ctx, datos, tramos)
+  // Muestras normalizadas por el servidor (la calidad declarada por el
+  // cliente no cuenta) y con los mismos cortes (tiempo + distancia) que ya
+  // aplicó `guardarSensores` para `kmPorCalidad`: el premio por sensores no
+  // puede puentear una pausa que los km de calidad ya respetan.
+  const muestras = (datos.muestras ?? []).map(normalizarMuestra)
+  const cortesSensor = derivarCortesDeMuestras(muestras)
   const puntos = await guardarPuntos(
     admin,
     ctx,
     particion,
     contarConEvidencia(datos.observaciones),
-    // Muestras normalizadas por el servidor: la calidad declarada por el cliente no cuenta.
-    { kmSensor: kmConSensores((datos.muestras ?? []).map(normalizarMuestra), km), kmRecorrido: km },
+    { kmSensor: kmConSensores(muestras, km, cortesSensor), kmRecorrido: km },
   )
   const filas = await coberturaPorLocalidad(supabase, ctx.municipio)
   const insignias = await guardarInsignias(admin, ctx, filas)

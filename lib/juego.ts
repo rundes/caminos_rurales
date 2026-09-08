@@ -1,6 +1,7 @@
 import { distanciaKm } from './geo'
 import type { MuestraSensor } from './sensores/tipos'
 import { FRACCION_SENSOR_MINIMA } from './sensores/umbrales'
+import { partirEnSegmentos } from './track'
 
 export const PUNTOS_KM_NUEVO = 10
 export const PUNTOS_KM_REPETIDO = 2
@@ -47,17 +48,28 @@ export type MuestraCobertura = Pick<MuestraSensor, 'lat' | 'lng' | 'calidad'>
  * ella; solo cuentan las muestras con calidad estimada. El resultado se recorta
  * a los km del recorrido: las muestras y el track se miden por separado y el
  * ruido del GPS no puede inventar kilómetros.
+ *
+ * Con `cortes` (índices, ver `partirEnSegmentos` en `lib/track.ts`) no suma
+ * distancia a través de un corte: una pausa o interrupción de la grabación
+ * tampoco puede inflar el premio por sensores puenteando el hueco con una
+ * recta, la misma regla que ya aplica `kmDeTrack` para los km del track. Los
+ * cortes los deriva quien llama (`derivarCortesDeMuestras`, mismo umbral que
+ * usa `kmDeTrack`) — acá no se recalculan para no tener dos definiciones de
+ * "corte" que puedan desalinearse.
  */
 export function kmConSensores(
   muestras: readonly MuestraCobertura[],
   kmRecorrido: number,
+  cortes: readonly number[] = [],
 ): number {
   if (muestras.length < 2 || kmRecorrido <= 0) return 0
 
   let km = 0
-  for (let i = 1; i < muestras.length; i += 1) {
-    if (muestras[i].calidad === 'sin_dato') continue
-    km += distanciaKm(muestras[i - 1], muestras[i])
+  for (const segmento of partirEnSegmentos(muestras, cortes)) {
+    for (let i = 1; i < segmento.length; i += 1) {
+      if (segmento[i].calidad === 'sin_dato') continue
+      km += distanciaKm(segmento[i - 1], segmento[i])
+    }
   }
   return Math.min(km, kmRecorrido)
 }

@@ -6,6 +6,7 @@ import { normalizarMuestra, severidadDeImpacto } from './sensores/calidad'
 import type { CalidadSegmento } from './sensores/tipos'
 import { MAX_MUESTRAS } from './sensores/umbrales'
 import type { Severidad } from './tipos'
+import { derivarCortesDeMuestras, partirEnSegmentos } from './track'
 import type { ImpactoPayload, MuestraPayload, RecorridoPayload } from './validaciones'
 
 /** Fila de `muestras_sensor`: un segmento agregado ya asignado a un tramo. */
@@ -48,9 +49,19 @@ export type ResumenSensores = {
 /** Postgrest no acepta inserciones enormes de una sola vez. */
 const LOTE_MUESTRAS = 500
 
-/** Km recorridos con cada calidad estimada. */
+/**
+ * Km recorridos con cada calidad estimada.
+ *
+ * Con `cortes` (índices, ver `partirEnSegmentos` en `lib/track.ts`) no suma
+ * distancia a través de un corte: la misma regla que usa `kmDeTrack` para
+ * los km del track y `kmConSensores` para el premio por sensores, así una
+ * pausa o interrupción tampoco infla (ni reparte entre calidades) km que no
+ * se recorrieron. Los cortes los deriva quien llama
+ * (`derivarCortesDeMuestras`).
+ */
 export function kmPorCalidad(
   muestras: readonly Pick<MuestraPayload, 'lat' | 'lng' | 'calidad'>[],
+  cortes: readonly number[] = [],
 ): Record<CalidadSegmento, number> {
   const acumulado: Record<CalidadSegmento, number> = {
     sin_dato: 0,
@@ -61,8 +72,10 @@ export function kmPorCalidad(
   }
 
   // Cada muestra cierra un segmento: aporta el tramo que va de la anterior a ella.
-  for (let i = 1; i < muestras.length; i += 1) {
-    acumulado[muestras[i].calidad] += distanciaKm(muestras[i - 1], muestras[i])
+  for (const segmento of partirEnSegmentos(muestras, cortes)) {
+    for (let i = 1; i < segmento.length; i += 1) {
+      acumulado[segmento[i].calidad] += distanciaKm(segmento[i - 1], segmento[i])
+    }
   }
 
   return {
@@ -182,7 +195,12 @@ export async function guardarSensores(
     if (error) throw new Error(error.message)
   }
 
-  return { kmPorCalidad: kmPorCalidad(muestras), impactos: impactos.length }
+  // Antitrampa: cada muestra trae su propio timestamp, así que se derivan los
+  // mismos cortes (tiempo + distancia, mismos umbrales) que usa el track del
+  // recorrido — una pausa o interrupción no puede puentearse con una recta
+  // tampoco acá (ver `derivarCortesDeMuestras`, `lib/track.ts`).
+  const cortes = derivarCortesDeMuestras(muestras)
+  return { kmPorCalidad: kmPorCalidad(muestras, cortes), impactos: impactos.length }
 }
 
 /** Reconstruye el resumen de sensores de un recorrido ya procesado. */
@@ -192,7 +210,7 @@ export async function sensoresGuardados(
 ): Promise<ResumenSensores> {
   const { data: muestras, error } = await admin
     .from('muestras_sensor')
-    .select('latitud, longitud, calidad')
+    .select('t, latitud, longitud, calidad')
     .eq('recorrido_id', recorridoId)
     .order('t', { ascending: true })
     .limit(MAX_MUESTRAS)
@@ -206,9 +224,11 @@ export async function sensoresGuardados(
   if (errorImpactos) throw new Error(errorImpactos.message)
 
   const puntos = (muestras ?? []).map((m) => ({
+    t: new Date(m.t).getTime(),
     lat: Number(m.latitud),
     lng: Number(m.longitud),
     calidad: m.calidad,
   }))
-  return { kmPorCalidad: kmPorCalidad(puntos), impactos: (impactos ?? []).length }
+  const cortes = derivarCortesDeMuestras(puntos)
+  return { kmPorCalidad: kmPorCalidad(puntos, cortes), impactos: (impactos ?? []).length }
 }

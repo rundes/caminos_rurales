@@ -1,11 +1,15 @@
 import { describe, expect, test } from 'vitest'
 import {
   derivarCortes,
+  derivarCortesDeMuestras,
+  derivarCortesPorDistancia,
   evaluarPlausibilidad,
   filtrarPunto,
   kmDeTrack,
   partirEnSegmentos,
   simplificar,
+  unionCortes,
+  UMBRAL_INTERRUPCION_DISTANCIA_M,
   velocidadMaximaKmh,
   velocidadMediaKmh,
   type PuntoGps,
@@ -265,6 +269,119 @@ describe('derivarCortes', () => {
   test('track vacío o de un solo punto no genera cortes', () => {
     expect(derivarCortes([])).toEqual([])
     expect(derivarCortes([punto(LAT_BASE, -60, 0)])).toEqual([])
+  })
+})
+
+describe('derivarCortesPorDistancia', () => {
+  test('sin saltos grandes no genera ningún corte', () => {
+    const puntos = [punto(LAT_BASE, -60), punto(LAT_BASE + offsetLatKm(0.1), -60), punto(LAT_BASE + offsetLatKm(0.2), -60)]
+    expect(derivarCortesPorDistancia(puntos)).toEqual([])
+  })
+
+  test('un salto por encima del umbral (5 km) genera un corte en el índice del punto siguiente', () => {
+    const puntos = [
+      punto(LAT_BASE, -60),
+      punto(LAT_BASE + offsetLatKm(1), -60),
+      punto(LAT_BASE + offsetLatKm(1 + 6), -60), // salto de 6 km: por encima del umbral
+    ]
+    expect(derivarCortesPorDistancia(puntos)).toEqual([2])
+  })
+
+  test('un salto apenas debajo del umbral no corta; apenas por encima sí', () => {
+    const base = punto(LAT_BASE, -60)
+    const umbralKm = UMBRAL_INTERRUPCION_DISTANCIA_M / 1000
+    const debajo = punto(LAT_BASE + offsetLatKm(umbralKm - 0.1), -60)
+    const encima = punto(LAT_BASE + offsetLatKm(umbralKm + 0.1), -60)
+    expect(derivarCortesPorDistancia([base, debajo])).toEqual([])
+    expect(derivarCortesPorDistancia([base, encima])).toEqual([1])
+  })
+
+  test('respeta un umbral personalizado', () => {
+    const puntos = [punto(LAT_BASE, -60), punto(LAT_BASE + offsetLatKm(0.5), -60)]
+    expect(derivarCortesPorDistancia(puntos, 300)).toEqual([1]) // 500 m > 300 m
+    expect(derivarCortesPorDistancia(puntos, 600)).toEqual([]) // 500 m < 600 m
+  })
+
+  test('track vacío o de un solo punto no genera cortes', () => {
+    expect(derivarCortesPorDistancia([])).toEqual([])
+    expect(derivarCortesPorDistancia([punto(LAT_BASE, -60)])).toEqual([])
+  })
+
+  test('un camino recto simplificado (Douglas-Peucker) de varios km no se corta de más', () => {
+    // Un camino rural recto de 3 km, con puntos crudos cada 20 m (espaciado
+    // típico a velocidad de relevamiento) y sin ningún desvío lateral: DP con
+    // la tolerancia real de subida (10 m, `TOLERANCIA_SIMPLIFICADO_M` en
+    // `lib/local/payload.ts`) lo colapsa a sólo dos vértices, así que el
+    // salto entre ellos (los 3 km enteros) queda por debajo del umbral de
+    // corte por distancia (5 km) y no se corta: un tramo recto real no se
+    // subcuenta como si fuera una pausa.
+    const CANTIDAD = 151
+    const crudos: PuntoGps[] = Array.from({ length: CANTIDAD }, (_, i) => punto(LAT_BASE + offsetLatKm(i * 0.02), -60, i))
+
+    const simplificado = simplificar(crudos, 10)
+
+    expect(simplificado).toHaveLength(2) // colineal: DP conserva sólo los extremos
+    expect(derivarCortesPorDistancia(simplificado)).toEqual([])
+  })
+})
+
+describe('unionCortes', () => {
+  test('una sola lista se devuelve ordenada', () => {
+    expect(unionCortes([3, 1, 2])).toEqual([1, 2, 3])
+  })
+
+  test('combina varias listas sin duplicar índices', () => {
+    expect(unionCortes([2, 5], [5, 8], [1])).toEqual([1, 2, 5, 8])
+  })
+
+  test('listas vacías no aportan nada', () => {
+    expect(unionCortes([], [3], [])).toEqual([3])
+    expect(unionCortes([], [])).toEqual([])
+    expect(unionCortes()).toEqual([])
+  })
+})
+
+describe('derivarCortesDeMuestras', () => {
+  test('un hueco de tiempo sin salto de distancia igual corta', () => {
+    const puntos = [
+      { lat: LAT_BASE, lng: -60, t: 0 },
+      { lat: LAT_BASE, lng: -60, t: 31_000 }, // 31 s: por encima del umbral de tiempo
+    ]
+    expect(derivarCortesDeMuestras(puntos)).toEqual([1])
+  })
+
+  test('un salto de distancia sin hueco de tiempo igual corta', () => {
+    const puntos = [
+      { lat: LAT_BASE, lng: -60, t: 0 },
+      { lat: LAT_BASE + offsetLatKm(6), lng: -60, t: 1_000 }, // 6 km, 1 s: por encima del umbral de distancia
+    ]
+    expect(derivarCortesDeMuestras(puntos)).toEqual([1])
+  })
+
+  test('sin ninguna de las dos señales no corta', () => {
+    const puntos = [
+      { lat: LAT_BASE, lng: -60, t: 0 },
+      { lat: LAT_BASE + offsetLatKm(0.1), lng: -60, t: 5_000 },
+    ]
+    expect(derivarCortesDeMuestras(puntos)).toEqual([])
+  })
+
+  test('la unión no duplica un índice que cortarían las dos señales a la vez', () => {
+    const puntos = [
+      { lat: LAT_BASE, lng: -60, t: 0 },
+      { lat: LAT_BASE + offsetLatKm(6), lng: -60, t: 60_000 }, // hueco de tiempo Y de distancia
+    ]
+    expect(derivarCortesDeMuestras(puntos)).toEqual([1])
+  })
+
+  test('respeta umbrales personalizados', () => {
+    const puntos = [
+      { lat: LAT_BASE, lng: -60, t: 0 },
+      { lat: LAT_BASE + offsetLatKm(0.5), lng: -60, t: 2_000 },
+    ]
+    expect(derivarCortesDeMuestras(puntos, { umbralMs: 1_000, umbralDistanciaM: 10_000 })).toEqual([1]) // corta por tiempo
+    expect(derivarCortesDeMuestras(puntos, { umbralMs: 10_000, umbralDistanciaM: 300 })).toEqual([1]) // corta por distancia
+    expect(derivarCortesDeMuestras(puntos, { umbralMs: 10_000, umbralDistanciaM: 10_000 })).toEqual([])
   })
 })
 

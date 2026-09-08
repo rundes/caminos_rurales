@@ -178,12 +178,18 @@ try {
   // 5b. km de un recorrido con una pausa grande entre dos clusters de puntos:
   // `finalizarRecorrido` (Server Action, no accesible desde este script, ver
   // encabezado) calcula `recorridos.km` sumando distancia dentro de cada
-  // segmento del track y nunca a través de un corte (`kmDeTrack`/
-  // `derivarCortes`, `lib/track.ts`; cubierto en detalle por
-  // `__tests__/track.test.ts` y `__tests__/recorrido-actions.test.ts`). Acá
-  // se verifica la mitad que sí es alcanzable desde este script: que la base
-  // guarda y devuelve fielmente el km segmentado (no el bridgeado) que ese
-  // cálculo produciría para un track con una pausa grande entre dos clusters.
+  // segmento del track y nunca a través de un corte. Deriva esos cortes de
+  // la unión de dos señales (`unionCortes`, `lib/track.ts`): por tiempo
+  // (`derivarCortes`, timestamps de `datos.puntos`, sólo si vienen alineados
+  // con `track`) y por distancia (`derivarCortesPorDistancia`, directo sobre
+  // la geometría de `track`, sin depender de `puntos` en absoluto — la
+  // defensa contra un payload que manda `puntos` recortado, desalineado o
+  // ausente para esquivar el corte por tiempo). Todo esto está cubierto en
+  // detalle por `__tests__/track.test.ts` y `__tests__/recorrido-actions.test.ts`.
+  // Acá se verifica la mitad que sí es alcanzable desde este script: que la
+  // base guarda y devuelve fielmente el km segmentado (no el bridgeado) que
+  // ese cálculo produciría para un track con una pausa grande entre dos
+  // clusters.
   const haversineKm = (a, b) => {
     const R = 6371
     const rad = (g) => (g * Math.PI) / 180
@@ -214,6 +220,28 @@ try {
     kmBridgeado > kmSegmentado * 10,
     'el track de control salta ~55 km entre clusters (bridgeado >> segmentado)',
     `segmentado=${kmSegmentado} bridgeado=${kmBridgeado}`,
+  )
+
+  // El caso que cierra el hueco del fallback: si el `puntos` que manda el
+  // cliente viene recortado, desalineado o directamente ausente, la señal de
+  // tiempo (`derivarCortes`) no aporta nada — pero el salto entre clusters
+  // sigue siendo, geométricamente, muchísimo más grande que el umbral de
+  // corte por distancia (`UMBRAL_INTERRUPCION_DISTANCIA_M`, 5 km,
+  // `lib/track.ts`), así que `derivarCortesPorDistancia` lo corta igual, sin
+  // necesitar ningún timestamp. Y el salto normal dentro de cada cluster
+  // (~1,1 km) queda cómodamente por debajo, así que no se corta de más.
+  const UMBRAL_DISTANCIA_KM = 5
+  const saltoEntreClustersKm = haversineKm(clusterA[1], clusterB[0])
+  const saltoDentroDeClusterKm = haversineKm(clusterA[0], clusterA[1])
+  ok(
+    saltoEntreClustersKm > UMBRAL_DISTANCIA_KM,
+    'el salto entre clusters (~55 km) supera el umbral de corte por distancia (5 km): se cortaría igual sin `puntos`',
+    `saltoEntreClustersKm=${saltoEntreClustersKm.toFixed(3)}`,
+  )
+  ok(
+    saltoDentroDeClusterKm < UMBRAL_DISTANCIA_KM,
+    'el salto normal dentro de un cluster (~1,1 km) queda debajo del umbral: no se corta de más',
+    `saltoDentroDeClusterKm=${saltoDentroDeClusterKm.toFixed(3)}`,
   )
 
   const recorridoPausaId = randomUUID()

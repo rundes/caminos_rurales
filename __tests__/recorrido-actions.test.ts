@@ -714,13 +714,18 @@ describe('finalizarRecorrido', () => {
   test('rechaza un recorrido implausible sin escribir ni crear el cliente admin', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
-    // ~1113 km en una hora: velocidad media y km fuera de todo rango
+    // 3 km en 1 minuto (180 km/h): por debajo del umbral de corte por
+    // distancia (5 km, `UMBRAL_INTERRUPCION_DISTANCIA_M`), así que el salto
+    // no se segmenta como si fuera una pausa — sigue siendo un único
+    // segmento, y su velocidad (muy por encima del límite) es lo que dispara
+    // el rechazo por implausibilidad.
     const r = await finalizarRecorrido(
       payload({
         track: [
           [0, 0],
-          [0, 10],
+          [offsetLatKm(3), 0],
         ],
+        fin: '2026-09-03T10:01:00.000Z',
       }),
     )
 
@@ -1005,17 +1010,36 @@ describe('finalizarRecorrido: los km no cruzan una pausa (0012)', () => {
     spy.mockRestore()
   })
 
-  test('si `puntos` no coincide en longitud con `track`, no deriva cortes (usa el track completo, como antes)', async () => {
+  test('si `puntos` no coincide en longitud con `track`, el corte por distancia igual cortea el salto (no bridgea)', async () => {
     const { track, puntos } = trackConPausa()
 
     const r = await finalizarRecorrido(
       payloadConPausa({ track, puntos: puntos.slice(0, -1) }),
     )
 
-    // Sin forma confiable de alinear los índices, el servidor no cortea:
-    // mismo comportamiento (heredado) que si no mandara `puntos` en absoluto.
+    // Sin forma confiable de alinear los índices, la señal de tiempo
+    // (`derivarCortes` sobre `puntos`) no aporta nada — igual que antes. Pero
+    // el corte por distancia (`derivarCortesPorDistancia`) opera directo
+    // sobre `track`, que no depende de `puntos` en absoluto: el salto de
+    // 50 km entre clusters se sigue cortando, así que un payload armado a
+    // mano para esquivar el corte por tiempo desalineando `puntos` no logra
+    // acreditar el salto como si fuera un tramo recorrido.
     expect(r.ok).toBe(true)
-    expect(r.ok && r.data.km).toBeGreaterThan(50)
+    expect(r.ok && r.data.km).toBeCloseTo(3.5, 0)
+    expect(r.ok && r.data.km).toBeLessThan(10)
+  })
+
+  test('sin `puntos` en absoluto, el corte por distancia igual cortea el salto (no bridgea)', async () => {
+    const { track } = trackConPausa()
+
+    const r = await finalizarRecorrido(payloadConPausa({ track, puntos: undefined }))
+
+    // Mismo caso que el anterior, llevado al extremo: ni siquiera hace falta
+    // mandar `puntos` desalineado, alcanza con omitirlo. El corte por
+    // distancia no depende de que el cliente declare nada.
+    expect(r.ok).toBe(true)
+    expect(r.ok && r.data.km).toBeCloseTo(3.5, 0)
+    expect(r.ok && r.data.km).toBeLessThan(10)
   })
 
   test('el km segmentado (no el bridgeado) es el que se usa para el premio por sensores', async () => {
@@ -1045,6 +1069,59 @@ describe('finalizarRecorrido: los km no cruzan una pausa (0012)', () => {
     expect(escrituraDe('puntos_eventos')?.filas).toEqual(
       expect.arrayContaining([expect.objectContaining({ motivo: 'km_sensor' })]),
     )
+  })
+})
+
+describe('finalizarRecorrido: los km de sensores tampoco cruzan una pausa propia', () => {
+  const T0 = 1_756_900_000_000
+
+  test('una pausa en las muestras de sensores (sin pausa en el track) no se bridgea, y el premio usa el km corregido', async () => {
+    // El track (`trackSobreElTramo`) no tiene ninguna pausa: son ~1,112 km
+    // seguidos. Las muestras de sensores, en cambio, sí tienen un hueco real
+    // de tiempo (40 s, por encima de `UMBRAL_INTERRUPCION_MS`) entre 0,002 y
+    // 0,008 — como si el teléfono hubiera perdido el sensor un rato en medio
+    // del recorrido. Sin la corrección, `kmConSensores`/`kmPorCalidad`
+    // sumarían ese salto igual que cualquier otro segmento (~1,112 km, el
+    // 100% del recorrido) y el premio `km_sensor` se otorgaría de sobra. Con
+    // el corte derivado de las propias muestras (`derivarCortesDeMuestras`,
+    // mismo umbral que usa el track), sólo cuentan los dos clusters
+    // (~0,445 km), que quedan por debajo del 50% mínimo (`FRACCION_SENSOR_MINIMA`)
+    // y no otorgan el premio.
+    const muestrasConPausa = [
+      muestra(0, { t: T0 }),
+      muestra(0.002, { t: T0 + 5_000 }),
+      muestra(0.008, { t: T0 + 5_000 + 40_000 }),
+      muestra(0.01, { t: T0 + 5_000 + 40_000 + 5_000 }),
+    ]
+
+    const r = await finalizarRecorrido(payload({ muestras: muestrasConPausa }))
+
+    expect(r.ok).toBe(true)
+    expect(r.ok && r.data.kmPorCalidad.bueno).toBeCloseTo(0.445, 2)
+    expect(r.ok && r.data.puntos).toBe(20) // sólo los 20 de km_nuevos, sin el punto extra de km_sensor
+    expect(escrituraDe('puntos_eventos')?.filas).toEqual([expect.objectContaining({ motivo: 'km_nuevos' })])
+  })
+
+  test('sin esa pausa (mismas muestras, mismo hueco por debajo del umbral) sí se acredita todo y se otorga el premio', async () => {
+    // Control: mismas posiciones, pero el hueco entre 0,002 y 0,008 dura sólo
+    // 10 s (por debajo del umbral): no hay corte, se acredita el recorrido
+    // completo con sensores y el premio se otorga — así se confirma que lo
+    // que evita el premio arriba es el corte, no alguna otra diferencia.
+    const muestrasSinPausa = [
+      muestra(0, { t: T0 }),
+      muestra(0.002, { t: T0 + 5_000 }),
+      muestra(0.008, { t: T0 + 5_000 + 10_000 }),
+      muestra(0.01, { t: T0 + 5_000 + 10_000 + 5_000 }),
+    ]
+
+    const r = await finalizarRecorrido(payload({ muestras: muestrasSinPausa }))
+
+    expect(r.ok).toBe(true)
+    expect(r.ok && r.data.kmPorCalidad.bueno).toBeCloseTo(1.112, 3)
+    expect(escrituraDe('puntos_eventos')?.filas).toEqual([
+      expect.objectContaining({ motivo: 'km_nuevos' }),
+      expect.objectContaining({ motivo: 'km_sensor' }),
+    ])
   })
 })
 

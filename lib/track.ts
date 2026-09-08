@@ -166,6 +166,104 @@ export function derivarCortes(
   return cortes
 }
 
+/**
+ * Umbral de salto de posición entre dos puntos consecutivos que se trata
+ * como una interrupción real, sin importar lo que digan (o dejen de decir)
+ * los timestamps.
+ *
+ * Es la defensa para cuando `derivarCortes` no se puede aplicar: ese cálculo
+ * depende de `datos.puntos` viniendo alineado índice a índice con
+ * `datos.track` (ver `finalizarRecorrido`), y un payload armado a mano puede
+ * mandar `puntos` recortado, reordenado o directamente ausente para evitar
+ * ese corte. La geometría del track, en cambio, siempre está — y siempre
+ * alineada consigo misma —, así que un salto de posición grande entre dos
+ * puntos consecutivos alcanza para desconfiar, tenga o no la grabación un
+ * reloj confiable de por medio.
+ *
+ * El valor tiene que quedar bien por encima del salto más grande que puede
+ * dejar una grabación real entre dos puntos *consecutivos del track subido*
+ * (no del GPS crudo: el track que llega al servidor ya pasó por
+ * `simplificar`, Douglas-Peucker con 10 m de tolerancia — `TOLERANCIA_SIMPLIFICADO_M`
+ * en `lib/local/payload.ts`) y bien por debajo de un salto que sea
+ * inequívocamente una interrupción:
+ * - el grabador ya descarta puntos crudos a menos de 5 m entre sí
+ *   (`filtrarPunto`) y `watchPosition` no reporta mucho más rápido que uno
+ *   por segundo, así que a 60-80 km/h (16,7-22,2 m/s) el punto crudo más
+ *   espaciado ronda los 100-150 m, incluso con lecturas esporádicas;
+ * - Douglas-Peucker puede alejar bastante dos puntos consecutivos si el
+ *   camino es recto por un buen tramo (colapsa lo intermedio dentro de los
+ *   10 m de tolerancia), pero un camino rural real — aunque tenga rectas
+ *   largas — no es geométricamente perfecto: el ruido propio del GPS (unos
+ *   metros) y la curvatura real del trazado hacen que conservar sólo dos
+ *   vértices a lo largo de varios kilómetros seguidos sea la excepción, no
+ *   la regla (ver el test de un tramo recto simplificado en `track.test.ts`);
+ * - un salto fabricado para robar kilómetros, en cambio, tiene que ser
+ *   grande para que valga la pena: los ejemplos de este mismo repositorio
+ *   para simular una pausa real usan saltos de 50-55 km
+ *   (`__tests__/recorrido-actions.test.ts`, `scripts/smoke.mjs`).
+ *
+ * 5 km queda dos órdenes de magnitud por encima del peor espaciado normal
+ * (100-150 m) y diez veces por debajo de esos saltos de referencia: un tramo
+ * recto real de varios kilómetros no se corta de más, pero ningún salto que
+ * aporte kilómetros con valor para un tramposo pasa desapercibido.
+ */
+export const UMBRAL_INTERRUPCION_DISTANCIA_M = 5_000
+
+/**
+ * Deriva los índices de corte de un track a partir de la distancia entre
+ * puntos consecutivos: un salto mayor a `umbralM` es una interrupción real
+ * (ver `UMBRAL_INTERRUPCION_DISTANCIA_M`). A diferencia de `derivarCortes`,
+ * no necesita un array de puntos crudos aparte: opera directo sobre la
+ * geometría que se está sumando (`lat`/`lng`), así que siempre está
+ * alineado consigo mismo — no depende de nada que declare el cliente.
+ */
+export function derivarCortesPorDistancia(
+  puntos: readonly { lat: number; lng: number }[],
+  umbralM: number = UMBRAL_INTERRUPCION_DISTANCIA_M,
+): number[] {
+  const cortes: number[] = []
+  for (let i = 1; i < puntos.length; i += 1) {
+    if (distanciaKm(puntos[i - 1], puntos[i]) * 1000 > umbralM) cortes.push(i)
+  }
+  return cortes
+}
+
+/**
+ * Une varias listas de índices de corte (ver `derivarCortes`/
+ * `derivarCortesPorDistancia`) en una sola, sin duplicados y ordenada —
+ * el formato que espera `partirEnSegmentos`/`kmDeTrack`. Cada señal puede
+ * fallar por separado (sin `puntos` alineados no hay corte por tiempo; un
+ * camino sin saltos no aporta corte por distancia), así que lo que cuenta
+ * como interrupción real es la unión: alcanza con que una sola señal la
+ * detecte.
+ */
+export function unionCortes(...listas: readonly (readonly number[])[]): number[] {
+  const union = new Set<number>()
+  for (const lista of listas) {
+    for (const indice of lista) union.add(indice)
+  }
+  return [...union].sort((a, b) => a - b)
+}
+
+/**
+ * Cortes de un array de muestras que trae su propia posición y su propio
+ * timestamp (una muestra de sensores, por ejemplo): combina la señal de
+ * tiempo (`derivarCortes`) y la de distancia (`derivarCortesPorDistancia`)
+ * sobre el mismo array. A diferencia del track del recorrido —donde el
+ * timestamp viene en `datos.puntos` y la geometría en `datos.track`, dos
+ * arrays que pueden desalinearse—, acá no hace falta reconciliar nada: cada
+ * muestra ya trae las dos señales consigo misma, así que es la misma unión
+ * aplicada a un solo array.
+ */
+export function derivarCortesDeMuestras(
+  puntos: readonly { lat: number; lng: number; t: number }[],
+  opciones: { umbralMs?: number; umbralDistanciaM?: number } = {},
+): number[] {
+  const umbralMs = opciones.umbralMs ?? UMBRAL_INTERRUPCION_MS
+  const umbralDistanciaM = opciones.umbralDistanciaM ?? UMBRAL_INTERRUPCION_DISTANCIA_M
+  return unionCortes(derivarCortes(puntos, umbralMs), derivarCortesPorDistancia(puntos, umbralDistanciaM))
+}
+
 /** Suma de distancias haversine entre puntos consecutivos de un segmento, en km. */
 function kmDeSegmento(puntos: readonly { lat: number; lng: number }[]): number {
   let km = 0

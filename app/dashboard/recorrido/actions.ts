@@ -23,7 +23,7 @@ import {
 } from '@/lib/recorrido-servidor'
 import { crearClienteAdmin } from '@/lib/supabase/admin'
 import { crearClienteServidor } from '@/lib/supabase/server'
-import { derivarCortes, evaluarPlausibilidad, kmDeTrack } from '@/lib/track'
+import { derivarCortes, derivarCortesPorDistancia, evaluarPlausibilidad, kmDeTrack, unionCortes } from '@/lib/track'
 import type { ResultadoAccion } from '@/lib/tipos'
 import { esquemaCuadros, esquemaRecorrido, primerError } from '@/lib/validaciones'
 
@@ -84,17 +84,27 @@ export async function finalizarRecorrido(payload: unknown): Promise<ResultadoRec
 
   // Antitrampa: los cortes del track no salen de lo que declare el cliente
   // (podría ocultar una pausa mandando cortes de menos, o inventar una para
-  // recortar km de más) sino de los timestamps de `datos.puntos`, con el
-  // mismo umbral que usa el watchdog del grabador (`derivarCortes`). Solo se
-  // aplican cuando `puntos` tiene la misma cantidad de elementos que `track`:
-  // es como los arma siempre el cliente real (`armarPayload`, mismo array
-  // simplificado para ambos, así que quedan índice a índice alineados); si no
-  // coinciden no hay forma confiable de mapear un corte de `puntos` a un
-  // índice de `track`, así que se sigue sin cortar (mismo comportamiento que
-  // sin `puntos`, ver la nota de `esquemaRecorrido`).
-  const cortes =
+  // recortar km de más) sino de dos señales que el propio servidor deriva,
+  // y de las que toma la unión (alcanza con que una sola detecte el corte):
+  // - por tiempo (`derivarCortes`), con el mismo umbral que usa el watchdog
+  //   del grabador, a partir de los timestamps de `datos.puntos`. Solo se
+  //   aplica cuando `puntos` tiene la misma cantidad de elementos que
+  //   `track`: es como los arma siempre el cliente real (`armarPayload`,
+  //   mismo array simplificado para ambos, así que quedan índice a índice
+  //   alineados); si no coinciden no hay forma confiable de mapear un corte
+  //   de `puntos` a un índice de `track`, así que esta señal no aporta nada
+  //   (mismo comportamiento que sin `puntos`, ver la nota de `esquemaRecorrido`).
+  // - por distancia (`derivarCortesPorDistancia`), directo sobre la
+  //   geometría de `track`: no depende de `puntos` en absoluto, así que un
+  //   payload que lo omite o lo desalinea a propósito para esquivar el corte
+  //   por tiempo no logra nada — un salto de varios kilómetros entre dos
+  //   puntos consecutivos del track sigue sin acreditarse.
+  const trackCoords = coordenadasDeTrack(datos.track)
+  const cortesTiempo =
     datos.puntos && datos.puntos.length === datos.track.length ? derivarCortes(datos.puntos) : []
-  const kmCrudo = kmDeTrack(coordenadasDeTrack(datos.track), cortes)
+  const cortesDistancia = derivarCortesPorDistancia(trackCoords)
+  const cortes = unionCortes(cortesTiempo, cortesDistancia)
+  const kmCrudo = kmDeTrack(trackCoords, cortes)
   const plausibilidad = evaluarPlausibilidad({
     km: kmCrudo,
     inicio: new Date(datos.inicio),

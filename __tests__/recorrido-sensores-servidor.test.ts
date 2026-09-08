@@ -53,6 +53,24 @@ describe('kmPorCalidad', () => {
     })
     expect(kmPorCalidad([muestra(0)]).bueno).toBe(0)
   })
+
+  test('con cortes, no reparte distancia entre segmentos (no bridgea una pausa)', () => {
+    // 4 muestras: dos clusters de una muestra "malo" cada uno (0 y 0.01),
+    // unidos por un salto de 0.002 a 0.008 que cierra en una muestra "bueno".
+    // Sin cortes ese salto se reparte igual que cualquier otro segmento. Con
+    // un corte justo ahí, el salto desaparece entero — la misma regla que ya
+    // usa `kmDeTrack` (`lib/track.ts`) para los km del track y
+    // `kmConSensores` (`lib/juego.ts`) para el premio por sensores.
+    const muestras = [muestra(0, 'malo'), muestra(0.002, 'malo'), muestra(0.008), muestra(0.01, 'malo')]
+
+    const sinCorte = kmPorCalidad(muestras)
+    expect(sinCorte.malo).toBeCloseTo(0.445, 3) // los dos segmentos "malo" (0->0.002 y 0.008->0.01)
+    expect(sinCorte.bueno).toBeCloseTo(0.667, 3) // el salto de 0.002 a 0.008, que cierra en "bueno"
+
+    const conCorte = kmPorCalidad(muestras, [2])
+    expect(conCorte.malo).toBeCloseTo(0.445, 3) // no cambia: ninguno de los dos segmentos cruza el corte
+    expect(conCorte.bueno).toBe(0) // el salto que cruzaba el corte ya no se reparte
+  })
 })
 
 describe('descripcionImpacto', () => {

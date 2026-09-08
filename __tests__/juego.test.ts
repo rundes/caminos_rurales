@@ -167,6 +167,23 @@ describe('kmConSensores', () => {
     expect(kmConSensores([muestra(0)], 10)).toBe(0)
     expect(kmConSensores([muestra(0), muestra(0.01)], 0)).toBe(0)
   })
+
+  test('con cortes, no suma distancia entre segmentos (no bridgea una pausa)', () => {
+    // 4 muestras a lo largo de 0 a 0.01°: sin cortes, la distancia se suma de
+    // punta a punta (~1,11 km, la misma regla que tenía antes). Con un corte
+    // en el medio, sólo cuentan los dos segmentos internos.
+    const muestras = [muestra(0), muestra(0.002), muestra(0.008), muestra(0.01)]
+
+    expect(kmConSensores(muestras, 10)).toBeCloseTo(1.112, 3)
+    // corte antes del índice 2: sólo los dos segmentos internos (0.002° cada
+    // uno, ~0,222 km) — mismo valor que el primer test de este describe.
+    expect(kmConSensores(muestras, 10, [2])).toBeCloseTo(0.445, 3)
+  })
+
+  test('un array de cortes vacío se comporta igual que no pasar el parámetro', () => {
+    const muestras = [muestra(0), muestra(0.002), muestra(0.004)]
+    expect(kmConSensores(muestras, 10, [])).toBe(kmConSensores(muestras, 10))
+  })
 })
 
 describe('calcularPuntos con sensores', () => {
