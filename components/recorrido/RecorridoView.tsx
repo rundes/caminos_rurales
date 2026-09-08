@@ -271,6 +271,8 @@ export function RecorridoView({ usuarioId, municipio, capas, limites, centro }: 
         cuadrosPendientes={totalCuadros.pendientes}
         cuadrosError={cuadros.errorCuadros[cerrado.recorridoId] ?? 0}
         redVerificada={cuadros.red.verificada}
+        procesandoCuadros={cuadros.procesando}
+        privacidadActivada={cuadros.privacidadActivada}
         onSubirCuadros={cuadros.forzarConDatos}
         error={fallaSubida?.ultimoError ?? null}
         onReintentar={fallaSubida ? () => correr(() => reintentar(fallaSubida.recorridoId)) : undefined}

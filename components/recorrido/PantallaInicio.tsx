@@ -3,6 +3,12 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { Boton } from '@/components/Boton'
 import {
+  guardarPreferenciaPrivacidad,
+  leerPreferenciaPrivacidad,
+  PREFERENCIA_PRIVACIDAD_DEFECTO,
+  suscribirPreferenciaPrivacidad,
+} from '@/lib/camara/privacidad-pref'
+import {
   guardarPreferenciaRed,
   leerPreferenciaRed,
   PREFERENCIA_RED_DEFECTO,
@@ -95,6 +101,11 @@ export function PantallaInicio({
     leerPreferenciaRed,
     () => PREFERENCIA_RED_DEFECTO,
   )
+  const privacidad = useSyncExternalStore(
+    suscribirPreferenciaPrivacidad,
+    leerPreferenciaPrivacidad,
+    () => PREFERENCIA_PRIVACIDAD_DEFECTO,
+  )
   const restante = useCuentaRegresiva(proximoIntento)
 
   const cambiarRed = (soloWifi: boolean) => {
@@ -146,6 +157,23 @@ export function PantallaInicio({
           className="size-6 shrink-0 accent-green-700"
         />
         Subir cuadros solo con WiFi
+      </label>
+      <label className="flex flex-col gap-1 rounded-xl bg-white p-3 text-sm text-gray-700 shadow-sm">
+        <span className="flex min-h-11 items-center gap-3">
+          <input
+            type="checkbox"
+            checked={privacidad}
+            onChange={(evento) => guardarPreferenciaPrivacidad(evento.target.checked)}
+            className="size-6 shrink-0 accent-green-700"
+          />
+          Difuminar caras y vehículos en los cuadros
+        </span>
+        <span className="pl-9 text-xs text-gray-500">
+          Se aplica en el dispositivo antes de subir, nunca después. Cubre caras y vehículos que
+          el modelo llega a detectar; no es infalible con caras chicas o lejanas, ángulos raros ni
+          patentes sueltas sin un vehículo detectado alrededor. Con el ajuste apagado, los cuadros
+          se suben sin procesar.
+        </span>
       </label>
     </section>
   )

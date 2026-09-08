@@ -22,6 +22,7 @@ import {
   limpiarLocal,
   marcarCuadro,
   marcarCuadrosEnError,
+  marcarDifuminado,
   listarImpactos,
   listarMuestras,
   listarObservaciones,
@@ -133,6 +134,54 @@ async function crearBaseV4ConCuadro(): Promise<void> {
         blob: new Blob(['imagen-v4'], { type: 'image/jpeg' }),
         estadoSubida: 'pendiente',
       })
+      tx.oncomplete = () => {
+        db.close()
+        resolver()
+      }
+      tx.onerror = () => rechazar(tx.error)
+    }
+    peticion.onerror = () => rechazar(peticion.error)
+  })
+}
+
+/**
+ * Crea una base v5 "a mano" (blob ya separado, pero sin `cuadros.difuminado`,
+ * que recién existe desde v6) usando IndexedDB directo, para probar la
+ * migración a v6 sin pasar por `abrirDb` (que ya abre en v6).
+ */
+async function crearBaseV5ConCuadro(): Promise<void> {
+  await new Promise<void>((resolver, rechazar) => {
+    const peticion = indexedDB.open('visiovial', 5)
+    peticion.onupgradeneeded = () => {
+      const db = peticion.result
+      db.createObjectStore('puntos', { autoIncrement: true }).createIndex('recorridoId', 'recorridoId')
+      db.createObjectStore('observaciones', { keyPath: 'id' }).createIndex('recorridoId', 'recorridoId')
+      db.createObjectStore('cola', { keyPath: 'recorridoId' })
+      db.createObjectStore('recorridos', { keyPath: 'id' }).createIndex('usuarioId', 'usuarioId')
+      db.createObjectStore('muestras', { autoIncrement: true }).createIndex('recorridoId', 'recorridoId')
+      db.createObjectStore('impactos', { autoIncrement: true }).createIndex('recorridoId', 'recorridoId')
+      const cuadros = db.createObjectStore('cuadros', { keyPath: 'id', autoIncrement: true })
+      cuadros.createIndex('recorridoId', 'recorridoId')
+      cuadros.createIndex('porRecorridoEstado', ['recorridoId', 'estadoSubida'])
+      db.createObjectStore('colaCuadros', { keyPath: 'recorridoId' })
+      db.createObjectStore('blobs', { keyPath: 'id' })
+    }
+    peticion.onsuccess = () => {
+      const db = peticion.result
+      const tx = db.transaction(['cuadros', 'blobs'], 'readwrite')
+      tx.objectStore('cuadros').add({
+        id: 1,
+        recorridoId: ID,
+        t: 100,
+        lat: -36.85,
+        lng: -57.88,
+        rumbo: 90,
+        velocidadKmh: 40,
+        estadoSubida: 'pendiente',
+        tieneBlob: true,
+        // Sin `difuminado`: fila de antes de v6.
+      })
+      tx.objectStore('blobs').put({ id: 1, blob: new Blob(['imagen-v5'], { type: 'image/jpeg' }) })
       tx.oncomplete = () => {
         db.close()
         resolver()
@@ -308,6 +357,33 @@ describe('base local', () => {
     // Ídem: en este entorno de test el blob no clona como instancia real, pero
     // el punto de la migración es que se movió (no quedó en la fila vieja).
     expect(pendientes[0].blob).toBeDefined()
+  })
+
+  test('migra a v6: los cuadros de antes quedan con difuminado en false', async () => {
+    await crearBaseV5ConCuadro()
+
+    const cuadros = await listarCuadros(ID)
+    expect(cuadros).toHaveLength(1)
+    expect(cuadros[0].difuminado).toBe(false)
+  })
+
+  test('guardarCuadro guarda los cuadros nuevos con difuminado en false', async () => {
+    await guardarCuadro(cuadro(100))
+
+    const [fila] = await listarCuadros(ID)
+    expect(fila.difuminado).toBe(false)
+  })
+
+  test('marcarDifuminado reemplaza el blob y marca el cuadro como procesado', async () => {
+    const id = await guardarCuadro(cuadro(100))
+    const nuevo = new Blob(['difuminado'], { type: 'image/jpeg' })
+
+    await marcarDifuminado(id, nuevo)
+
+    const [fila] = await listarCuadros(ID)
+    expect(fila.difuminado).toBe(true)
+    const [pendiente] = await listarCuadrosPendientes(ID, 10)
+    expect(pendiente.blob).toBeDefined()
   })
 
   test('la cola de cuadros no reinicia los intentos y se puede borrar', async () => {

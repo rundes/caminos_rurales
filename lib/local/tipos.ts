@@ -67,6 +67,12 @@ export type ObservacionLocal = {
  * El blob vive aparte, en el store `blobs` (misma clave): la fila de `cuadros`
  * solo sabe si todavía lo tiene (`tieneBlob`), así los índices y los conteos
  * no cargan megabytes de imagen para leer un campo.
+ *
+ * `difuminado`: si ya se le aplicó el pipeline de privacidad
+ * (`lib/privacidad/`) y el blob guardado es el resultado de eso, no el
+ * original de la cámara. Se marca antes de subir (`lib/local/cola-
+ * cuadros.ts`) para que un reintento de subida no lo vuelva a difuminar (es
+ * lossy: aplicarlo dos veces no suma privacidad y sí pierde nitidez de más).
  */
 export type CuadroLocal = {
   id?: number
@@ -79,6 +85,7 @@ export type CuadroLocal = {
   estadoSubida: EstadoSubida
   ruta?: string
   tieneBlob: boolean
+  difuminado: boolean
 }
 
 /** Cuadro ya guardado: tiene la clave que asignó IndexedDB. */
@@ -152,6 +159,13 @@ export interface BaseCuadros {
   listarCuadrosPendientes(recorridoId: string, limite: number): Promise<CuadroConBlob[]>
   contarCuadros(recorridoId: string, estado?: EstadoSubida): Promise<number>
   marcarCuadro(id: number, estado: EstadoSubida, ruta?: string): Promise<void>
+  /**
+   * Guarda el cuadro ya difuminado (blob nuevo) y lo marca `difuminado`, en
+   * una única operación: así un reintento de subida ve el trabajo hecho y no
+   * vuelve a difuminar ni sube el original sin procesar si la subida en sí
+   * falla después.
+   */
+  marcarDifuminado(id: number, blob: Blob): Promise<void>
   /** Libera los blobs de los cuadros ya subidos. Devuelve cuántos liberó. */
   borrarCuadrosSubidos(recorridoId: string): Promise<number>
   /**

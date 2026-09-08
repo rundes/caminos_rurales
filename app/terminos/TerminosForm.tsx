@@ -22,7 +22,11 @@ export function TerminosForm() {
         <span className="text-lg font-medium">
           Acepto los términos y el uso de mi ubicación, mis fotos, los sensores de movimiento del
           dispositivo (acelerómetro y giroscopio) para estimar el estado del camino y la cámara del
-          dispositivo para registrar imágenes del camino durante el recorrido.
+          dispositivo para registrar imágenes del camino durante el recorrido. Antes de subirse, la
+          app intenta difuminar en el propio dispositivo las caras y los vehículos que detecta en
+          esas imágenes (se puede desactivar en la pantalla de inicio); no es una garantía de
+          anonimato: puede no detectar caras chicas, lejanas o en ángulos raros, ni patentes sueltas
+          sin un vehículo alrededor.
         </span>
       </label>
 

@@ -176,6 +176,14 @@ self.addEventListener('fetch', (evento) => {
     return
   }
 
+  // Pesos del modelo de privacidad (`lib/privacidad/modelo.ts`): varios MB,
+  // cache-first para que un dispositivo que ya difuminó una vez no los
+  // vuelva a bajar (ni siquiera para revalidar).
+  if (url.pathname.startsWith('/modelos/')) {
+    evento.respondWith(cacheFirst(peticion, CACHE_ESTATICO))
+    return
+  }
+
   if (url.pathname.startsWith('/_next/static/')) {
     evento.respondWith(cacheFirst(peticion, CACHE_NEXT))
     return

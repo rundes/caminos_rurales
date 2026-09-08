@@ -2,6 +2,7 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { PantallaInicio } from '@/components/recorrido/PantallaInicio'
+import { CLAVE_PREFERENCIA_PRIVACIDAD } from '@/lib/camara/privacidad-pref'
 import type { RecorridoEnError } from '@/lib/local/cola'
 import type { RecorridoLocal } from '@/lib/local/tipos'
 
@@ -36,6 +37,7 @@ function props(extra: Partial<Parameters<typeof PantallaInicio>[0]> = {}) {
 
 afterEach(() => {
   vi.useRealTimers()
+  window.localStorage.clear()
 })
 
 describe('PantallaInicio', () => {
@@ -109,5 +111,23 @@ describe('PantallaInicio', () => {
     render(<PantallaInicio {...props()} />)
 
     expect(screen.queryByRole('button', { name: /descartar/i })).not.toBeInTheDocument()
+  })
+
+  test('el ajuste de difuminado viene activado por defecto y avisa lo que no cubre', () => {
+    render(<PantallaInicio {...props()} />)
+
+    const casilla = screen.getByRole('checkbox', { name: /difuminar caras y vehículos/i })
+    expect(casilla).toBeChecked()
+    expect(screen.getByText(/no es infalible con caras chicas o lejanas/i)).toBeInTheDocument()
+  })
+
+  test('se puede apagar el difuminado, y queda guardado', async () => {
+    render(<PantallaInicio {...props()} />)
+
+    const casilla = screen.getByRole('checkbox', { name: /difuminar caras y vehículos/i })
+    await userEvent.click(casilla)
+
+    expect(casilla).not.toBeChecked()
+    expect(window.localStorage.getItem(CLAVE_PREFERENCIA_PRIVACIDAD)).toBe('0')
   })
 })

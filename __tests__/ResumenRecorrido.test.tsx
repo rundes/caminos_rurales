@@ -77,6 +77,60 @@ describe('ResumenRecorrido', () => {
     expect(onSubirCuadros).toHaveBeenCalledTimes(1)
   })
 
+  test('mientras procesa avisa que está difuminando y subiendo', () => {
+    render(
+      <ResumenRecorrido
+        km={4.5}
+        puntosGps={120}
+        resumen={null}
+        sinConexion={false}
+        cuadros={40}
+        cuadrosPendientes={12}
+        procesandoCuadros
+        privacidadActivada
+        onNuevo={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText(/difuminando caras y vehículos y subiendo/i)).toBeInTheDocument()
+  })
+
+  test('con el difuminado apagado, mientras procesa solo dice que está subiendo', () => {
+    render(
+      <ResumenRecorrido
+        km={4.5}
+        puntosGps={120}
+        resumen={null}
+        sinConexion={false}
+        cuadros={40}
+        cuadrosPendientes={12}
+        procesandoCuadros
+        privacidadActivada={false}
+        onNuevo={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText(/^subiendo cuadros…$/i)).toBeInTheDocument()
+    expect(screen.queryByText(/difuminando/i)).not.toBeInTheDocument()
+  })
+
+  test('sin procesar activo no muestra el aviso de difuminando/subiendo', () => {
+    render(
+      <ResumenRecorrido
+        km={4.5}
+        puntosGps={120}
+        resumen={null}
+        sinConexion={false}
+        cuadros={40}
+        cuadrosPendientes={12}
+        procesandoCuadros={false}
+        onNuevo={vi.fn()}
+      />,
+    )
+
+    expect(screen.queryByText(/difuminando/i)).not.toBeInTheDocument()
+  })
+
   test('sin cuadros pendientes no ofrece subirlos con datos', () => {
     render(
       <ResumenRecorrido

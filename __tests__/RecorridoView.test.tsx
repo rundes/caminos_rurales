@@ -164,6 +164,8 @@ beforeEach(() => {
     subidos: 0,
     errorCuadros: {},
     red: { permitida: true, verificada: true },
+    procesando: false,
+    privacidadActivada: true,
     forzarConDatos: vi.fn(),
   })
 })
@@ -333,6 +335,8 @@ describe('RecorridoView', () => {
       subidos: 0,
       errorCuadros: { [RECORRIDO]: 7 },
       red: { permitida: true, verificada: false },
+      procesando: false,
+      privacidadActivada: true,
       forzarConDatos: vi.fn(),
     })
     vi.mocked(contarCuadros).mockResolvedValue(9)

@@ -50,7 +50,15 @@ function engancharVideo(videoRef: { current: HTMLVideoElement | null }): void {
 beforeEach(async () => {
   vi.spyOn(console, 'error').mockImplementation(() => {})
   // jsdom no implementa el canvas: se falsea el dibujo y la codificación.
-  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+  // `getContext` se retipa a una firma sin sobrecargas antes de espiarlo: con
+  // las sobrecargas reales, `@webgpu/types` (que trae `@tensorflow/tfjs-
+  // core`, usado por `lib/privacidad/modelo.ts`) agrega la variante
+  // `'webgpu'` y el tipo inferido de `mockReturnValue` pasa a exigir un
+  // `GPUCanvasContext`, no el `CanvasRenderingContext2D` que se necesita acá.
+  vi.spyOn(
+    HTMLCanvasElement.prototype as unknown as { getContext: () => CanvasRenderingContext2D },
+    'getContext',
+  ).mockReturnValue({
     drawImage: vi.fn(),
   } as unknown as CanvasRenderingContext2D)
   vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation((callback) =>

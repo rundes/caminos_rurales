@@ -44,7 +44,7 @@ function recorrido(estado: RecorridoLocal['estado'] = 'subido', id = ID, usuario
   }
 }
 
-function cuadro(indice: number, recorridoId = ID): CuadroConBlob {
+function cuadro(indice: number, recorridoId = ID, difuminado = false): CuadroConBlob {
   return {
     id: indice,
     recorridoId,
@@ -56,6 +56,7 @@ function cuadro(indice: number, recorridoId = ID): CuadroConBlob {
     blob: new Blob([`cuadro-${indice}`], { type: 'image/jpeg' }),
     tieneBlob: true,
     estadoSubida: 'pendiente',
+    difuminado,
   }
 }
 
@@ -84,6 +85,10 @@ function crearBase(inicial: Inicial) {
     marcarCuadro: async (id, estado, ruta) => {
       const guardado = cuadros.get(id)
       if (guardado) cuadros.set(id, { ...guardado, estadoSubida: estado, ...(ruta ? { ruta } : {}) })
+    },
+    marcarDifuminado: async (id, blob) => {
+      const guardado = cuadros.get(id)
+      if (guardado) cuadros.set(id, { ...guardado, blob, difuminado: true })
     },
     borrarCuadrosSubidos: async (recorridoId) => {
       const subidos = de(recorridoId, 'subida').filter((c) => c.tieneBlob)
@@ -115,6 +120,7 @@ type DepsEspiadas = DepsCuadros & {
   prepararSubida: ReturnType<typeof vi.fn>
   subir: ReturnType<typeof vi.fn>
   registrarCuadros: ReturnType<typeof vi.fn>
+  difuminar: ReturnType<typeof vi.fn>
 }
 
 function crearDeps(
@@ -124,12 +130,15 @@ function crearDeps(
     respuesta?: RespuestaCuadros
     respuestaPreparar?: RespuestaPrepararSubida
     fallarSubida?: boolean
+    privacidadActivada?: boolean
+    fallarDifuminar?: boolean
   } = {},
 ): DepsEspiadas {
   const {
     permitida = true,
     respuesta = { ok: true as const, data: { registrados: 0, puntos: 0 } },
     respuestaPreparar,
+    privacidadActivada = false,
   } = opciones
   let contador = 0
 
@@ -149,6 +158,11 @@ function crearDeps(
     })),
     ahora: () => AHORA,
     red: () => ({ permitida, verificada: true }),
+    difuminar: vi.fn(async (blob: Blob) => {
+      if (opciones.fallarDifuminar) throw new Error('no se pudo difuminar')
+      return new Blob(['difuminado-de-' + (await blob.text())], { type: 'image/jpeg' })
+    }),
+    privacidadActivada: () => privacidadActivada,
   }
 }
 
@@ -409,5 +423,96 @@ describe('procesarColaCuadros', () => {
     expect((await base.de(ID, 'error')).map((c) => c.id)).toEqual([1])
     expect((await base.de(ID, 'subida')).map((c) => c.id)).toEqual([2])
     expect(await base.db.listarColaCuadros()).toEqual([])
+  })
+
+  describe('difuminado de privacidad', () => {
+    test('con la preferencia apagada, sube los cuadros sin difuminar', async () => {
+      const base = crearBase({
+        recorridos: [recorrido()],
+        cuadros: [cuadro(1)],
+        cola: [{ recorridoId: ID, intentos: 0, proximoIntento: 0 }],
+      })
+      const deps = crearDeps(base, { privacidadActivada: false })
+
+      await procesarColaCuadros(deps, USUARIO)
+
+      expect(deps.difuminar).not.toHaveBeenCalled()
+      const subido = await deps.subir.mock.calls[0][1].text()
+      expect(subido).toBe('cuadro-1')
+    })
+
+    test('con la preferencia activada, difumina cada cuadro antes de subirlo', async () => {
+      const base = crearBase({
+        recorridos: [recorrido()],
+        cuadros: [cuadro(1), cuadro(2)],
+        cola: [{ recorridoId: ID, intentos: 0, proximoIntento: 0 }],
+      })
+      const deps = crearDeps(base, { privacidadActivada: true })
+
+      const resultado = await procesarColaCuadros(deps, USUARIO)
+
+      expect(resultado.subidos).toBe(2)
+      expect(deps.difuminar).toHaveBeenCalledTimes(2)
+      const subido1 = await deps.subir.mock.calls[0][1].text()
+      expect(subido1).toBe('difuminado-de-cuadro-1')
+      const guardados = await base.de(ID)
+      expect(guardados.every((c) => c.difuminado === true)).toBe(true)
+    })
+
+    test('no vuelve a difuminar un cuadro que ya se procesó (un reintento no repite el trabajo lossy)', async () => {
+      const base = crearBase({
+        recorridos: [recorrido()],
+        // Ya difuminado de una pasada anterior: el blob guardado es el que
+        // hay que subir tal cual.
+        cuadros: [cuadro(1, ID, true)],
+        cola: [{ recorridoId: ID, intentos: 0, proximoIntento: 0 }],
+      })
+      const deps = crearDeps(base, { privacidadActivada: true })
+
+      await procesarColaCuadros(deps, USUARIO)
+
+      expect(deps.difuminar).not.toHaveBeenCalled()
+      const subido = await deps.subir.mock.calls[0][1].text()
+      expect(subido).toBe('cuadro-1')
+    })
+
+    test('si difuminar falla, no sube nada de esa pasada y el recorrido queda con el mismo backoff que cualquier otro fallo', async () => {
+      const base = crearBase({
+        recorridos: [recorrido()],
+        cuadros: [cuadro(1)],
+        cola: [{ recorridoId: ID, intentos: 0, proximoIntento: 0 }],
+      })
+      const deps = crearDeps(base, { privacidadActivada: true, fallarDifuminar: true })
+
+      const resultado = await procesarColaCuadros(deps, USUARIO)
+
+      expect(deps.subir).not.toHaveBeenCalled()
+      expect(deps.registrarCuadros).not.toHaveBeenCalled()
+      expect(await base.db.obtenerItemColaCuadros(ID)).toEqual({
+        recorridoId: ID,
+        intentos: 1,
+        proximoIntento: AHORA + BACKOFF_MS[0],
+        ultimoError: 'no se pudo difuminar',
+      })
+      // El cuadro sigue pendiente, sin marcar error: se reintenta en la
+      // próxima pasada, no se pierde ni se sube sin procesar.
+      expect((await base.de(ID, 'pendiente')).length).toBe(1)
+      expect(resultado).toEqual({ pendientes: 1, subidos: 0, errorCuadros: {} })
+    })
+
+    test('un fallo de difuminado que agota los intentos también termina descartando los cuadros', async () => {
+      const base = crearBase({
+        recorridos: [recorrido()],
+        cuadros: [cuadro(1)],
+        cola: [{ recorridoId: ID, intentos: MAX_INTENTOS, proximoIntento: 0, ultimoError: 'no se pudo difuminar' }],
+      })
+      const deps = crearDeps(base, { privacidadActivada: true, fallarDifuminar: true })
+
+      const resultado = await procesarColaCuadros(deps, USUARIO)
+
+      expect(deps.difuminar).not.toHaveBeenCalled()
+      expect(resultado).toEqual({ pendientes: 0, subidos: 0, errorCuadros: { [ID]: 1 } })
+      expect(await base.db.listarColaCuadros()).toEqual([])
+    })
   })
 })

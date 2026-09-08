@@ -20,6 +20,10 @@ type Props = {
   cuadrosError?: number
   /** `false` cuando no pudimos confirmar que la red sea WiFi (iOS no lo informa). */
   redVerificada?: boolean
+  /** La cola de cuadros está trabajando ahora mismo (difuminando y/o subiendo). */
+  procesandoCuadros?: boolean
+  /** Si el ajuste "difuminar caras y vehículos" está activado en este dispositivo. */
+  privacidadActivada?: boolean
   /** Fuerza la subida de cuadros con datos móviles, saltando el ajuste de WiFi. */
   onSubirCuadros?: () => void
   /** Motivo por el que la subida del recorrido falló del todo (agotó los reintentos). */
@@ -91,6 +95,8 @@ export function ResumenRecorrido({
   cuadrosPendientes = 0,
   cuadrosError = 0,
   redVerificada = true,
+  procesandoCuadros = false,
+  privacidadActivada = true,
   onSubirCuadros,
   error = null,
   onReintentar,
@@ -149,6 +155,11 @@ export function ResumenRecorrido({
             Cuadros: {cuadros} capturados
             {cuadrosPendientes > 0 ? ` · ${cuadrosPendientes} pendientes de subir (WiFi)` : ''}
           </p>
+          {procesandoCuadros && cuadrosPendientes > 0 && (
+            <p role="status" className="text-sm text-gray-600">
+              {privacidadActivada ? 'Difuminando caras y vehículos y subiendo cuadros…' : 'Subiendo cuadros…'}
+            </p>
+          )}
           {cuadrosError > 0 && (
             <p role="status" className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">
               {cuadrosError} cuadros no pudieron subirse
