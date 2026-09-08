@@ -1,8 +1,10 @@
 import { redirect } from 'next/navigation'
 import { crearClienteServidor } from '@/lib/supabase/server'
 import { buscarPartido } from '@/lib/partidos'
+import { BannerInstalar } from '@/components/BannerInstalar'
 import { BotonSalir } from '@/components/BotonSalir'
 import { NavDashboard } from '@/components/NavDashboard'
+import { OcultarSiGrabando } from '@/components/OcultarSiGrabando'
 
 /** Municipio del perfil mientras no haya canjeado un código de invitación válido. */
 const SIN_ASIGNAR = 'sin-asignar'
@@ -33,19 +35,26 @@ export default async function DashboardLayout({ children }: { children: React.Re
   return (
     // pb-24 deja espacio libre debajo del contenido para que la nav inferior fija no lo tape
     <div className="min-h-dvh bg-gray-50 pb-24">
-      <header className="flex items-center justify-between bg-green-800 px-4 py-3 text-white">
-        {error ? (
-          <p className="text-sm">No se pudo cargar tu perfil.</p>
-        ) : (
-          <div>
-            <p className="font-semibold">{perfil?.nombre ?? user.email}</p>
-            <p className="text-xs opacity-80">
-              {partido} · {perfil?.rol ?? 'productor'}
-            </p>
-          </div>
-        )}
-        <BotonSalir usuarioId={user.id} />
-      </header>
+      {/* Ocultos mientras se graba: la pantalla de grabación necesita todo el
+          espacio posible y esta cabecera no aporta nada en ese momento. */}
+      <OcultarSiGrabando>
+        <header className="flex items-center justify-between bg-green-800 px-4 py-3 text-white">
+          {error ? (
+            <p className="text-sm">No se pudo cargar tu perfil.</p>
+          ) : (
+            <div>
+              <p className="font-semibold">{perfil?.nombre ?? user.email}</p>
+              <p className="text-xs opacity-80">
+                {partido} · {perfil?.rol ?? 'productor'}
+              </p>
+            </div>
+          )}
+          <BotonSalir usuarioId={user.id} />
+        </header>
+        <div className="mx-auto max-w-3xl px-4 pt-4">
+          <BannerInstalar />
+        </div>
+      </OcultarSiGrabando>
       <main className="mx-auto max-w-3xl px-4 py-6">{children}</main>
       <NavDashboard />
     </div>

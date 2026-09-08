@@ -52,6 +52,7 @@ function centroInicial(centro: [number, number], limites: LimitesBounds | null):
 
 export function RecorridoView({ usuarioId, municipio, capas, limites, centro }: Props) {
   const [marcadores, setMarcadores] = useState<readonly [number, number][]>([])
+  const [velocidadActual, setVelocidadActual] = useState<number | null>(null)
 
   // El grabador y los sensores se necesitan mutuamente (el hook de sensores
   // depende del recorrido que abre el grabador, y el grabador le pasa cada
@@ -62,6 +63,7 @@ export function RecorridoView({ usuarioId, municipio, capas, limites, centro }: 
   const recorridoEnGrabacion = useRef<string | null>(null)
   const alPunto = useCallback((punto: PuntoGps, posicion?: GeolocationPosition) => {
     registrarGps.current?.(punto, posicion)
+    setVelocidadActual(velocidadKmh(posicion))
     const recorridoId = recorridoEnGrabacion.current
     if (!recorridoId) return
     // La captura no puede frenar la grabación: los fallos se avisan por consola.
@@ -164,6 +166,7 @@ export function RecorridoView({ usuarioId, municipio, capas, limites, centro }: 
     setErrorLocal(null)
     setSinTerminar(null)
     setMarcadores([])
+    setVelocidadActual(null)
     await permiso
     await permisoCamara
     await grabador.iniciar()
@@ -176,6 +179,7 @@ export function RecorridoView({ usuarioId, municipio, capas, limites, centro }: 
     const id = sinTerminar.id
     setSinTerminar(null)
     setMarcadores([])
+    setVelocidadActual(null)
     await permiso
     await permisoCamara
     await grabador.retomar(id)
@@ -253,6 +257,10 @@ export function RecorridoView({ usuarioId, municipio, capas, limites, centro }: 
   )
 
   if (cerrado) {
+    // Si el recorrido cerrado agotó los reintentos de subida, `enError` lo
+    // trae con el motivo: el acuse tiene que mostrarlo, nunca quedarse
+    // callado con un "Subiendo…" que ya no va a pasar.
+    const fallaSubida = enError.find((e) => e.recorridoId === cerrado.recorridoId) ?? null
     return (
       <ResumenRecorrido
         km={cerrado.km}
@@ -264,6 +272,8 @@ export function RecorridoView({ usuarioId, municipio, capas, limites, centro }: 
         cuadrosError={cuadros.errorCuadros[cerrado.recorridoId] ?? 0}
         redVerificada={cuadros.red.verificada}
         onSubirCuadros={cuadros.forzarConDatos}
+        error={fallaSubida?.ultimoError ?? null}
+        onReintentar={fallaSubida ? () => correr(() => reintentar(fallaSubida.recorridoId)) : undefined}
         onNuevo={() => correr(iniciar)}
       />
     )
@@ -277,6 +287,7 @@ export function RecorridoView({ usuarioId, municipio, capas, limites, centro }: 
           <PanelGrabacion
             estado={grabador.estado}
             precision={grabador.precision}
+            velocidadKmh={velocidadActual}
             obtenerPuntos={grabador.obtenerPuntos}
             centro={centroInicial(centro, limites)}
             capas={capas}

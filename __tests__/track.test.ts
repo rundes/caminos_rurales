@@ -3,6 +3,7 @@ import {
   evaluarPlausibilidad,
   filtrarPunto,
   kmDeTrack,
+  partirEnSegmentos,
   simplificar,
   velocidadMaximaKmh,
   velocidadMediaKmh,
@@ -131,6 +132,39 @@ describe('simplificar', () => {
     const resultado = simplificar(puntos, 10)
     expect(resultado[0]).toEqual(puntos[0])
     expect(resultado[resultado.length - 1]).toEqual(puntos[CANTIDAD - 1])
+  })
+})
+
+describe('partirEnSegmentos', () => {
+  test('sin cortes devuelve un único segmento con todos los puntos', () => {
+    const puntos = [1, 2, 3, 4]
+
+    expect(partirEnSegmentos(puntos, [])).toEqual([[1, 2, 3, 4]])
+  })
+
+  test('un corte separa el track en dos segmentos', () => {
+    const puntos = [1, 2, 3, 4]
+
+    expect(partirEnSegmentos(puntos, [2])).toEqual([
+      [1, 2],
+      [3, 4],
+    ])
+  })
+
+  test('varios cortes generan varios segmentos, en orden aunque lleguen desordenados', () => {
+    const puntos = [1, 2, 3, 4, 5, 6]
+
+    expect(partirEnSegmentos(puntos, [4, 2])).toEqual([[1, 2], [3, 4], [5, 6]])
+  })
+
+  test('cortes fuera de rango o duplicados se ignoran', () => {
+    const puntos = [1, 2, 3]
+
+    expect(partirEnSegmentos(puntos, [0, 3, 10, -1, 1, 1])).toEqual([[1], [2, 3]])
+  })
+
+  test('track vacío devuelve sin segmentos', () => {
+    expect(partirEnSegmentos([], [1])).toEqual([])
   })
 })
 

@@ -25,3 +25,8 @@ export function formatearKm(km: number): string {
 export function formatearPrecision(precision: number | null): string {
   return precision === null ? '—' : `${Math.round(precision)} m`
 }
+
+/** Velocidad redondeada a km/h, o un guion si el navegador no la informa. */
+export function formatearVelocidad(velocidadKmh: number | null): string {
+  return velocidadKmh === null ? '—' : `${Math.round(velocidadKmh)} km/h`
+}
