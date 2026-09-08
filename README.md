@@ -11,6 +11,7 @@ Plataforma de relevamiento del estado de caminos rurales de la Provincia de Buen
 - `docs/database-schema.sql`: esquema Supabase final (RLS, funciones, trigger y storage).
 - `docs/step-by-step-guide.md`: fases de implementación.
 - `docs/fuentes-datos.md`: fuentes de datos de referencia (IGN, OSM, UBA, SENASA, MapBiomas, GSW, severo_data).
+- `docs/superpowers/plans/2026-09-04-endurecimiento-y-alcance.md`: plan de las olas 1 (endurecimiento) y 2 (producto), con la lista de [Pendiente](docs/superpowers/plans/2026-09-04-endurecimiento-y-alcance.md#pendiente) actualizada.
 
 ## Stack
 
@@ -18,18 +19,19 @@ Next.js 16 (App Router), TypeScript, Tailwind CSS 4, Supabase (Auth, Postgres, S
 
 ## Funcionalidad
 
-- **Recorrido GPS en vivo**: el usuario toca "Iniciar recorrido" y la app graba su trayecto con `watchPosition` de alta precisión mientras la pantalla permanece encendida (wake lock). El track se guarda en IndexedDB durante el recorrido.
-- **Observaciones**: en ruta se puede pausar y registrar una observación (tipo, severidad, foto o video corto, nota) con la posición actual.
-- **Cobertura por tramo**: al finalizar, el servidor compara el track contra la geometría de los tramos del municipio (`tramos`) y marca como cubiertos los que tienen suficiente proximidad de puntos del track.
+- **Recorrido GPS en vivo**: el usuario toca "Iniciar recorrido" y la app graba su trayecto con `watchPosition` de alta precisión mientras la pantalla permanece encendida (wake lock). El track se guarda en IndexedDB durante el recorrido. Mientras se graba, el layout se enfoca: se oculta la tarjeta de cobertura y el resto del cromo del dashboard (`OcultarSiGrabando`), con métricas grandes y de alto contraste, un botón "Observación" flotante alcanzable con el pulgar y "Finalizar" con confirmación en dos pasos.
+- **Observaciones**: en ruta se puede pausar y registrar una observación (tipo, severidad, foto o video corto, nota) con la posición actual. Ver [Observaciones y estado de gestión](#observaciones-y-estado-de-gestión).
+- **Cobertura por tramo**: al finalizar, el servidor compara el track contra la geometría de los tramos del municipio (`tramos`) y marca como cubiertos los que tienen suficiente proximidad de puntos del track. La cobertura se muestra en kilómetros, no solo en cantidad de tramos: ver [Tramos](#tramos).
 - **Puntos, insignias y ranking**: kilómetros nuevos y repetidos y observaciones con evidencia otorgan puntos (`puntos_eventos`); ciertos hitos otorgan insignias (`logros`); el ranking agrega puntos por municipio.
-- **Dashboard**: cobertura % del municipio y por localidad, mapa de tramos cubiertos/pendientes, ranking, insignias propias, últimas observaciones.
-- **PWA instalable**: manifest, service worker con precache del shell y cache-first para capas/teselas/íconos, iconos generados desde un SVG.
+- **Dashboard**: cobertura en km del municipio y por localidad (`/dashboard`), lista de tramos con estado estimado y última visita (`/dashboard/tramos`), mapa con tramos cubiertos/pendientes y observaciones filtrables (`/dashboard/mapa`), lista de observaciones con estado de gestión y exportes (`/dashboard/observaciones`), ranking e insignias propias (`/dashboard/ranking`).
+- **PWA instalable**: manifest, service worker con precache del shell y cache-first para capas/teselas/íconos, iconos generados desde un SVG. Banner de instalación y aviso de batería antes de grabar: ver [Instalación como PWA](#instalación-como-pwa) y [Aviso de batería](#aviso-de-batería).
 
 ### Límites conocidos
 
 - La grabación **solo funciona con la app abierta en primer plano**; no hay grabación en segundo plano (requeriría una app nativa). Está documentado en la pantalla de términos.
 - Sin señal, el track y las observaciones quedan en IndexedDB y se suben cuando vuelve la conexión (reintentos con backoff).
 - El primer ingreso exige aceptar los términos (`perfiles.acepto_terminos_at`); sin aceptarlos no se accede al resto de la app.
+- La interfaz es **solo modo claro**: ver [Modo claro (sin tema oscuro)](#modo-claro-sin-tema-oscuro).
 
 ## Sensores del celular
 
@@ -59,6 +61,142 @@ Durante el recorrido, además del track y los sensores, la app puede capturar cu
 - **Mapa**: capa "Cuadros" en `/dashboard/mapa` (toggle independiente), con marcadores y popup de miniatura, fecha, velocidad y navegación anterior/siguiente dentro del mismo tramo.
 - **Puntos**: +1 punto cada 10 cuadros registrados, con tope de 100 puntos por recorrido.
 - **Límites conocidos**: consume batería adicional (cámara + GPS + pantalla encendida); en iOS el stream se pausa con la pantalla bloqueada; sin difuminado de caras ni patentes en esta fase; las imágenes son visibles para los usuarios del mismo municipio.
+
+## Ola 2: producto
+
+### Observaciones y estado de gestión
+
+`/dashboard/observaciones` (`app/dashboard/observaciones/page.tsx`) lista las
+observaciones del municipio con los mismos filtros que el mapa (ver
+[Filtros](#filtros)), conteos por estado y los exportes CSV/GeoJSON (ver
+[Exportes](#exportes-csvgeojson)).
+
+Cada observación tiene un estado de gestión: `pendiente`, `en_obra`,
+`resuelta` o `descartada` (enum `estado_observacion`, migración
+`supabase/migrations/0010_estado_observaciones.sql`). Solo los roles
+`municipio` y `auditor` pueden cambiarlo, y solo sobre observaciones de su
+propio municipio; el resto de los usuarios ve un badge de solo lectura
+(`EstadoSelect`/`app/dashboard/observaciones/EstadoSelect.tsx`). Igual que
+`perfiles` (`0008_seguridad.sql`), la protección tiene **tres capas**, no
+una sola:
+
+1. **Grant por columna**: `revoke update on public.fallas_deteccion from authenticated` + `grant update (…, estado, estado_nota, estado_at, estado_por)`. La política de update del dueño (`fallas_update_propio`, 0005) sigue vigente para sus campos propios, pero el grant por sí solo no distingue quién puede tocar qué columna.
+2. **Política RLS** (`fallas_update_estado_gestion`): filtra **filas**, no columnas — solo dejaría pasar el update completo si el rol es `municipio`/`auditor` y la observación es de su municipio.
+3. **Trigger** (`fallas_estado_protegido`/`fallas_estado_no_escalar`): filtra **columnas** dentro de una fila que la política ya dejó pasar. Sin el trigger, el dueño de una observación podría colarse un cambio de estado usando la política `fallas_update_propio` (que sigue permitiendo su update de campos propios) junto con el grant amplio de columnas. El trigger corta específicamente eso; se salta cuando `auth.uid() is null` para que la clave secreta pueda reprocesar observaciones sin pasar por la restricción.
+
+La Server Action `cambiarEstado` (`app/dashboard/observaciones/actions.ts`)
+hace el update con el cliente **de sesión**, no con el admin: el gate real
+son las tres capas de arriba, no la función. Si RLS o el trigger rechazan el
+cambio, se traduce a un mensaje de permiso en vez de un error genérico.
+`EstadoSelect` es optimista: cambia de inmediato y revierte si el servidor
+lo rechaza.
+
+### Tramos
+
+"Caminos" (tabla `caminos`, sin relación con la cobertura real) se dio de
+baja en esta ola. `/dashboard/tramos` (`app/dashboard/tramos/page.tsx`)
+lista los tramos del municipio con km, veces cubierto, estado estimado
+(rugosidad), cantidad de cuadros y última visita, con búsqueda por nombre y
+orden por km o última visita. `/dashboard/tramos/[id]`
+(`app/dashboard/tramos/[id]/page.tsx`) es el detalle de un tramo: mapa
+enfocado, y sus observaciones y cuadros de cámara; la política
+`tramos_select` (RLS) ya limita la lectura al municipio propio, así que un
+tramo de otro municipio (o inexistente) da 404 directamente, sin comparar
+`municipio` a mano.
+
+No hay alta de tramos todavía: a diferencia de `caminos` (que tenía
+`caminos_insert`), la tabla `tramos` solo tiene la política de lectura
+`tramos_select` — la siembra el servidor con la clave secreta
+(`scripts/seed-tramos.mjs`). El listado deja un comentario señalando dónde
+montar el formulario cuando exista esa migración, gateado a
+`perfil.rol === 'municipio' || perfil.rol === 'auditor'`. Ver
+[Pendiente](docs/superpowers/plans/2026-09-04-endurecimiento-y-alcance.md#pendiente).
+
+### Exportes CSV/GeoJSON
+
+`lib/exportar.ts` tiene las funciones puras: `aCsv` (RFC 4180, separador
+coma, CRLF, BOM UTF-8 para que Excel abra los acentos bien) y `aGeoJson`
+(`FeatureCollection` de puntos, `[longitud, latitud]`). Dos route handlers
+las usan:
+
+- `GET /dashboard/observaciones/export?formato=csv|geojson`
+  (`app/dashboard/observaciones/export/route.ts`): exporta las
+  observaciones del municipio (según RLS, con el cliente de sesión).
+- `GET /dashboard/cobertura/export?formato=csv|geojson`
+  (`app/dashboard/cobertura/export/route.ts`): exporta la cobertura por
+  tramo del municipio. El GeoJSON representa cada tramo con el primer punto
+  de su geometría (alcanza para ubicarlo en un mapa de puntos, sin exportar
+  la polilínea completa).
+
+Los dos exigen sesión (401 sin ella) y responden con
+`Content-Disposition: attachment` y `Content-Type: text/csv` o
+`application/geo+json`. Ninguno expone más datos personales que los que ya
+muestra la app (ni email ni quién reportó cada observación).
+
+### Filtros
+
+`components/FiltrosObservaciones.tsx` es el filtro compartido por el mapa
+(`/dashboard/mapa`) y la lista de observaciones (`/dashboard/observaciones`):
+tipo, severidad, origen, estado y rango de fechas (`desde`/`hasta`). Sin
+selector de municipio: RLS ya limita todo a la del usuario, así que era UI
+muerta. Enteramente derivado de la URL (`useSearchParams`), sin estado local
+espejo — cada cambio reescribe la query string y el Server Component que lo
+envuelve vuelve a renderizar con los `searchParams` nuevos, aplicando los
+filtros en la propia consulta (no se trae todo para filtrar en el
+navegador).
+
+### Instalación como PWA
+
+`components/BannerInstalar.tsx` (lógica pura en `lib/pwa/instalacion.ts`)
+ofrece instalar la app:
+
+- **Chromium** (Android, desktop): escucha `beforeinstallprompt`, previene
+  el mini-banner nativo del navegador y muestra un botón "Instalar" que
+  dispara el diálogo del sistema.
+- **iOS Safari**: Apple nunca implementó `beforeinstallprompt` ni expone una
+  forma de feature-detection para "se puede agregar a la pantalla de
+  inicio" — la única señal disponible es el user-agent (`esIosSafari`, una
+  excepción deliberada y documentada a "nunca hacer UA sniffing"). En vez
+  del prompt nativo, se muestran instrucciones manuales: tocar
+  **Compartir** y elegir **Agregar a inicio**.
+
+El banner se puede cerrar (queda recordado en `localStorage` de ese
+dispositivo, con try/catch por si el modo privado de Safari bloquea el
+storage) y nunca se muestra si la app ya corre instalada (`navigator.standalone`
+en iOS, `display-mode: standalone` en el resto).
+
+### Aviso de batería
+
+`components/recorrido/AvisoBateria.tsx` (lógica pura en `lib/bateria.ts`) se
+muestra antes de arrancar un recorrido: GPS, cámara y pantalla encendida
+gastan batería rápido. Usa la Battery Status API (`navigator.getBattery`,
+solo Chromium) cuando existe para mostrar el nivel real y ponerse más serio
+por debajo del 20% (salvo que esté cargando); en iOS, que no la tiene, se
+degrada en silencio a un mensaje genérico. Se cierra con un toque, sin tapar
+la pantalla.
+
+### Modo claro (sin tema oscuro)
+
+La interfaz es **solo modo claro**, a propósito: `app/globals.css` fija
+`color-scheme: light` y no define ninguna regla `prefers-color-scheme`.
+Visiovial se usa afuera, a pleno sol, mientras se maneja — la prioridad es
+legibilidad en exteriores, no un tema oscuro a medio hacer. El diseño
+(fondos blancos, texto oscuro sólido, acentos en verde/ámbar/rojo saturados)
+nunca se probó en oscuro: dejar que `prefers-color-scheme: dark` reinterprete
+solo el fondo/texto de base mientras cada componente sigue con sus propios
+`bg-white`/`text-gray-700` es la causa típica de texto invisible sobre
+fondos del mismo tono. `color-scheme: light` también fija la paleta de los
+controles nativos (por ejemplo `<input type=file>`), que no siguen el tema
+de Tailwind.
+
+### Accesibilidad táctil
+
+Targets reales de 44 px (`min-h-11`, no solo un `min-height` heredado) en
+botones, enlaces de evidencia, controles de filtro/orden y navegación de
+cuadros en el popup del mapa; el botón "Observación" flotante durante la
+grabación es de 56 px, alcanzable con el pulgar. `:focus-visible` con un
+anillo verde visible en toda la app (no se dispara en un tap táctil, así
+que no agrega ruido en el uso normal a una mano).
 
 ## Desarrollo
 
@@ -324,7 +462,15 @@ Las fotos se comprimen en el teléfono antes de subirlas (`lib/imagenes.ts`:
 
 ## Roles
 
-Los usuarios nuevos tienen rol `productor`. Para crear caminos hace falta `municipio` o `auditor`; se cambia desde Supabase:
+Los usuarios nuevos tienen rol `productor`. Los roles `municipio` y
+`auditor` son los únicos que pueden cambiar el estado de gestión de una
+observación (ver [Observaciones y estado de gestión](#observaciones-y-estado-de-gestión));
+todavía no hay ninguna acción en la app que dependa del rol para crear
+datos (la tabla legacy `caminos` tenía alta gateada por rol, pero
+`app/dashboard/caminos` se dio de baja en la ola 2 y su reemplazo, `tramos`,
+todavía no tiene política de insert — ver
+[Pendiente](docs/superpowers/plans/2026-09-04-endurecimiento-y-alcance.md#pendiente)).
+El rol se cambia desde Supabase:
 
 ```sql
 update public.perfiles set rol = 'municipio' where id = '<uuid>';
@@ -369,6 +515,13 @@ Checklist para validar el flujo v2 completo en el proyecto Supabase real:
 - [ ] Durante la grabación se ve la vista previa chica de la cámara y el contador de cuadros capturados.
 - [ ] Después de "Finalizar" con WiFi disponible, el resumen pasa a mostrar "Cuadros subidos".
 - [ ] En `/dashboard/mapa`, el toggle "Cuadros" muestra los marcadores con miniatura en el popup y permite navegar anterior/siguiente dentro del tramo.
+- [ ] `/dashboard/observaciones` muestra el listado con estado; con un usuario `municipio`/`auditor`, cambiar el estado desde `EstadoSelect` y ver que persiste al recargar; con un usuario `productor`, el estado se ve como badge de solo lectura.
+- [ ] Exportar CSV y GeoJSON desde `/dashboard/observaciones` descargan un archivo con los datos filtrados.
+- [ ] `/dashboard/tramos` lista los tramos con km, estado estimado y última visita; entrar a un tramo muestra el detalle con mapa, observaciones y cuadros.
+- [ ] En un dispositivo/navegador donde el banner de instalación aparezca (Chromium: `beforeinstallprompt`; iOS Safari: instrucciones manuales), instalar la PWA y confirmar que el banner no vuelve a aparecer.
+- [ ] Antes de "Iniciar recorrido" se ve el aviso de batería.
+- [ ] `/recuperar` con un email registrado manda el correo (revisar plantilla en español); el enlace lleva a `/nueva-clave` con el formulario habilitado; una contraseña nueva de al menos 8 caracteres permite loguearse.
+- [ ] En el login, un intento con un email sin confirmar ofrece "Reenviar correo de confirmación" con cooldown de 60 s.
 
 ## Smoke test de integración
 
@@ -378,4 +531,4 @@ Con `npm run dev` corriendo y `SUPABASE_ACCESS_TOKEN` en el entorno:
 node scripts/smoke.mjs
 ```
 
-Verifica contra el proyecto Supabase real: trigger de perfil, gate de términos (`/terminos`, `/dashboard`), RLS de `tramos`/`recorridos`/`cobertura_tramos`/`puntos_eventos`/`fallas_deteccion` por municipio y por propietario, las funciones `cobertura_municipio` y `ranking_municipio`, políticas de storage por municipio, y las rutas públicas de la PWA (`/manifest.json`, `/sw.js`, `/offline`). Crea y borra sus propios datos de prueba (usuarios, recorridos, cobertura, puntos, observaciones, archivo de storage).
+Verifica contra el proyecto Supabase real: trigger de perfil, gate de términos (`/terminos`, `/dashboard`), RLS de `tramos`/`recorridos`/`cobertura_tramos`/`puntos_eventos`/`fallas_deteccion` por municipio y por propietario, las funciones `cobertura_municipio` y `ranking_municipio`, políticas de storage por municipio, las tres capas del estado de observación (grant de columna + RLS + trigger `fallas_estado_no_escalar`, migración 0010) y `resumen_observaciones`, las rutas `/dashboard/tramos`, `/dashboard/tramos/<id>` y la baja de `/dashboard/caminos` (404), los exportes CSV/GeoJSON de observaciones, `/recuperar`, `/nueva-clave` y `/auth/confirm`, y las rutas públicas de la PWA (`/manifest.json`, `/sw.js`, `/offline`). Crea y borra sus propios datos de prueba (usuarios, recorridos, cobertura, puntos, observaciones, archivo de storage).
