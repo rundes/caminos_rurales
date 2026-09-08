@@ -79,13 +79,18 @@ create table public.recorridos (
   -- Lo calcula el servidor (`finalizarRecorrido`) sumando distancia dentro de
   -- cada segmento del track, nunca a través de un corte (pausa o
   -- interrupción de la grabación): ver `kmDeTrack` en `lib/track.ts`. Los
-  -- cortes los deriva el propio servidor, no el cliente, de la unión de dos
-  -- señales independientes (`unionCortes`): por tiempo (`derivarCortes`,
-  -- timestamps de los puntos crudos, solo si vienen alineados con el track)
-  -- y por distancia (`derivarCortesPorDistancia`, directo sobre la geometría
-  -- del track, sin depender de los puntos crudos) — así un payload que
-  -- manda `puntos` recortado, desalineado o ausente no logra que un salto
-  -- sin recorrer se acredite como si lo fuera.
+  -- cortes los deriva el propio servidor, no el cliente (`derivarCortesDeTrack`),
+  -- de la unión de dos señales independientes: velocidad implícita sobre
+  -- `puntos` (`derivarCortesPorVelocidad`, alineado índice a índice con
+  -- `track`, obligatorio) y huecos/velocidad de la cadencia real de fixes
+  -- (`derivarCortesDeCadencia` sobre `cadencia`, muestreada por tiempo a
+  -- partir de los puntos crudos *antes* de simplificar — la única señal que
+  -- distingue un tramo recto real, colapsado por Douglas-Peucker a dos
+  -- vértices lejanos en espacio y tiempo, de una pausa real que cubrió esa
+  -- misma distancia en ese mismo tiempo). `esquemaRecorrido` exige `puntos`
+  -- y `cadencia` (obligatorios, consistentes entre sí y con `inicio`/`fin`) y
+  -- rechaza el payload si no — un recorrido no verificable no se acredita a
+  -- medias.
   km numeric(10, 3) not null default 0,
   puntos_gps integer not null default 0,
   track jsonb not null default '[]'::jsonb,

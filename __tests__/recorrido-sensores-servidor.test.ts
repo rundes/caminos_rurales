@@ -18,9 +18,18 @@ const TRAMOS: TramoGeometria[] = [{ id: 'w1', km: 1.1, geometria: [[0, 0], [0.01
 
 const asignador = crearAsignadorTramos(TRAMOS)
 
+/**
+ * `t` por defecto separado por `lng` (no constante): `guardarSensores` deriva
+ * los cortes de las propias muestras (`derivarCortesDeMuestras`), que trata
+ * dos muestras con el mismo `t` pero distinta posición como velocidad
+ * infinita (fail-closed) y las corta. El paso (5.000.000 por grado de `lng`)
+ * da ~80 km/h entre muestras separadas 0,002 (el paso típico en estos
+ * tests): plausible y sin disparar ningún corte que el test no esté
+ * buscando probar.
+ */
 function muestra(lng: number, calidad: CalidadSegmento = 'bueno'): MuestraPayload {
   return {
-    t: 1_756_900_000_000,
+    t: 1_756_900_000_000 + Math.round(lng * 5_000_000),
     lat: 0,
     lng,
     velocidadKmh: 42,
@@ -89,7 +98,7 @@ describe('filasMuestras', () => {
         recorrido_id: 'r1',
         usuario_id: 'u1',
         tramo_id: 'w1',
-        t: new Date(1_756_900_000_000).toISOString(),
+        t: new Date(1_756_900_020_000).toISOString(),
         latitud: 0,
         longitud: 0.004,
         velocidad_kmh: 42,

@@ -101,15 +101,42 @@ function observacion(extra: Record<string, unknown> = {}) {
   }
 }
 
+const INICIO_MS = Date.parse('2026-09-03T10:00:00.000Z')
+const FIN_MS = Date.parse('2026-09-03T11:00:00.000Z')
+
+/**
+ * `puntos`/`cadencia` por defecto de `recorrido()`: alineados con el track
+ * de 2 puntos (`puntoGpsTrack`, mismo índice) y cubriendo exactamente la
+ * ventana `inicio`/`fin` (la cadencia sólo necesita sus dos extremos para
+ * pasar el `.refine` de cobertura; el detalle de huecos internos lo cubre
+ * `track.test.ts`, no este archivo de esquemas).
+ */
 function recorrido(extra: Record<string, unknown> = {}) {
+  // `puntos`/`cadencia` se derivan de `inicio`/`fin` efectivos (incluido lo
+  // que pise `extra`), no de una constante fija: si un test cambia `fin`
+  // (por ejemplo, a igual que `inicio`) los timestamps de estos dos arrays
+  // tienen que moverse con él para no violar el `.refine` de cobertura de
+  // `cadencia` por una razón ajena a lo que ese test quiere probar.
+  const inicio = (extra.inicio as string | undefined) ?? '2026-09-03T10:00:00.000Z'
+  const fin = (extra.fin as string | undefined) ?? '2026-09-03T11:00:00.000Z'
+  const inicioMs = Date.parse(inicio)
+  const finMs = Date.parse(fin)
   return {
     id: ID_A,
-    inicio: '2026-09-03T10:00:00.000Z',
-    fin: '2026-09-03T11:00:00.000Z',
+    inicio,
+    fin,
     puntosGps: 120,
     track: [
       [-37.1, -57.9],
       [-37.11, -57.91],
+    ],
+    puntos: [
+      { lat: -37.1, lng: -57.9, t: inicioMs, precision: 8 },
+      { lat: -37.11, lng: -57.91, t: finMs, precision: 8 },
+    ],
+    cadencia: [
+      { lat: -37.1, lng: -57.9, t: inicioMs },
+      { lat: -37.11, lng: -57.91, t: finMs },
     ],
     observaciones: [],
     ...extra,
@@ -200,16 +227,18 @@ describe('esquemaRecorrido', () => {
     expect(esquemaRecorrido.safeParse(recorrido({ puntosGps: -1 })).success).toBe(false)
   })
 
-  test('acepta el recorrido sin el campo opcional puntos', () => {
-    const r = esquemaRecorrido.safeParse(recorrido())
-    expect(r.success).toBe(true)
-    if (r.success) expect(r.data.puntos).toBeUndefined()
+  test('rechaza el recorrido sin puntos gps crudos: no es verificable', () => {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- se descarta a propósito
+    const { puntos: _sinUsar, ...sinPuntos } = recorrido()
+    const r = esquemaRecorrido.safeParse(sinPuntos)
+    expect(r.success).toBe(false)
+    if (!r.success) expect(primerError(r.error)).toMatch(/no pudo verificarse/)
   })
 
   test('acepta puntos gps crudos', () => {
     const puntos = [
-      { lat: -37.1, lng: -57.9, t: 1756900000000, precision: 8 },
-      { lat: -37.11, lng: -57.91, t: 1756900010000, precision: 12.5 },
+      { lat: -37.1, lng: -57.9, t: INICIO_MS, precision: 8 },
+      { lat: -37.11, lng: -57.91, t: FIN_MS, precision: 12.5 },
     ]
     const r = esquemaRecorrido.safeParse(recorrido({ puntos }))
     expect(r.success).toBe(true)
@@ -218,16 +247,19 @@ describe('esquemaRecorrido', () => {
 
   test('rechaza puntos gps mal formados', () => {
     expect(
-      esquemaRecorrido.safeParse(recorrido({ puntos: [{ lat: 91, lng: 0, t: 1, precision: 5 }] }))
-        .success,
+      esquemaRecorrido.safeParse(
+        recorrido({ puntos: [{ lat: 91, lng: 0, t: 1, precision: 5 }, { lat: 0, lng: 0, t: 2, precision: 5 }] }),
+      ).success,
     ).toBe(false)
     expect(
-      esquemaRecorrido.safeParse(recorrido({ puntos: [{ lat: 0, lng: 0, t: 1.5, precision: 5 }] }))
-        .success,
+      esquemaRecorrido.safeParse(
+        recorrido({ puntos: [{ lat: 0, lng: 0, t: 1.5, precision: 5 }, { lat: 0, lng: 0, t: 2, precision: 5 }] }),
+      ).success,
     ).toBe(false)
     expect(
-      esquemaRecorrido.safeParse(recorrido({ puntos: [{ lat: 0, lng: 0, t: 1, precision: -1 }] }))
-        .success,
+      esquemaRecorrido.safeParse(
+        recorrido({ puntos: [{ lat: 0, lng: 0, t: 1, precision: -1 }, { lat: 0, lng: 0, t: 2, precision: 5 }] }),
+      ).success,
     ).toBe(false)
     expect(esquemaRecorrido.safeParse(recorrido({ puntos: [{ lat: 0, lng: 0 }] })).success).toBe(
       false,
@@ -237,6 +269,82 @@ describe('esquemaRecorrido', () => {
   test('rechaza mas de 20000 puntos gps crudos', () => {
     const puntos = Array.from({ length: 20001 }, () => ({ lat: 0, lng: 0, t: 1, precision: 5 }))
     expect(esquemaRecorrido.safeParse(recorrido({ puntos })).success).toBe(false)
+  })
+
+  test('rechaza cuando `puntos` no coincide en longitud con `track`: no es verificable', () => {
+    const r = esquemaRecorrido.safeParse(
+      recorrido({
+        puntos: [
+          { lat: -37.1, lng: -57.9, t: INICIO_MS, precision: 8 },
+          { lat: -37.105, lng: -57.905, t: INICIO_MS + 1_000, precision: 8 },
+          { lat: -37.11, lng: -57.91, t: FIN_MS, precision: 8 },
+        ],
+      }),
+    )
+    expect(r.success).toBe(false)
+    if (!r.success) expect(primerError(r.error)).toMatch(/no coinciden con el track/)
+  })
+
+  test('rechaza el recorrido sin cadencia: no es verificable', () => {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- se descarta a propósito
+    const { cadencia: _sinUsar, ...sinCadencia } = recorrido()
+    const r = esquemaRecorrido.safeParse(sinCadencia)
+    expect(r.success).toBe(false)
+    if (!r.success) expect(primerError(r.error)).toMatch(/cadencia real de fixes/)
+  })
+
+  test('rechaza una cadencia de un solo punto: no es verificable', () => {
+    const r = esquemaRecorrido.safeParse(
+      recorrido({ cadencia: [{ lat: -37.1, lng: -57.9, t: INICIO_MS }] }),
+    )
+    expect(r.success).toBe(false)
+    if (!r.success) expect(primerError(r.error)).toMatch(/cadencia real de fixes/)
+  })
+
+  test('rechaza mas de 20000 puntos de cadencia', () => {
+    const cadencia = Array.from({ length: 20001 }, (_, i) => ({ lat: 0, lng: 0, t: INICIO_MS + i }))
+    expect(esquemaRecorrido.safeParse(recorrido({ cadencia })).success).toBe(false)
+  })
+
+  test('rechaza una cadencia desordenada en el tiempo: no es verificable', () => {
+    const r = esquemaRecorrido.safeParse(
+      recorrido({
+        cadencia: [
+          { lat: -37.1, lng: -57.9, t: FIN_MS },
+          { lat: -37.11, lng: -57.91, t: INICIO_MS },
+        ],
+      }),
+    )
+    expect(r.success).toBe(false)
+    if (!r.success) expect(primerError(r.error)).toMatch(/desordenada/)
+  })
+
+  test('rechaza una cadencia que no cubre el inicio/fin declarados: no es verificable', () => {
+    // La cadencia arranca 5 minutos después de `inicio`: muy por fuera del
+    // margen de tolerancia (`UMBRAL_INTERRUPCION_MS`, 30 s).
+    const r = esquemaRecorrido.safeParse(
+      recorrido({
+        cadencia: [
+          { lat: -37.1, lng: -57.9, t: INICIO_MS + 5 * 60_000 },
+          { lat: -37.11, lng: -57.91, t: FIN_MS },
+        ],
+      }),
+    )
+    expect(r.success).toBe(false)
+    if (!r.success) expect(primerError(r.error)).toMatch(/no coincide con el inicio\/fin/)
+  })
+
+  test('acepta una cadencia dentro del margen de tolerancia de inicio/fin', () => {
+    // 10 s de margen en cada punta: por debajo de los 30 s de tolerancia.
+    const r = esquemaRecorrido.safeParse(
+      recorrido({
+        cadencia: [
+          { lat: -37.1, lng: -57.9, t: INICIO_MS + 10_000 },
+          { lat: -37.11, lng: -57.91, t: FIN_MS - 10_000 },
+        ],
+      }),
+    )
+    expect(r.success).toBe(true)
   })
 
   test('rechaza mas de 200 observaciones', () => {
