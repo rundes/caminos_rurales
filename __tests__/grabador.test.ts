@@ -8,6 +8,7 @@ import {
   pausar,
   reanudar,
   retomar,
+  UMBRAL_INTERRUPCION_MS,
 } from '@/lib/local/grabador'
 import type { PuntoGps } from '@/lib/track'
 
@@ -135,6 +136,34 @@ describe('grabador', () => {
     const grabando = agregarPunto(iniciar(ID, T0), punto(0))
 
     expect(reanudar(grabando)).toBe(grabando)
+  })
+
+  test('retomar agrega un corte cuando pasó más del umbral desde el último punto guardado', () => {
+    const puntos = [punto(0), punto(1), punto(2)]
+    const ahora = punto(2).t + UMBRAL_INTERRUPCION_MS + 1
+
+    const grabador = retomar(ID, T0, puntos, ahora)
+
+    // El corte cae justo después de los puntos ya guardados: el próximo
+    // punto aceptado arranca un segmento nuevo, no una recta desde punto(2).
+    expect(grabador.cortes).toEqual([3])
+    expect(grabador.cantidad).toBe(3)
+  })
+
+  test('retomar no corta cuando el hueco está por debajo del umbral', () => {
+    const puntos = [punto(0), punto(1), punto(2)]
+    const ahora = punto(2).t + UMBRAL_INTERRUPCION_MS - 1
+
+    const grabador = retomar(ID, T0, puntos, ahora)
+
+    expect(grabador.cortes).toEqual([])
+  })
+
+  test('retomar sin puntos guardados no corta aunque pase mucho tiempo', () => {
+    const grabador = retomar(ID, T0, [], T0 + UMBRAL_INTERRUPCION_MS * 10)
+
+    expect(grabador.cortes).toEqual([])
+    expect(grabador.ultimo).toBeNull()
   })
 
   test('el tiempo en pausa no suma kilómetros: agregarPunto se ignora hasta reanudar', () => {

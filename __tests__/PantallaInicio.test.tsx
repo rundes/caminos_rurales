@@ -62,6 +62,13 @@ describe('PantallaInicio', () => {
     expect(onCerrarPendiente).toHaveBeenCalledTimes(1)
   })
 
+  test('avisa antes de arrancar que la app tiene que quedar en primer plano', () => {
+    render(<PantallaInicio {...props()} />)
+
+    expect(screen.getByText(/pantalla encendida/i)).toBeInTheDocument()
+    expect(screen.getByText(/no hay grabación en segundo plano/i)).toBeInTheDocument()
+  })
+
   test('muestra el error general en un rol alert', () => {
     render(<PantallaInicio {...props({ error: 'No pudimos leer los recorridos guardados.' })} />)
 

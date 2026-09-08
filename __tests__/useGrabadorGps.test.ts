@@ -7,6 +7,7 @@ import {
   useGrabadorGps,
 } from '@/hooks/useGrabadorGps'
 import * as db from '@/lib/local/db'
+import { UMBRAL_INTERRUPCION_MS } from '@/lib/local/grabador'
 
 const USUARIO = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa'
 const T0 = 1_700_000_000_000
@@ -191,5 +192,90 @@ describe('useGrabadorGps', () => {
     act(() => alFallo?.({ code: 1 } as GeolocationPositionError))
 
     expect(result.current.error).toMatch(/permiso de ubicación/i)
+  })
+
+  describe('watchdog de interrupción', () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] })
+      vi.setSystemTime(T0)
+    })
+
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    test('sin lecturas nuevas por más del umbral, el watchdog corta como una pausa', async () => {
+      const { result } = renderHook(() => useGrabadorGps(opciones()))
+      await act(async () => await result.current.iniciar())
+      await act(async () => alPunto?.(posicion(0)))
+      expect(result.current.estado.estado).toBe('grabando')
+
+      // El intervalo del watchdog corre cada 5 s: avanzar de sobra sin
+      // emitir ninguna lectura nueva simula 2° plano o una zona sin señal.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(UMBRAL_INTERRUPCION_MS + 10_000)
+      })
+
+      expect(result.current.estado.estado).toBe('pausado')
+      // La pausa automática no corta todavía: el corte lo agrega recién
+      // `reanudar` (mismo mecanismo que una pausa manual).
+      expect(result.current.estado.cortes).toEqual([])
+      expect(result.current.interrupcionActual).not.toBeNull()
+      expect(result.current.interrupcionActual?.desde).toBe(posicion(0).timestamp)
+      expect(result.current.interrupciones).toHaveLength(1)
+      // Pausar cierra el watch, igual que una pausa manual (no hay GPS que escuchar).
+      expect(clearWatch).toHaveBeenCalledWith(7)
+    })
+
+    test('reanudar tras una interrupción agrega el corte y limpia el aviso en vivo', async () => {
+      const { result } = renderHook(() => useGrabadorGps(opciones()))
+      await act(async () => await result.current.iniciar())
+      await act(async () => alPunto?.(posicion(0)))
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(UMBRAL_INTERRUPCION_MS + 10_000)
+      })
+      expect(result.current.estado.estado).toBe('pausado')
+
+      act(() => result.current.reanudar())
+
+      expect(result.current.estado.estado).toBe('grabando')
+      expect(result.current.estado.cortes).toEqual([result.current.estado.cantidad])
+      expect(result.current.interrupcionActual).toBeNull()
+      // El historial para el resumen final se conserva.
+      expect(result.current.interrupciones).toHaveLength(1)
+    })
+
+    test('al volver a estar visible después de un hueco largo, corta sin esperar el próximo tick', async () => {
+      Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true })
+      const { result } = renderHook(() => useGrabadorGps(opciones()))
+      await act(async () => await result.current.iniciar())
+      await act(async () => alPunto?.(posicion(0)))
+
+      // El reloj avanza (la app estuvo en 2° plano) sin que ningún timer
+      // llegue a correr: nada detecta el hueco hasta que la pestaña vuelve.
+      vi.setSystemTime(T0 + UMBRAL_INTERRUPCION_MS + 10_000)
+      expect(result.current.estado.estado).toBe('grabando')
+
+      await act(async () => {
+        document.dispatchEvent(new Event('visibilitychange'))
+      })
+
+      expect(result.current.estado.estado).toBe('pausado')
+      expect(result.current.interrupcionActual).not.toBeNull()
+    })
+
+    test('un hueco corto (por debajo del umbral) no se trata como interrupción', async () => {
+      const { result } = renderHook(() => useGrabadorGps(opciones()))
+      await act(async () => await result.current.iniciar())
+      await act(async () => alPunto?.(posicion(0)))
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(UMBRAL_INTERRUPCION_MS - 10_000)
+      })
+
+      expect(result.current.estado.estado).toBe('grabando')
+      expect(result.current.interrupcionActual).toBeNull()
+      expect(result.current.interrupciones).toHaveLength(0)
+    })
   })
 })

@@ -3,9 +3,10 @@
 import type { ResumenRecorrido as Resumen } from '@/app/dashboard/recorrido/actions'
 import { Boton } from '@/components/Boton'
 import { Insignia } from '@/components/Insignia'
+import type { Interrupcion } from '@/hooks/useGrabadorGps'
 import { ETIQUETA_INSIGNIA } from '@/lib/juego'
 import type { CalidadSegmento } from '@/lib/sensores/tipos'
-import { formatearKm } from './formato'
+import { formatearHora, formatearKm } from './formato'
 
 type Props = {
   km: number
@@ -13,6 +14,8 @@ type Props = {
   resumen: Resumen | null
   /** Sin señal el recorrido queda esperando; con señal se está subiendo. */
   sinConexion: boolean
+  /** Huecos por interrupción de la grabación (2° plano, sin señal): esos tramos no se relevaron. */
+  interrupciones?: readonly Interrupcion[]
   /** Cuadros de cámara capturados en el recorrido y los que faltan subir. */
   cuadros?: number
   cuadrosPendientes?: number
@@ -56,6 +59,28 @@ function Dato({ etiqueta, valor }: { etiqueta: string; valor: string | number })
   )
 }
 
+/** Lista de huecos de la grabación por interrupción: no cuentan como relevados. */
+function AvisoInterrupciones({ interrupciones }: { interrupciones: readonly Interrupcion[] }) {
+  if (interrupciones.length === 0) return null
+  return (
+    <div role="status" className="flex flex-col gap-1 rounded-xl bg-amber-50 p-3 text-sm text-amber-900">
+      <p className="font-semibold">
+        {interrupciones.length === 1
+          ? 'La grabación se interrumpió 1 vez.'
+          : `La grabación se interrumpió ${interrupciones.length} veces.`}{' '}
+        Esos tramos no quedaron relevados:
+      </p>
+      <ul className="list-disc pl-5">
+        {interrupciones.map((i) => (
+          <li key={`${i.desde}-${i.hasta}`}>
+            {formatearHora(i.desde)} a {formatearHora(i.hasta)}
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
 /** Km del recorrido por calidad estimada, en barras proporcionales al total. */
 function BarrasCalidad({ kmPorCalidad }: { kmPorCalidad: Partial<Record<CalidadSegmento, number>> }) {
   const total = CALIDADES.reduce((suma, c) => suma + (kmPorCalidad[c.codigo] ?? 0), 0)
@@ -91,6 +116,7 @@ export function ResumenRecorrido({
   puntosGps,
   resumen,
   sinConexion,
+  interrupciones = [],
   cuadros = 0,
   cuadrosPendientes = 0,
   cuadrosError = 0,
@@ -114,6 +140,8 @@ export function ResumenRecorrido({
         <Dato etiqueta="puntos GPS" valor={puntosGps} />
         <Dato etiqueta="puntos ganados" valor={resumen?.puntos ?? 0} />
       </div>
+
+      <AvisoInterrupciones interrupciones={interrupciones} />
 
       {error ? (
         <div role="alert" className="flex flex-col gap-3 rounded-xl bg-red-50 p-4 text-sm text-red-900">

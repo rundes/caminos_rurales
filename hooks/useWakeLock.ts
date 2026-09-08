@@ -2,7 +2,12 @@
 
 import { useCallback, useEffect, useRef } from 'react'
 
-type Sentinel = { release: () => Promise<void>; released: boolean }
+type Sentinel = {
+  release: () => Promise<void>
+  released: boolean
+  addEventListener: (tipo: 'release', oyente: () => void) => void
+  removeEventListener: (tipo: 'release', oyente: () => void) => void
+}
 type NavegadorConWakeLock = Navigator & { wakeLock?: { request: (tipo: 'screen') => Promise<Sentinel> } }
 
 /**
@@ -10,15 +15,30 @@ type NavegadorConWakeLock = Navigator & { wakeLock?: { request: (tipo: 'screen')
  * pierde al pasar la app a segundo plano, así que se vuelve a pedir cuando la
  * pestaña se hace visible. Si el navegador no lo soporta (iOS viejo) no falla:
  * simplemente no hay bloqueo.
+ *
+ * `alPerderBloqueoInesperado` avisa cuando el sentinel se libera por una
+ * causa que no es nuestro propio cleanup (2° plano, batería baja, el sistema
+ * operativo lo revoca): es una señal más para detectar una interrupción de
+ * la grabación, además del watchdog de `useGrabadorGps`.
  */
-export function useWakeLock(activo: boolean): void {
+export function useWakeLock(activo: boolean, alPerderBloqueoInesperado?: () => void): void {
   const sentinel = useRef<Sentinel | null>(null)
+  const alPerderRef = useRef(alPerderBloqueoInesperado)
+  useEffect(() => {
+    alPerderRef.current = alPerderBloqueoInesperado
+  }, [alPerderBloqueoInesperado])
 
   const pedir = useCallback(async () => {
     const api = (navigator as NavegadorConWakeLock).wakeLock
     if (!api || sentinel.current) return
     try {
-      sentinel.current = await api.request('screen')
+      const obtenido = await api.request('screen')
+      sentinel.current = obtenido
+      obtenido.addEventListener('release', () => {
+        // Nuestro propio cleanup ya vació `sentinel.current` antes de liberar:
+        // si sigue apuntando a este sentinel, la liberación fue inesperada.
+        if (sentinel.current === obtenido) alPerderRef.current?.()
+      })
     } catch (error) {
       console.error('[wakelock]', error)
       sentinel.current = null

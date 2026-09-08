@@ -30,3 +30,8 @@ export function formatearPrecision(precision: number | null): string {
 export function formatearVelocidad(velocidadKmh: number | null): string {
   return velocidadKmh === null ? '—' : `${Math.round(velocidadKmh)} km/h`
 }
+
+/** Hora local de un instante (epoch ms), como `hh:mm`. */
+export function formatearHora(epochMs: number): string {
+  return new Date(epochMs).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })
+}

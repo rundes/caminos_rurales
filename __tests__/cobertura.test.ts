@@ -164,6 +164,54 @@ describe('calcularCobertura', () => {
   })
 })
 
+describe('hueco de interrupción: no se cuenta como cobertura', () => {
+  // Reproduce, a nivel del cálculo de cobertura del servidor, el escenario
+  // que motiva el corte del track al interrumpirse la grabación: el vehículo
+  // arranca sobre el camino, la grabación se interrumpe (pantalla bloqueada,
+  // 2° plano) y se retoma más adelante sobre el MISMO camino. Si
+  // `calcularCobertura` uniera los puntos con una línea (en vez de comparar
+  // cada punto real contra las muestras del tramo, como hace `crearIndice`),
+  // el tramo entero quedaría "cubierto" porque las dos puntas caen sobre la
+  // misma recta que el tramo. El track acá NO tiene ningún punto en el medio
+  // del camino (esa parte nunca se registró), así que el resultado correcto
+  // es que el tramo NO quede cubierto.
+  const tramo1: TramoGeometria = { id: 't1', km: 1, geometria: LINEA_1KM }
+
+  /** Puntos reales sobre el propio camino (offset 0), solo en `[desdeM, hastaM]`. */
+  function puntosSobreElCamino(desdeM: number, hastaM: number, pasoM = 10): Coordenada[] {
+    const puntos: Coordenada[] = []
+    for (let d = desdeM; d <= hastaM; d += pasoM) {
+      puntos.push({ lat: LAT_BASE + offsetLatKm(d / 1000), lng: LNG_TRAMO })
+    }
+    return puntos
+  }
+
+  test('con puntos reales solo en las puntas, el tramo no queda cubierto', () => {
+    // Graba los primeros 80 m (antes de la interrupción) y los últimos 80 m
+    // (después de retomar), pero nada de los ~840 m del medio.
+    const antes = puntosSobreElCamino(0, 80)
+    const despues = puntosSobreElCamino(920, 1000)
+    const track = [...antes, ...despues]
+
+    const { cubiertos, fraccionPorTramo } = calcularCobertura(track, [tramo1])
+
+    expect(cubiertos).not.toContain('t1')
+    // Si el algoritmo uniera las puntas con una recta (el mismo camino), la
+    // fracción sería ~1: el hueco real tiene que dejarla muy por debajo.
+    expect(fraccionPorTramo.t1).toBeLessThan(0.3)
+  })
+
+  test('con el track completo (sin el hueco) el mismo tramo sí queda cubierto', () => {
+    // Control: el único motivo por el que el tramo no se cubre arriba es el
+    // hueco, no la geometría del escenario.
+    const track = puntosSobreElCamino(0, 1000)
+
+    const { cubiertos } = calcularCobertura(track, [tramo1])
+
+    expect(cubiertos).toContain('t1')
+  })
+})
+
 describe('umbral de cobertura (frontera inclusiva)', () => {
   // Línea de 500 m: muestreada cada 50 m da 11 muestras (500 / 50 = 10 pasos + 1).
   const RADIO_M = 40

@@ -37,6 +37,18 @@ export const GRABADOR_INICIAL: Grabador = {
   cortes: [],
 }
 
+/**
+ * Umbral de "sin señal" para tratar un hueco como una interrupción real de
+ * la grabación (app en 2° plano, pantalla bloqueada, o zona sin GPS) y no
+ * como una demora normal de una lectura. `useGrabadorGps.OPCIONES_GPS.timeout`
+ * ya le da 20 s a cada lectura antes de que `watchPosition` reporte un error
+ * de timeout (y siga reintentando); 30 s deja un margen de 10 s por encima de
+ * eso para no marcar como interrupción una única lectura lenta pero real, y
+ * es corto en relación a la duración típica de un recorrido para no dejar
+ * pasar huecos grandes sin cortar.
+ */
+export const UMBRAL_INTERRUPCION_MS = 30_000
+
 /** Arranca un recorrido nuevo. `ahora` en milisegundos epoch. */
 export function iniciar(recorridoId: string, ahora: number): Grabador {
   return { ...GRABADOR_INICIAL, estado: 'grabando', recorridoId, inicio: ahora }
@@ -44,22 +56,35 @@ export function iniciar(recorridoId: string, ahora: number): Grabador {
 
 /**
  * Retoma un recorrido guardado en el dispositivo, reconstruyendo km y último
- * punto a partir de los puntos ya persistidos. Los puntos ya guardados se
- * tratan como un solo segmento: el corte real (si lo hubo) ya pasó y no hay
- * forma de reconstruir en qué índice, así que se prioriza no cortar de más.
+ * punto a partir de los puntos ya persistidos.
+ *
+ * Si pasó más que `UMBRAL_INTERRUPCION_MS` entre el último punto guardado y
+ * `ahora`, la app estuvo en 2° plano o cerrada el tiempo suficiente como para
+ * que la interrupción sea real (no hay watchdog en memoria corriendo mientras
+ * la app está cerrada): se agrega un corte justo después del último punto
+ * guardado, así el tramo no recorrido no se dibuja como una recta ni cuenta
+ * como cubierto. Si el hueco es corto, se sigue tratando como un solo
+ * segmento continuo.
  */
-export function retomar(recorridoId: string, inicio: number, puntos: readonly PuntoGps[]): Grabador {
+export function retomar(
+  recorridoId: string,
+  inicio: number,
+  puntos: readonly PuntoGps[],
+  ahora: number = Date.now(),
+): Grabador {
   let km = 0
   for (let i = 1; i < puntos.length; i += 1) km += distanciaKm(puntos[i - 1], puntos[i])
+  const ultimo = puntos.length > 0 ? puntos[puntos.length - 1] : null
+  const huboInterrupcion = ultimo !== null && ahora - ultimo.t > UMBRAL_INTERRUPCION_MS
   return {
     estado: 'grabando',
     recorridoId,
     inicio,
     fin: null,
-    ultimo: puntos.length > 0 ? puntos[puntos.length - 1] : null,
+    ultimo,
     km,
     cantidad: puntos.length,
-    cortes: [],
+    cortes: huboInterrupcion ? [puntos.length] : [],
   }
 }
 

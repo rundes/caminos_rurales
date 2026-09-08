@@ -116,6 +116,11 @@ export function PantallaInicio({
   return (
     <section className="flex flex-col gap-4">
       <AvisoBateria />
+      <p className="rounded-xl bg-blue-50 p-3 text-sm text-blue-900">
+        La grabación necesita la pantalla encendida y la app abierta en primer plano: si bloqueás el
+        teléfono o cambiás a otra app, el GPS se corta y ese tramo no queda relevado. No hay grabación
+        en segundo plano.
+      </p>
       {sinTerminar && (
         <div className="flex flex-col gap-3 rounded-2xl bg-amber-50 p-5">
           <p className="text-sm text-amber-900">Tenés un recorrido sin terminar en este dispositivo.</p>

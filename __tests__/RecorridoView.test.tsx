@@ -72,6 +72,8 @@ function control(estado: Grabador, extra: Partial<ControlGrabador> = {}): Contro
     error: null,
     precision: 7,
     obtenerPuntos: () => [punto(0), punto(1)],
+    interrupcionActual: null,
+    interrupciones: [],
     iniciar: vi.fn(async () => {}),
     retomar: vi.fn(async () => {}),
     pausar: vi.fn(),
